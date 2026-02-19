@@ -109,7 +109,7 @@ class Position(Base):
     entry_order_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("orders.id"), nullable=True
     )
-    stop_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stop_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     shares: Mapped[int] = mapped_column(Integer, nullable=False)
     entry_price: Mapped[float] = mapped_column(Float, nullable=False)

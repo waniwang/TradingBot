@@ -208,6 +208,24 @@ else
       $SSH "tail -f $REMOTE_DIR/trading_bot.log"
       ;;
     deploy)
+      # Warn if deploying during market hours (9:30–16:00 ET Mon–Fri)
+      is_market_hours=$(python3 -c "
+from datetime import datetime
+from zoneinfo import ZoneInfo
+now = datetime.now(ZoneInfo('America/New_York'))
+weekday = now.weekday()  # 0=Mon, 4=Fri
+hour, minute = now.hour, now.minute
+in_hours = weekday < 5 and (hour, minute) >= (9, 30) and (hour, minute) < (16, 0)
+print('yes' if in_hours else 'no')
+" 2>/dev/null || echo "no")
+
+      if [[ "$is_market_hours" == "yes" ]]; then
+        echo "⚠️  WARNING: Market is currently open (9:30–4:00 PM ET)."
+        echo "   Restarting now will interrupt any active trades or monitoring."
+        read -r -p "   Deploy anyway? [y/N] " confirm
+        [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Deploy cancelled."; exit 0; }
+      fi
+
       echo "==> Syncing code to $SERVER..."
       rsync -az \
         --exclude='.venv' \
@@ -219,9 +237,11 @@ else
         --exclude='.env' \
         -e "ssh -o StrictHostKeyChecking=no" \
         ./ "$SERVER:$REMOTE_DIR/"
-      echo "==> Restarting bot..."
-      $SSH "systemctl restart trading-bot"
+
+      echo "==> Restarting bot + dashboard..."
+      $SSH "systemctl restart trading-bot trading-dashboard"
       sleep 4
+
       echo "==> Recent logs:"
       $SSH "tail -8 $REMOTE_DIR/trading_bot.log"
       echo ""

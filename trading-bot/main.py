@@ -316,9 +316,117 @@ def process_ticker_update(
     _execute_entry(ticker, signal, shares, client, db_engine, notify)
 
 
+def _wait_for_fill(client, broker_order_id: str, timeout_secs: int = 60) -> dict | None:
+    """
+    Poll broker until order fills, hits a terminal state, or times out.
+
+    Returns fill dict on success, None if cancelled/expired/timed-out.
+    """
+    import time
+    TERMINAL = {"filled", "cancelled", "expired", "rejected", "replaced", "done_for_day"}
+    deadline = time.time() + timeout_secs
+    while time.time() < deadline:
+        try:
+            info = client.get_order_status(broker_order_id)
+            status = info.get("status", "")
+            if status == "filled":
+                return info
+            if status in TERMINAL:
+                logger.info("Order %s ended with status: %s", broker_order_id, status)
+                return None
+        except Exception as e:
+            logger.warning("Error polling order %s: %s", broker_order_id, e)
+        time.sleep(2)
+
+    logger.info("Order %s did not fill within %ds", broker_order_id, timeout_secs)
+    return None
+
+
+def _await_fill_and_setup_stop(
+    ticker, signal, shares, broker_order_id, order_db_id, client, db_engine, notify
+):
+    """
+    Runs in a background thread after an entry order is submitted.
+
+    Waits for fill confirmation, then:
+      - Updates the Order record with actual fill price
+      - Creates the Position record
+      - Places a GTC stop order with the broker
+    """
+    from db.models import Order, Position
+
+    fill = _wait_for_fill(client, broker_order_id, timeout_secs=60)
+
+    if fill is None:
+        # Order didn't fill — cancel it and clean up
+        logger.info("Entry order for %s did not fill within timeout — cancelling", ticker)
+        try:
+            client.cancel_order(broker_order_id)
+        except Exception as e:
+            logger.warning("Failed to cancel unfilled order %s: %s", broker_order_id, e)
+        with get_session(db_engine) as session:
+            order = session.query(Order).filter_by(id=order_db_id).first()
+            if order:
+                order.status = "cancelled"
+                session.commit()
+        notify(f"ENTRY NOT FILLED: {ticker} order cancelled (timed out)")
+        return
+
+    # Order filled — extract actual fill details
+    actual_price = fill.get("filled_avg_price") or signal.entry_price
+    filled_qty = fill.get("filled_qty") or shares
+
+    # Update order record
+    with get_session(db_engine) as session:
+        order = session.query(Order).filter_by(id=order_db_id).first()
+        if order:
+            order.status = "filled"
+            order.filled_qty = filled_qty
+            order.filled_avg_price = actual_price
+            session.commit()
+
+    # Place GTC stop order with broker
+    stop_side = "sell" if signal.side == "long" else "buy_to_cover"
+    broker_stop_id = None
+    try:
+        broker_stop_id = client.place_stop_order(
+            ticker, stop_side, filled_qty, signal.stop_price
+        )
+    except Exception as e:
+        logger.error("Failed to place stop order for %s: %s", ticker, e)
+
+    # Create position record
+    with get_session(db_engine) as session:
+        pos = Position(
+            ticker=ticker,
+            setup_type=signal.setup_type,
+            side=signal.side,
+            entry_order_id=order_db_id,
+            stop_order_id=broker_stop_id,
+            shares=filled_qty,
+            entry_price=actual_price,
+            stop_price=signal.stop_price,
+            initial_stop_price=signal.stop_price,
+        )
+        session.add(pos)
+        session.commit()
+
+    logger.info(
+        "Position opened: %s %s %d @ %.2f stop=%.2f broker_stop=%s",
+        signal.side, ticker, filled_qty, actual_price, signal.stop_price, broker_stop_id,
+    )
+    notify(
+        f"ENTRY FILLED: {ticker} ({signal.setup_type})\n"
+        f"Side: {signal.side.upper()} {filled_qty} shares @ ${actual_price:.2f}\n"
+        f"Stop: ${signal.stop_price:.2f} (order id: {broker_stop_id or 'none'})\n"
+        f"Risk/share: ${signal.risk_per_share:.2f}"
+    )
+
+
 def _execute_entry(ticker, signal, shares, client, db_engine, notify):
-    """Place the entry limit order and record to DB."""
-    from db.models import Signal as DbSignal, Order, Position
+    """Place the entry limit order, record to DB, then wait for fill in background."""
+    import threading
+    from db.models import Signal as DbSignal, Order
 
     try:
         order_side = "buy" if signal.side == "long" else "sell_short"
@@ -329,8 +437,8 @@ def _execute_entry(ticker, signal, shares, client, db_engine, notify):
         logger.error("Entry order failed for %s: %s", ticker, e)
         return
 
+    # Persist signal + order immediately (position created after fill confirmation)
     with get_session(db_engine) as session:
-        # Persist signal
         db_signal = DbSignal(
             ticker=ticker,
             setup_type=signal.setup_type,
@@ -344,7 +452,6 @@ def _execute_entry(ticker, signal, shares, client, db_engine, notify):
         session.add(db_signal)
         session.flush()
 
-        # Persist order
         db_order = Order(
             signal_id=db_signal.id,
             broker_order_id=broker_order_id,
@@ -356,32 +463,26 @@ def _execute_entry(ticker, signal, shares, client, db_engine, notify):
             status="submitted",
         )
         session.add(db_order)
-        session.flush()
-
-        # Persist position (will be updated on fill)
-        pos = Position(
-            ticker=ticker,
-            setup_type=signal.setup_type,
-            side=signal.side,
-            entry_order_id=db_order.id,
-            shares=shares,
-            entry_price=signal.entry_price,
-            stop_price=signal.stop_price,
-            initial_stop_price=signal.stop_price,
-        )
-        session.add(pos)
         session.commit()
+        order_db_id = db_order.id
 
     notify(
-        f"ENTRY ORDER: {ticker} ({signal.setup_type})\n"
+        f"ENTRY ORDER PLACED: {ticker} ({signal.setup_type})\n"
         f"Side: {signal.side.upper()} {shares} shares @ ${signal.entry_price:.2f}\n"
-        f"Stop: ${signal.stop_price:.2f}\n"
-        f"Risk/share: ${signal.risk_per_share:.2f}"
+        f"Stop: ${signal.stop_price:.2f} | Waiting for fill..."
     )
     logger.info(
-        "Entry order placed: %s %s %d @ %.2f stop=%.2f",
-        order_side, ticker, shares, signal.entry_price, signal.stop_price,
+        "Entry order placed: %s %s %d @ %.2f stop=%.2f broker_id=%s",
+        order_side, ticker, shares, signal.entry_price, signal.stop_price, broker_order_id,
     )
+
+    # Wait for fill and place stop in background (doesn't block the stream callback)
+    t = threading.Thread(
+        target=_await_fill_and_setup_stop,
+        args=(ticker, signal, shares, broker_order_id, order_db_id, client, db_engine, notify),
+        daemon=True,
+    )
+    t.start()
 
 
 def job_eod_tasks(

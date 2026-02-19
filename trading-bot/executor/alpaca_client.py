@@ -75,6 +75,9 @@ class AlpacaClient:
         self._trade: TradingClient | None = None
         self._data: StockHistoricalDataClient | None = None
         self._stream: StockDataStream | None = None
+        self._stream_thread: "threading.Thread | None" = None
+        self._subscribed_tickers: list[str] = []
+        self._watchdog_stop: "threading.Event | None" = None
 
         self._stream_callbacks: list[Callable] = []
 
@@ -100,6 +103,8 @@ class AlpacaClient:
         logger.info("Connected to Alpaca (%s)", mode)
 
     def disconnect(self):
+        if self._watchdog_stop:
+            self._watchdog_stop.set()
         if self._stream:
             self._stream.stop()
         logger.info("Disconnected from Alpaca")
@@ -279,22 +284,40 @@ class AlpacaClient:
 
     def subscribe_quotes(self, tickers: list[str], callback: Callable | None = None):
         """
-        Subscribe to real-time 1m bars + quotes via Alpaca WebSocket stream.
+        Subscribe to real-time 1m bars via Alpaca WebSocket stream.
 
-        The stream runs in a background thread. Pass a callback to receive updates.
+        The stream runs in a background thread. A watchdog thread monitors the
+        connection and automatically reconnects if the stream thread dies.
+
         Callback signature: callback(data: dict)
         """
         if not ALPACA_AVAILABLE:
             logger.info("[stub] subscribe_quotes %s", tickers)
             return
 
+        import threading
+
         if callback:
             self._stream_callbacks.append(callback)
+
+        self._subscribed_tickers = tickers
+        self._start_stream(tickers)
+
+        # Start watchdog (stop previous one if any)
+        if self._watchdog_stop:
+            self._watchdog_stop.set()
+        self._watchdog_stop = threading.Event()
+        t = threading.Thread(target=self._stream_watchdog, daemon=True)
+        t.start()
+
+    def _start_stream(self, tickers: list[str]):
+        """Create and launch the WebSocket stream in a daemon thread."""
+        import threading
 
         self._stream = StockDataStream(
             api_key=self._api_key,
             secret_key=self._secret_key,
-            feed="iex",          # "iex" = free real-time; "sip" = paid SIP feed
+            feed="iex",
         )
 
         async def _bar_handler(bar):
@@ -311,11 +334,27 @@ class AlpacaClient:
                 cb(data)
 
         self._stream.subscribe_bars(_bar_handler, *tickers)
+        self._stream_thread = threading.Thread(target=self._stream.run, daemon=True)
+        self._stream_thread.start()
+        logger.info("Stream started for %s (IEX feed)", tickers)
 
+    def _stream_watchdog(self):
+        """Monitor stream thread every 30s; reconnect if it has died."""
         import threading
-        t = threading.Thread(target=self._stream.run, daemon=True)
-        t.start()
-        logger.info("Subscribed to real-time bars for %s (IEX feed)", tickers)
+        import time
+
+        while not self._watchdog_stop.is_set():
+            self._watchdog_stop.wait(timeout=30)
+            if self._watchdog_stop.is_set():
+                break
+
+            if self._stream_thread and not self._stream_thread.is_alive():
+                logger.warning("Stream thread died — attempting reconnect...")
+                try:
+                    self._start_stream(self._subscribed_tickers)
+                    logger.info("Stream reconnected for %s", self._subscribed_tickers)
+                except Exception as e:
+                    logger.error("Stream reconnect failed: %s", e)
 
     def unsubscribe_quotes(self, tickers: list[str]):
         """Unsubscribe from real-time data for a list of tickers."""
