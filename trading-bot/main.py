@@ -98,21 +98,32 @@ def _get_entry_lock(ticker: str) -> threading.Lock:
 def make_notifier(config: dict):
     token = config["telegram"].get("bot_token", "")
     chat_id = config["telegram"].get("chat_id", "")
-    if not token or token == "YOUR_TELEGRAM_BOT_TOKEN":
+    if not token or not chat_id:
         return lambda msg: logger.info("[Telegram stub] %s", msg)
 
     import asyncio
+    import threading
     from telegram import Bot
 
     bot = Bot(token=token)
 
+    # Dedicated event loop in its own thread — safe to call from APScheduler,
+    # watchdog threads, or any other background thread without "no current event
+    # loop" errors.
+    _loop = asyncio.new_event_loop()
+    _loop_thread = threading.Thread(
+        target=_loop.run_forever, daemon=True, name="telegram-loop"
+    )
+    _loop_thread.start()
+
     def notify(message: str):
-        try:
-            asyncio.get_event_loop().run_until_complete(
-                bot.send_message(chat_id=chat_id, text=message)
-            )
-        except Exception as e:
-            logger.warning("Telegram send failed: %s", e)
+        async def _send():
+            try:
+                await bot.send_message(chat_id=chat_id, text=message)
+            except Exception as e:
+                logger.warning("Telegram send failed: %s", e)
+
+        asyncio.run_coroutine_threadsafe(_send(), _loop)
 
     return notify
 
