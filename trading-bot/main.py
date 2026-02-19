@@ -1,0 +1,535 @@
+"""
+Main entry point.
+
+APScheduler orchestrates all jobs:
+  6:00 AM ET  — pre-market scan (Polygon.io)
+  9:25 AM ET  — finalize watchlist, subscribe Moomoo real-time
+  9:30 AM ET  — start intraday signal monitor
+  3:55 PM ET  — EOD tasks: trailing stop updates, P&L summary, Telegram
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import signal
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import pytz
+import yaml
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+
+from db.models import init_db, get_session
+from executor.alpaca_client import AlpacaClient
+from monitor.position_tracker import PositionTracker
+from risk.manager import RiskManager
+from scanner.gapper import get_premarket_gappers
+from scanner.momentum_rank import rank_by_momentum, get_sp1500_tickers
+from scanner.consolidation import scan_breakout_candidates
+from signals.breakout import check_breakout
+from signals.episodic_pivot import check_episodic_pivot
+from signals.parabolic_short import check_parabolic_short
+from signals.base import compute_sma
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler("trading_bot.log"),
+    ],
+)
+logger = logging.getLogger("main")
+
+ET = pytz.timezone("America/New_York")
+
+
+def load_config(path: str = "config.yaml") -> dict:
+    with open(path) as f:
+        cfg = yaml.safe_load(f)
+    # Allow env var overrides
+    if os.environ.get("POLYGON_API_KEY"):
+        cfg["polygon"]["api_key"] = os.environ["POLYGON_API_KEY"]
+    if os.environ.get("ALPACA_API_KEY"):
+        cfg.setdefault("alpaca", {})["api_key"] = os.environ["ALPACA_API_KEY"]
+    if os.environ.get("ALPACA_SECRET_KEY"):
+        cfg.setdefault("alpaca", {})["secret_key"] = os.environ["ALPACA_SECRET_KEY"]
+    if os.environ.get("DATABASE_URL"):
+        cfg["database"]["url"] = os.environ["DATABASE_URL"]
+    if os.environ.get("TELEGRAM_BOT_TOKEN"):
+        cfg["telegram"]["bot_token"] = os.environ["TELEGRAM_BOT_TOKEN"]
+    if os.environ.get("TELEGRAM_CHAT_ID"):
+        cfg["telegram"]["chat_id"] = os.environ["TELEGRAM_CHAT_ID"]
+    return cfg
+
+
+# ---------------------------------------------------------------------------
+# Global state (populated during the pre-market phase)
+# ---------------------------------------------------------------------------
+
+_watchlist: list[dict] = []          # [{ticker, setup_type, gap_pct, ...}]
+_daily_bars_cache: dict[str, list[dict]] = {}
+_daily_closes_cache: dict[str, list[float]] = {}
+_daily_volumes_cache: dict[str, list[int]] = {}
+
+
+# ---------------------------------------------------------------------------
+# Telegram notifier (simple async wrapper)
+# ---------------------------------------------------------------------------
+
+def make_notifier(config: dict):
+    token = config["telegram"].get("bot_token", "")
+    chat_id = config["telegram"].get("chat_id", "")
+    if not token or token == "YOUR_TELEGRAM_BOT_TOKEN":
+        return lambda msg: logger.info("[Telegram stub] %s", msg)
+
+    import asyncio
+    from telegram import Bot
+
+    bot = Bot(token=token)
+
+    def notify(message: str):
+        try:
+            asyncio.get_event_loop().run_until_complete(
+                bot.send_message(chat_id=chat_id, text=message)
+            )
+        except Exception as e:
+            logger.warning("Telegram send failed: %s", e)
+
+    return notify
+
+
+# ---------------------------------------------------------------------------
+# Scheduled jobs
+# ---------------------------------------------------------------------------
+
+def job_premarket_scan(config: dict, polygon_api_key: str):
+    """6:00 AM ET — scan for EP gappers + breakout momentum candidates."""
+    global _watchlist
+    logger.info("=== PRE-MARKET SCAN START ===")
+
+    # EP gappers
+    ep_candidates = get_premarket_gappers(config)
+    logger.info("EP candidates: %d", len(ep_candidates))
+
+    # Momentum rank top names for breakout
+    tickers_universe = get_sp1500_tickers(polygon_api_key, max_tickers=500)
+    top_momentum = rank_by_momentum(tickers_universe, config, top_n=50)
+
+    # Breakout consolidation filter on top momentum names
+    momentum_tickers = [t["ticker"] for t in top_momentum[:50]]
+    breakout_candidates = scan_breakout_candidates(momentum_tickers, config)
+
+    # Merge watchlist (EP first, then breakout)
+    watchlist = ep_candidates + breakout_candidates
+    # Deduplicate by ticker (EP takes priority)
+    seen = set()
+    deduped = []
+    for c in watchlist:
+        if c["ticker"] not in seen:
+            seen.add(c["ticker"])
+            deduped.append(c)
+
+    _watchlist = deduped[:20]  # cap to 20 symbols for Moomoo subscriptions
+    logger.info("=== PRE-MARKET SCAN DONE: %d candidates ===", len(_watchlist))
+    for c in _watchlist:
+        logger.info("  %s [%s]", c["ticker"], c["setup_type"])
+
+
+def job_subscribe_watchlist(
+    client: AlpacaClient,
+    config: dict,
+    tracker: PositionTracker,
+    risk: RiskManager,
+    db_engine,
+    notify,
+):
+    """9:25 AM ET — subscribe to Alpaca real-time bars for watchlist."""
+    if not _watchlist:
+        logger.info("Watchlist empty — nothing to subscribe")
+        return
+    tickers = [c["ticker"] for c in _watchlist]
+    logger.info("Subscribing to real-time data for %s", tickers)
+
+    def on_bar(bar: dict):
+        """Called by AlpacaClient stream for every 1m bar update."""
+        ticker = bar["ticker"]
+        current_price = bar["close"]
+        current_volume_bar = bar["volume"]
+
+        # Fetch recent candles and daily history for signal evaluation
+        candles_1m = client.get_candles_1m(ticker, count=30)
+        daily_bars = _daily_bars_cache.get(ticker)
+        if not daily_bars:
+            daily_bars = client.get_daily_bars(ticker, days=130)
+            _daily_bars_cache[ticker] = daily_bars
+
+        daily_closes = [b["close"] for b in daily_bars]
+        daily_volumes = [b["volume"] for b in daily_bars]
+        _daily_closes_cache[ticker] = daily_closes
+        _daily_volumes_cache[ticker] = daily_volumes
+
+        # Running today's cumulative volume (approximate from bars)
+        today_volume = sum(c["volume"] for c in candles_1m)
+
+        process_ticker_update(
+            ticker=ticker,
+            config=config,
+            client=client,
+            tracker=tracker,
+            risk=risk,
+            db_engine=db_engine,
+            notify=notify,
+            candles_1m=candles_1m,
+            daily_closes=daily_closes,
+            daily_volumes=daily_volumes,
+            current_price=current_price,
+            current_volume=today_volume,
+        )
+
+    client.subscribe_quotes(tickers, callback=on_bar)
+
+
+def job_intraday_monitor(
+    config: dict,
+    client: AlpacaClient,
+    tracker: PositionTracker,
+    risk: RiskManager,
+    db_engine,
+    notify,
+):
+    """9:30 AM ET — log confirmation that the stream is running."""
+    logger.info("=== INTRADAY MONITOR STARTED — stream active ===")
+    # Data processing is driven by the Alpaca WebSocket stream callback
+    # registered in job_subscribe_watchlist at 9:25 AM.
+
+
+def process_ticker_update(
+    ticker: str,
+    config: dict,
+    client: AlpacaClient,
+    tracker: PositionTracker,
+    risk: RiskManager,
+    db_engine,
+    notify,
+    # Pre-fetched by stream callback — avoids redundant API calls
+    candles_1m: list | None = None,
+    daily_closes: list | None = None,
+    daily_volumes: list | None = None,
+    current_price: float | None = None,
+    current_volume: int | None = None,
+):
+    """
+    Called for each ticker on every 1m candle update (via Alpaca stream callback).
+    Checks signals for watchlist items and manages open positions.
+    """
+    if tracker.is_halted:
+        return
+
+    # Use pre-fetched data when available (from stream callback)
+    if candles_1m is None or current_price is None:
+        try:
+            candles_1m = client.get_candles_1m(ticker, count=30)
+            bar = client.get_latest_bar(ticker)
+            current_price = bar["last_price"]
+            current_volume = bar["volume"]
+        except Exception as e:
+            logger.warning("Failed to get data for %s: %s", ticker, e)
+            return
+
+    if daily_closes is None:
+        daily_closes = _daily_closes_cache.get(ticker, [])
+    if daily_volumes is None:
+        daily_volumes = _daily_volumes_cache.get(ticker, [])
+    if current_volume is None:
+        current_volume = 0
+
+    # Update open positions (stop checks, partial exits)
+    tracker.on_candle_update(ticker, current_price, candles_1m, daily_closes)
+
+    # Check if this ticker is on the watchlist (no open position yet)
+    watchlist_entry = next((c for c in _watchlist if c["ticker"] == ticker), None)
+    if watchlist_entry is None:
+        return
+
+    with get_session(db_engine) as session:
+        from db.models import Position
+        already_open = session.query(Position).filter_by(ticker=ticker, is_open=True).count()
+        if already_open > 0:
+            return
+
+    portfolio_value = client.get_portfolio_value()
+    daily_pnl = _compute_current_daily_pnl(db_engine)
+    weekly_pnl = _compute_current_weekly_pnl(db_engine)
+
+    with get_session(db_engine) as session:
+        from db.models import Position
+        open_count = session.query(Position).filter_by(is_open=True).count()
+
+    can_enter, block_reason = risk.can_enter(
+        open_count, daily_pnl, weekly_pnl, portfolio_value
+    )
+    if not can_enter:
+        if block_reason in ("daily_loss_limit", "weekly_loss_limit"):
+            tracker.set_daily_halt(block_reason == "daily_loss_limit")
+            tracker.set_weekly_halt(block_reason == "weekly_loss_limit")
+            notify(f"Trading halted: {block_reason}")
+        return
+
+    # Evaluate signal
+    setup = watchlist_entry["setup_type"]
+    signal = None
+
+    if setup == "breakout":
+        signal = check_breakout(
+            ticker, candles_1m, daily_closes, daily_volumes,
+            current_price, current_volume, config
+        )
+    elif setup == "episodic_pivot":
+        gap_pct = watchlist_entry.get("gap_pct", 0.0)
+        signal = check_episodic_pivot(
+            ticker, candles_1m, daily_volumes,
+            current_price, current_volume, gap_pct, config
+        )
+    elif setup == "parabolic_short":
+        signal = check_parabolic_short(
+            ticker, candles_1m, daily_closes,
+            current_price, current_volume, config
+        )
+
+    if signal is None:
+        return
+
+    # Size and place entry
+    shares = risk.calculate_position_size(portfolio_value, signal.entry_price, signal.stop_price)
+    if shares <= 0:
+        logger.info("%s: position size = 0, skipping", ticker)
+        return
+
+    _execute_entry(ticker, signal, shares, client, db_engine, notify)
+
+
+def _execute_entry(ticker, signal, shares, client, db_engine, notify):
+    """Place the entry limit order and record to DB."""
+    from db.models import Signal as DbSignal, Order, Position
+
+    try:
+        order_side = "buy" if signal.side == "long" else "sell_short"
+        broker_order_id = client.place_limit_order(
+            ticker, order_side, shares, signal.entry_price
+        )
+    except Exception as e:
+        logger.error("Entry order failed for %s: %s", ticker, e)
+        return
+
+    with get_session(db_engine) as session:
+        # Persist signal
+        db_signal = DbSignal(
+            ticker=ticker,
+            setup_type=signal.setup_type,
+            entry_price=signal.entry_price,
+            stop_price=signal.stop_price,
+            gap_pct=signal.gap_pct,
+            orh=signal.orh,
+            orb_low=signal.orb_low,
+            acted_on=True,
+        )
+        session.add(db_signal)
+        session.flush()
+
+        # Persist order
+        db_order = Order(
+            signal_id=db_signal.id,
+            broker_order_id=broker_order_id,
+            ticker=ticker,
+            side=order_side,
+            order_type="limit",
+            qty=shares,
+            price=signal.entry_price,
+            status="submitted",
+        )
+        session.add(db_order)
+        session.flush()
+
+        # Persist position (will be updated on fill)
+        pos = Position(
+            ticker=ticker,
+            setup_type=signal.setup_type,
+            side=signal.side,
+            entry_order_id=db_order.id,
+            shares=shares,
+            entry_price=signal.entry_price,
+            stop_price=signal.stop_price,
+            initial_stop_price=signal.stop_price,
+        )
+        session.add(pos)
+        session.commit()
+
+    notify(
+        f"ENTRY ORDER: {ticker} ({signal.setup_type})\n"
+        f"Side: {signal.side.upper()} {shares} shares @ ${signal.entry_price:.2f}\n"
+        f"Stop: ${signal.stop_price:.2f}\n"
+        f"Risk/share: ${signal.risk_per_share:.2f}"
+    )
+    logger.info(
+        "Entry order placed: %s %s %d @ %.2f stop=%.2f",
+        order_side, ticker, shares, signal.entry_price, signal.stop_price,
+    )
+
+
+def job_eod_tasks(
+    config: dict,
+    client: AlpacaClient,
+    tracker: PositionTracker,
+    db_engine,
+    notify,
+):
+    """3:55 PM ET — trailing stop updates, P&L, Telegram summary."""
+    logger.info("=== EOD TASKS START ===")
+
+    # Update trailing stops
+    tracker.run_eod_tasks(_daily_closes_cache)
+
+    # Compute daily P&L
+    portfolio_value = client.get_portfolio_value()
+    daily = tracker.compute_daily_pnl(portfolio_value)
+
+    sign = "+" if daily.total_pnl >= 0 else ""
+    summary = (
+        f"EOD SUMMARY\n"
+        f"Date: {daily.trade_date}\n"
+        f"P&L: {sign}${daily.total_pnl:.2f}\n"
+        f"Realized: ${daily.realized_pnl:.2f}\n"
+        f"Trades: {daily.num_trades} ({daily.num_winners}W / {daily.num_losers}L)\n"
+        f"Portfolio: ${portfolio_value:,.0f}"
+    )
+    notify(summary)
+    logger.info(summary)
+
+    # Reset daily halt for next day
+    tracker.set_daily_halt(False)
+
+
+# ---------------------------------------------------------------------------
+# P&L helpers
+# ---------------------------------------------------------------------------
+
+def _compute_current_daily_pnl(db_engine) -> float:
+    from db.models import Position
+    from datetime import date
+    today = date.today()
+    with get_session(db_engine) as session:
+        closed = (
+            session.query(Position)
+            .filter(
+                Position.is_open == False,
+                Position.closed_at >= datetime.combine(today, datetime.min.time()),
+            )
+            .all()
+        )
+    return sum(p.realized_pnl or 0.0 for p in closed)
+
+
+def _compute_current_weekly_pnl(db_engine) -> float:
+    from db.models import Position
+    from datetime import date, timedelta
+    today = date.today()
+    week_start = today - timedelta(days=today.weekday())
+    with get_session(db_engine) as session:
+        closed = (
+            session.query(Position)
+            .filter(
+                Position.is_open == False,
+                Position.closed_at >= datetime.combine(week_start, datetime.min.time()),
+            )
+            .all()
+        )
+    return sum(p.realized_pnl or 0.0 for p in closed)
+
+
+# ---------------------------------------------------------------------------
+# Boot
+# ---------------------------------------------------------------------------
+
+def main():
+    config_path = os.environ.get("BOT_CONFIG", "config.yaml")
+    config = load_config(config_path)
+
+    logger.info("Trading bot starting. Environment: %s", config["environment"])
+
+    # Database
+    db_engine = init_db(config["database"]["url"])
+
+    # Broker
+    client = AlpacaClient(config)
+    client.connect()
+
+    # Notifier
+    notify = make_notifier(config)
+
+    # Risk manager
+    risk = RiskManager(config)
+
+    # Position tracker
+    tracker = PositionTracker(config, db_engine, client, notify)
+
+    api_key = os.environ.get("POLYGON_API_KEY") or config["polygon"]["api_key"]
+
+    # Scheduler
+    scheduler = BackgroundScheduler(timezone=ET)
+
+    scheduler.add_job(
+        job_premarket_scan,
+        CronTrigger(hour=6, minute=0, timezone=ET),
+        args=[config, api_key],
+        id="premarket_scan",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_subscribe_watchlist,
+        CronTrigger(hour=9, minute=25, timezone=ET),
+        args=[client, config, tracker, risk, db_engine, notify],
+        id="subscribe_watchlist",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_intraday_monitor,
+        CronTrigger(hour=9, minute=30, timezone=ET),
+        args=[config, client, tracker, risk, db_engine, notify],
+        id="intraday_monitor",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_eod_tasks,
+        CronTrigger(hour=15, minute=55, timezone=ET),
+        args=[config, client, tracker, db_engine, notify],
+        id="eod_tasks",
+        replace_existing=True,
+    )
+
+    scheduler.start()
+    logger.info("Scheduler started. Jobs: %s", [j.id for j in scheduler.get_jobs()])
+
+    # Graceful shutdown
+    def shutdown(sig, frame):
+        logger.info("Shutdown signal received")
+        scheduler.shutdown(wait=False)
+        client.disconnect()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+
+    notify("Trading bot started. Environment: " + config["environment"])
+
+    # Keep alive
+    import time
+    while True:
+        time.sleep(60)
+
+
+if __name__ == "__main__":
+    main()

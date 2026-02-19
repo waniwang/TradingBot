@@ -1,0 +1,37 @@
+environment: paper             # paper | live
+
+alpaca:
+  api_key: YOUR_ALPACA_API_KEY
+  secret_key: YOUR_ALPACA_SECRET_KEY
+  # paper=True when environment=paper, paper=False when environment=live
+  # Get keys at: https://alpaca.markets → paper account dashboard
+
+polygon:
+  api_key: YOUR_POLYGON_KEY
+
+risk:
+  risk_per_trade_pct: 1.0      # % of portfolio risked per trade
+  max_positions: 4             # max concurrent open positions
+  max_position_pct: 10.0       # max single position as % of portfolio notional
+  daily_loss_limit_pct: 3.0    # halt day if daily loss exceeds this %
+  weekly_loss_limit_pct: 5.0   # halt week if weekly loss exceeds this %
+
+signals:
+  ep_min_gap_pct: 10.0                     # min gap % to qualify as Episodic Pivot
+  breakout_consolidation_days_min: 10      # min days for valid consolidation
+  breakout_consolidation_days_max: 40      # max days for valid consolidation
+  parabolic_min_gain_pct: 50.0             # min gain % for parabolic short candidate
+  parabolic_min_days: 3                    # min consecutive up days for parabolic
+
+exits:
+  partial_exit_after_days: 3              # sell partial after this many days in trade
+  partial_exit_gain_threshold_pct: 15.0   # only partial exit if gain >= this %
+  partial_exit_fraction: 0.40             # fraction of position to sell (40%)
+  trailing_ma_period: 10                  # MA period for trailing stop (10 or 20)
+
+telegram:
+  bot_token: YOUR_TELEGRAM_BOT_TOKEN
+  chat_id: YOUR_TELEGRAM_CHAT_ID
+
+database:
+  url: sqlite:///trading_bot.db
