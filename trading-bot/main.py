@@ -15,6 +15,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -75,6 +76,7 @@ _watchlist: list[dict] = []          # [{ticker, setup_type, gap_pct, ...}]
 _daily_bars_cache: dict[str, list[dict]] = {}
 _daily_closes_cache: dict[str, list[float]] = {}
 _daily_volumes_cache: dict[str, list[int]] = {}
+_cache_lock = threading.Lock()       # guards all three caches above
 
 
 # ---------------------------------------------------------------------------
@@ -104,12 +106,25 @@ def make_notifier(config: dict):
 
 
 # ---------------------------------------------------------------------------
+# Market calendar helpers
+# ---------------------------------------------------------------------------
+
+def is_trading_day() -> bool:
+    """Return True if today is a weekday (Mon–Fri) in ET. Does not account for holidays."""
+    now_et = datetime.now(ET)
+    return now_et.weekday() < 5  # 0=Mon … 4=Fri
+
+
+# ---------------------------------------------------------------------------
 # Scheduled jobs
 # ---------------------------------------------------------------------------
 
 def job_premarket_scan(config: dict, polygon_api_key: str):
     """6:00 AM ET — scan for EP gappers + breakout momentum candidates."""
     global _watchlist
+    if not is_trading_day():
+        logger.info("Pre-market scan skipped — not a trading day")
+        return
     _set_phase("scanning")
     logger.info("=== PRE-MARKET SCAN START ===")
 
@@ -165,15 +180,16 @@ def job_subscribe_watchlist(
 
         # Fetch recent candles and daily history for signal evaluation
         candles_1m = client.get_candles_1m(ticker, count=30)
-        daily_bars = _daily_bars_cache.get(ticker)
+        with _cache_lock:
+            daily_bars = _daily_bars_cache.get(ticker)
         if not daily_bars:
             daily_bars = client.get_daily_bars(ticker, days=130)
-            _daily_bars_cache[ticker] = daily_bars
-
         daily_closes = [b["close"] for b in daily_bars]
         daily_volumes = [b["volume"] for b in daily_bars]
-        _daily_closes_cache[ticker] = daily_closes
-        _daily_volumes_cache[ticker] = daily_volumes
+        with _cache_lock:
+            _daily_bars_cache[ticker] = daily_bars
+            _daily_closes_cache[ticker] = daily_closes
+            _daily_volumes_cache[ticker] = daily_volumes
 
         # Running today's cumulative volume (approximate from bars)
         today_volume = sum(c["volume"] for c in candles_1m)
@@ -245,9 +261,11 @@ def process_ticker_update(
             return
 
     if daily_closes is None:
-        daily_closes = _daily_closes_cache.get(ticker, [])
+        with _cache_lock:
+            daily_closes = list(_daily_closes_cache.get(ticker, []))
     if daily_volumes is None:
-        daily_volumes = _daily_volumes_cache.get(ticker, [])
+        with _cache_lock:
+            daily_volumes = list(_daily_volumes_cache.get(ticker, []))
     if current_volume is None:
         current_volume = 0
 
@@ -260,9 +278,17 @@ def process_ticker_update(
         return
 
     with get_session(db_engine) as session:
-        from db.models import Position
+        from db.models import Position, Order
         already_open = session.query(Position).filter_by(ticker=ticker, is_open=True).count()
         if already_open > 0:
+            return
+        # Skip if there's already a pending/submitted order for this ticker
+        # (prevents duplicate entries while waiting for fill confirmation)
+        pending = session.query(Order).filter(
+            Order.ticker == ticker,
+            Order.status.in_(["pending", "submitted"]),
+        ).count()
+        if pending > 0:
             return
 
     portfolio_value = client.get_portfolio_value()
@@ -493,11 +519,16 @@ def job_eod_tasks(
     notify,
 ):
     """3:55 PM ET — trailing stop updates, P&L, Telegram summary."""
+    if not is_trading_day():
+        logger.info("EOD tasks skipped — not a trading day")
+        return
     _set_phase("end_of_day")
     logger.info("=== EOD TASKS START ===")
 
-    # Update trailing stops
-    tracker.run_eod_tasks(_daily_closes_cache)
+    # Pass a snapshot of the cache to avoid race with the stream callback thread
+    with _cache_lock:
+        closes_snapshot = {k: list(v) for k, v in _daily_closes_cache.items()}
+    tracker.run_eod_tasks(closes_snapshot)
 
     # Compute daily P&L
     portfolio_value = client.get_portfolio_value()

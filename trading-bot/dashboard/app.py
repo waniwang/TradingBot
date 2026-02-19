@@ -301,7 +301,7 @@ def main():
     daily_unrealized = 0.0
     for p in open_positions:
         price = get_live_price(p.ticker)
-        if price:
+        if price is not None and price > 0:
             daily_unrealized += p.unrealized_pnl(price)
     total_daily_pnl = daily_realized + daily_unrealized
     daily_pnl_pct = total_daily_pnl / portfolio_value * 100 if portfolio_value else 0
@@ -332,7 +332,8 @@ def main():
         else:
             rows = []
             for p in open_positions:
-                price = get_live_price(p.ticker) or p.entry_price
+                live = get_live_price(p.ticker)
+                price = live if (live is not None and live > 0) else p.entry_price
                 unreal = p.unrealized_pnl(price)
                 gain = p.gain_pct(price)
                 remaining = p.shares - p.partial_exit_shares
@@ -448,7 +449,7 @@ def main():
 
         st.dataframe(
             hist_df.style
-                .applymap(_style_pnl, subset=["P&L"])
+                .map(_style_pnl, subset=["P&L"])
                 .format({"P&L": "${:+.2f}"}),
             use_container_width=True,
             hide_index=True,

@@ -190,7 +190,7 @@ class PositionTracker:
             pnl = remaining * (pos.entry_price - current_price)
 
         # Include partial exit P&L
-        if pos.partial_exit_done and pos.partial_exit_price:
+        if pos.partial_exit_done and pos.partial_exit_price is not None:
             if pos.side == "long":
                 pnl += pos.partial_exit_shares * (pos.partial_exit_price - pos.entry_price)
             else:

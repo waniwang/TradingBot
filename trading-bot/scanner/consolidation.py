@@ -54,10 +54,12 @@ def detect_atr_contraction(atr_series: pd.Series, window: int) -> tuple[bool, fl
         return False, 1.0
     recent = atr_series.dropna().tail(window // 2).mean()
     older = atr_series.dropna().tail(window).head(window // 2).mean()
-    if older == 0:
+    if older == 0 or pd.isna(older) or pd.isna(recent):
         return False, 1.0
     ratio = recent / older
-    return ratio < 0.85, round(ratio, 3)
+    if pd.isna(ratio):
+        return False, 1.0
+    return ratio < 0.85, round(float(ratio), 3)
 
 
 def check_near_ma(df: pd.DataFrame, ma_period: int = 20, tolerance_pct: float = 3.0) -> bool:

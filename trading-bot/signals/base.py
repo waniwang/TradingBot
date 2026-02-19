@@ -88,7 +88,8 @@ def compute_vwap(candles: list[dict]) -> pd.Series:
     df["cum_tp_vol"] = df["tp_vol"].cumsum()
     df["cum_vol"] = df["volume"].cumsum()
     df["vwap"] = df["cum_tp_vol"] / df["cum_vol"].replace(0, np.nan)
-    return df["vwap"]
+    # Forward-fill any NaN gaps (e.g. zero-volume bars), then back-fill leading NaN
+    return df["vwap"].ffill().bfill()
 
 
 def compute_sma(closes: list[float] | pd.Series, period: int) -> float | None:
@@ -96,7 +97,10 @@ def compute_sma(closes: list[float] | pd.Series, period: int) -> float | None:
     s = pd.Series(closes) if not isinstance(closes, pd.Series) else closes
     if len(s) < period:
         return None
-    return float(s.rolling(period).mean().iloc[-1])
+    result = s.rolling(period).mean().iloc[-1]
+    if pd.isna(result):
+        return None
+    return float(result)
 
 
 def compute_avg_volume(volumes: list[int] | pd.Series, period: int = 20) -> float:
