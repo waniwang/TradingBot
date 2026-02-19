@@ -203,6 +203,12 @@ else
       $SSH "systemctl is-active trading-bot trading-dashboard"
       echo "Done."
       ;;
+    scan)
+      echo "==> Triggering manual scan on server..."
+      $SSH "touch $REMOTE_DIR/trigger_scan"
+      echo "    Trigger file created. Scan will start within 30s (next heartbeat)."
+      echo "    Use './bot.sh logs' to watch progress."
+      ;;
     logs)
       echo "==> Tailing server logs (Ctrl+C to exit)..."
       $SSH "tail -f $REMOTE_DIR/trading_bot.log"
@@ -248,7 +254,7 @@ print('yes' if in_hours else 'no')
       echo "Done. Dashboard: http://172.235.216.175:8501"
       ;;
     *)
-      echo "Usage: $0 [local|server] {status|start|stop|restart|logs}"
+      echo "Usage: $0 [local|server] {status|start|stop|restart|logs|scan}"
       echo "       $0 deploy"
       exit 1
       ;;

@@ -2,8 +2,8 @@
 Main entry point.
 
 APScheduler orchestrates all jobs:
-  6:00 AM ET  — pre-market scan (Polygon.io)
-  9:25 AM ET  — finalize watchlist, subscribe Moomoo real-time
+  6:00 AM ET  — pre-market scan (Alpaca screener + snapshots)
+  9:25 AM ET  — finalize watchlist, subscribe Alpaca real-time
   9:30 AM ET  — start intraday signal monitor
   3:55 PM ET  — EOD tasks: trailing stop updates, P&L summary, Telegram
 """
@@ -31,7 +31,7 @@ from executor.alpaca_client import AlpacaClient
 from monitor.position_tracker import PositionTracker
 from risk.manager import RiskManager
 from scanner.gapper import get_premarket_gappers
-from scanner.momentum_rank import rank_by_momentum, get_sp1500_tickers
+from scanner.momentum_rank import rank_by_momentum
 from scanner.consolidation import scan_breakout_candidates
 from signals import evaluate_signal
 from signals.base import compute_sma
@@ -53,8 +53,6 @@ def load_config(path: str = "config.yaml") -> dict:
     with open(path) as f:
         cfg = yaml.safe_load(f)
     # Allow env var overrides
-    if os.environ.get("POLYGON_API_KEY"):
-        cfg["polygon"]["api_key"] = os.environ["POLYGON_API_KEY"]
     if os.environ.get("ALPACA_API_KEY"):
         cfg.setdefault("alpaca", {})["api_key"] = os.environ["ALPACA_API_KEY"]
     if os.environ.get("ALPACA_SECRET_KEY"):
@@ -148,26 +146,79 @@ def is_trading_day(client=None) -> bool:
 # Scheduled jobs
 # ---------------------------------------------------------------------------
 
-def job_premarket_scan(config: dict, polygon_api_key: str, client: AlpacaClient = None):
+def _format_watchlist_notification(watchlist: list[dict]) -> str:
+    """Format the watchlist into a Telegram-friendly summary message."""
+    if not watchlist:
+        return "WATCHLIST READY: 0 candidates"
+
+    lines = [f"WATCHLIST READY: {len(watchlist)} candidates"]
+
+    # Group by setup type
+    by_setup: dict[str, list[dict]] = {}
+    for c in watchlist:
+        setup = c.get("setup_type", "unknown")
+        by_setup.setdefault(setup, []).append(c)
+
+    setup_labels = {
+        "episodic_pivot": "EP",
+        "breakout": "Breakout",
+        "parabolic_short": "Parabolic Short",
+    }
+
+    for setup, items in by_setup.items():
+        label = setup_labels.get(setup, setup)
+        parts = []
+        for c in items:
+            ticker = c["ticker"]
+            gap = c.get("gap_pct")
+            if gap:
+                parts.append(f"{ticker} (+{gap:.1f}%)")
+            else:
+                parts.append(ticker)
+        lines.append(f"{label}: {', '.join(parts)}")
+
+    return "\n".join(lines)
+
+
+def job_premarket_scan(config: dict, client: AlpacaClient, notify=None, force: bool = False):
     """6:00 AM ET — scan for EP gappers + breakout momentum candidates."""
     global _watchlist
-    if not is_trading_day(client):
+    if not force and not is_trading_day(client):
         logger.info("Pre-market scan skipped — not a trading day")
         return
     _set_phase("scanning")
     logger.info("=== PRE-MARKET SCAN START ===")
+    if notify:
+        notify("PRE-MARKET SCAN STARTED")
+
+    errors = []
 
     # EP gappers
-    ep_candidates = get_premarket_gappers(config)
-    logger.info("EP candidates: %d", len(ep_candidates))
+    try:
+        ep_candidates = get_premarket_gappers(config, client)
+        logger.info("EP candidates: %d", len(ep_candidates))
+    except Exception as e:
+        logger.error("EP gapper scan failed: %s", e)
+        ep_candidates = []
+        errors.append(f"EP gapper scan failed: {e}")
 
     # Momentum rank top names for breakout
-    tickers_universe = get_sp1500_tickers(polygon_api_key, max_tickers=500)
-    top_momentum = rank_by_momentum(tickers_universe, config, top_n=50)
+    try:
+        tickers_universe = client.get_tradable_universe(max_tickers=1500)
+        top_momentum = rank_by_momentum(tickers_universe, config, client, top_n=50)
+    except Exception as e:
+        logger.error("Momentum rank failed: %s", e)
+        top_momentum = []
+        errors.append(f"Momentum rank failed: {e}")
 
     # Breakout consolidation filter on top momentum names
-    momentum_tickers = [t["ticker"] for t in top_momentum[:50]]
-    breakout_candidates = scan_breakout_candidates(momentum_tickers, config)
+    try:
+        momentum_tickers = [t["ticker"] for t in top_momentum[:50]]
+        breakout_candidates = scan_breakout_candidates(momentum_tickers, config, client)
+    except Exception as e:
+        logger.error("Breakout scan failed: %s", e)
+        breakout_candidates = []
+        errors.append(f"Breakout scan failed: {e}")
 
     # Merge watchlist (EP first, then breakout)
     watchlist = ep_candidates + breakout_candidates
@@ -184,6 +235,12 @@ def job_premarket_scan(config: dict, polygon_api_key: str, client: AlpacaClient 
     logger.info("=== PRE-MARKET SCAN DONE: %d candidates ===", len(_watchlist))
     for c in _watchlist:
         logger.info("  %s [%s]", c["ticker"], c["setup_type"])
+
+    # Send Telegram notifications
+    if notify:
+        notify(_format_watchlist_notification(_watchlist))
+        if errors:
+            notify("SCAN ERRORS:\n" + "\n".join(errors))
 
 
 def job_subscribe_watchlist(
@@ -686,9 +743,35 @@ def _set_phase(phase: str):
     _current_phase = phase
 
 
+TRIGGER_FILE = Path("trigger_scan")
+
+# State needed by _check_trigger — set in main() after objects are created
+_trigger_args: dict = {}
+
+
+def _check_trigger():
+    """Check for trigger_scan file and run the premarket scan if found."""
+    if not TRIGGER_FILE.exists():
+        return
+    TRIGGER_FILE.unlink(missing_ok=True)
+    logger.info("Manual scan trigger detected — running premarket scan now")
+    args = _trigger_args
+    if args:
+        import threading
+        t = threading.Thread(
+            target=job_premarket_scan,
+            args=[args["config"], args["client"], args["notify"]],
+            kwargs={"force": True},
+            daemon=True,
+        )
+        t.start()
+
+
 def _write_status():
     """Write bot_status.json so the dashboard can read current state."""
     global _current_phase, _scheduler_ref
+
+    _check_trigger()
 
     next_job_name = None
     next_job_time = None
@@ -811,7 +894,9 @@ def main():
     # Position tracker
     tracker = PositionTracker(config, db_engine, client, notify)
 
-    api_key = os.environ.get("POLYGON_API_KEY") or config["polygon"]["api_key"]
+    # Set trigger args so _check_trigger can run manual scans
+    global _trigger_args
+    _trigger_args = {"config": config, "client": client, "notify": notify}
 
     # Scheduler
     global _scheduler_ref
@@ -821,7 +906,7 @@ def main():
     scheduler.add_job(
         job_premarket_scan,
         CronTrigger(hour=6, minute=0, timezone=ET),
-        args=[config, api_key, client],
+        args=[config, client, notify],
         id="premarket_scan",
         replace_existing=True,
     )

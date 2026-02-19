@@ -10,13 +10,10 @@ For a given ticker, checks whether it is currently in a valid consolidation:
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 import numpy as np
 import pandas as pd
-
-from scanner.momentum_rank import get_ohlcv_range
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +74,17 @@ def check_near_ma(df: pd.DataFrame, ma_period: int = 20, tolerance_pct: float = 
 def analyze_consolidation(
     ticker: str,
     config: dict,
+    daily_bars_df: pd.DataFrame,
     consolidation_days: int | None = None,
 ) -> dict[str, Any]:
     """
     Analyze whether a ticker is in a valid consolidation for a breakout setup.
+
+    Args:
+        ticker: stock symbol
+        config: full app config dict
+        daily_bars_df: DataFrame with columns [date, open, high, low, close, volume]
+        consolidation_days: override consolidation window (defaults to config value)
 
     Returns:
         {
@@ -95,14 +99,12 @@ def analyze_consolidation(
             "reason": str  # why it didn't qualify, if applicable
         }
     """
-    api_key = os.environ.get("POLYGON_API_KEY") or config["polygon"]["api_key"]
     sig_cfg = config["signals"]
 
     if consolidation_days is None:
         consolidation_days = sig_cfg["breakout_consolidation_days_max"]
 
-    lookback = max(consolidation_days + 30, 60)
-    df = get_ohlcv_range(ticker, api_key, days_back=lookback)
+    df = daily_bars_df
 
     result: dict[str, Any] = {
         "ticker": ticker,
@@ -159,16 +161,24 @@ def analyze_consolidation(
 def scan_breakout_candidates(
     tickers: list[str],
     config: dict,
+    client,
 ) -> list[dict[str, Any]]:
     """
     Screen a list of tickers for valid breakout consolidation setups.
 
+    Uses client.get_daily_bars_batch() to fetch data for all tickers at once,
+    then analyzes each one for consolidation patterns.
+
     Returns only qualifying tickers.
     """
+    bars_by_symbol = client.get_daily_bars_batch(tickers, days=90)
     candidates = []
     for ticker in tickers:
         try:
-            result = analyze_consolidation(ticker, config)
+            df = bars_by_symbol.get(ticker)
+            if df is None or df.empty:
+                continue
+            result = analyze_consolidation(ticker, config, df)
             if result["qualifies"]:
                 candidates.append(result)
         except Exception as e:

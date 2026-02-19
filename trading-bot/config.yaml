@@ -6,9 +6,6 @@ alpaca:
   # paper=True when environment=paper, paper=False when environment=live
   # Get keys at: https://alpaca.markets → paper account dashboard
 
-polygon:
-  api_key: YOUR_POLYGON_KEY
-
 risk:
   risk_per_trade_pct: 1.0      # % of portfolio risked per trade
   max_positions: 4             # max concurrent open positions

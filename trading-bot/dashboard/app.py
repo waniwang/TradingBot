@@ -382,10 +382,16 @@ def main():
         if not watchlist:
             st.info("No watchlist yet — runs at 6:00 AM ET.")
         else:
+            st.metric("Candidates", len(watchlist))
             wdf = pd.DataFrame([{
                 "Ticker": w["ticker"],
                 "Setup": w.get("setup_type", "").replace("_", " ").title(),
                 "Gap %": f"{w['gap_pct']:.1f}%" if w.get("gap_pct") else "—",
+                "Pre-Mkt": f"${w['premarket_price']:.2f}" if w.get("premarket_price") else "—",
+                "Prev Close": f"${w['prev_close']:.2f}" if w.get("prev_close") else "—",
+                "Volume": f"{w['premarket_volume']:,.0f}" if w.get("premarket_volume") else "—",
+                "ATR Ratio": f"{w['atr_ratio']:.3f}" if w.get("atr_ratio") else "—",
+                "Consol Days": w.get("consolidation_days") or "—",
             } for w in watchlist])
             st.dataframe(wdf, use_container_width=True, hide_index=True)
 

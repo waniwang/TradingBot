@@ -18,6 +18,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+import pandas as pd
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -29,13 +31,17 @@ try:
         ReplaceOrderRequest,
         GetOrdersRequest,
         GetCalendarRequest,
+        GetAssetsRequest,
     )
-    from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
+    from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus, AssetStatus, AssetClass
     from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.historical.screener import ScreenerClient
     from alpaca.data.requests import (
         StockBarsRequest,
         StockLatestQuoteRequest,
         StockLatestBarRequest,
+        StockSnapshotRequest,
+        MarketMoversRequest,
     )
     from alpaca.data.timeframe import TimeFrame
     from alpaca.data.live import StockDataStream
@@ -76,6 +82,7 @@ class AlpacaClient:
 
         self._trade: TradingClient | None = None
         self._data: StockHistoricalDataClient | None = None
+        self._screener: "ScreenerClient | None" = None
         self._stream: StockDataStream | None = None
         self._stream_thread: "threading.Thread | None" = None
         self._subscribed_tickers: list[str] = []
@@ -98,6 +105,10 @@ class AlpacaClient:
             paper=self._paper,
         )
         self._data = StockHistoricalDataClient(
+            api_key=self._api_key,
+            secret_key=self._secret_key,
+        )
+        self._screener = ScreenerClient(
             api_key=self._api_key,
             secret_key=self._secret_key,
         )
@@ -484,7 +495,8 @@ class AlpacaClient:
             limit=count,
         )
         bars = self._data.get_stock_bars(req)
-        ticker_bars = bars.get(ticker, [])
+        bars_data = bars.data if hasattr(bars, 'data') else bars
+        ticker_bars = bars_data.get(ticker, [])
 
         result = []
         for b in ticker_bars[-count:]:
@@ -515,7 +527,8 @@ class AlpacaClient:
             limit=days,
         )
         bars = self._data.get_stock_bars(req)
-        ticker_bars = bars.get(ticker, [])
+        bars_data = bars.data if hasattr(bars, 'data') else bars
+        ticker_bars = bars_data.get(ticker, [])
 
         return [
             {
@@ -528,6 +541,165 @@ class AlpacaClient:
             }
             for b in ticker_bars[-days:]
         ]
+
+    # ------------------------------------------------------------------
+    # Scanner helpers (used by scanner/ modules)
+    # ------------------------------------------------------------------
+
+    def get_market_movers_gainers(self, top: int = 50) -> list[dict]:
+        """Return top gaining stocks from Alpaca's screener."""
+        if not ALPACA_AVAILABLE:
+            return []
+
+        try:
+            req = MarketMoversRequest(top=top)
+            movers = self._screener.get_market_movers(req)
+            results = []
+            for m in movers.gainers:
+                results.append({
+                    "symbol": m.symbol,
+                    "percent_change": float(m.percent_change),
+                    "price": float(m.price),
+                })
+            return results
+        except Exception as e:
+            logger.error("get_market_movers_gainers failed: %s", e)
+            return []
+
+    def get_snapshots(self, tickers: list[str]) -> dict[str, dict]:
+        """
+        Get snapshot data (prev_close, latest_price, daily_volume) for multiple tickers.
+
+        Returns {symbol: {prev_close, latest_price, daily_volume}}.
+        """
+        if not ALPACA_AVAILABLE or not tickers:
+            return {}
+
+        try:
+            req = StockSnapshotRequest(symbol_or_symbols=tickers, feed="iex")
+            snapshots = self._data.get_stock_snapshot(req)
+            result = {}
+            for sym, snap in snapshots.items():
+                try:
+                    prev_close = float(snap.previous_daily_bar.close) if snap.previous_daily_bar else 0
+                    latest_price = float(snap.latest_trade.price) if snap.latest_trade else 0
+                    daily_volume = int(snap.daily_bar.volume) if snap.daily_bar else 0
+                    result[sym] = {
+                        "prev_close": prev_close,
+                        "latest_price": latest_price,
+                        "daily_volume": daily_volume,
+                    }
+                except (AttributeError, TypeError):
+                    continue
+            return result
+        except Exception as e:
+            logger.error("get_snapshots failed: %s", e)
+            return {}
+
+    def get_tradable_universe(self, max_tickers: int = 1500) -> list[str]:
+        """
+        Get a broad list of tradable US equity symbols from Alpaca.
+
+        Filters: active, tradable, NYSE/NASDAQ, alpha-only symbols <= 5 chars.
+        """
+        if not ALPACA_AVAILABLE:
+            return []
+
+        try:
+            req = GetAssetsRequest(status=AssetStatus.ACTIVE, asset_class=AssetClass.US_EQUITY)
+            assets = self._trade.get_all_assets(req)
+            valid_exchanges = {"NYSE", "NASDAQ"}
+            tickers = []
+            for a in assets:
+                if (
+                    a.tradable
+                    and a.exchange in valid_exchanges
+                    and len(a.symbol) <= 5
+                    and a.symbol.isalpha()
+                ):
+                    tickers.append(a.symbol)
+                    if len(tickers) >= max_tickers:
+                        break
+            logger.info("Tradable universe: %d tickers", len(tickers))
+            return tickers
+        except Exception as e:
+            logger.error("get_tradable_universe failed: %s", e)
+            return []
+
+    def get_daily_bars_batch(
+        self, tickers: list[str], days: int = 130, batch_size: int = 500
+    ) -> dict[str, pd.DataFrame]:
+        """
+        Fetch daily OHLCV bars for multiple symbols using yfinance.
+
+        Uses yfinance (free, full US equity coverage) instead of Alpaca IEX
+        which only covers ~2% of stocks.
+
+        Returns {symbol: DataFrame[date, open, high, low, close, volume]}.
+        """
+        if not tickers:
+            return {}
+
+        import yfinance as yf
+
+        # Convert days to yfinance period string
+        if days <= 30:
+            period = "1mo"
+        elif days <= 90:
+            period = "3mo"
+        elif days <= 180:
+            period = "6mo"
+        else:
+            period = "1y"
+
+        result: dict[str, pd.DataFrame] = {}
+
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i : i + batch_size]
+            try:
+                raw = yf.download(
+                    batch,
+                    period=period,
+                    group_by="ticker",
+                    progress=False,
+                    threads=True,
+                )
+                if raw.empty:
+                    continue
+
+                # Single ticker: columns are (Open, High, ...) not multi-level
+                if len(batch) == 1:
+                    sym = batch[0]
+                    df = raw[["Open", "High", "Low", "Close", "Volume"]].dropna()
+                    if not df.empty:
+                        df = df.rename(columns={
+                            "Open": "open", "High": "high", "Low": "low",
+                            "Close": "close", "Volume": "volume",
+                        })
+                        df = df.reset_index().rename(columns={"Date": "date"})
+                        result[sym] = df.tail(days)
+                else:
+                    # Multi-ticker: columns are (ticker, field) multi-level
+                    for sym in batch:
+                        try:
+                            if sym not in raw.columns.get_level_values(0):
+                                continue
+                            df = raw[sym][["Open", "High", "Low", "Close", "Volume"]].dropna()
+                            if df.empty:
+                                continue
+                            df = df.rename(columns={
+                                "Open": "open", "High": "high", "Low": "low",
+                                "Close": "close", "Volume": "volume",
+                            })
+                            df = df.reset_index().rename(columns={"Date": "date"})
+                            result[sym] = df.tail(days)
+                        except (KeyError, TypeError):
+                            continue
+            except Exception as e:
+                logger.warning("get_daily_bars_batch failed for batch %d: %s", i, e)
+
+        logger.info("Fetched daily bars for %d/%d tickers", len(result), len(tickers))
+        return result
 
     # ------------------------------------------------------------------
     # Helpers
