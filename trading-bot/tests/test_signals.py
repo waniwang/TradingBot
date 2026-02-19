@@ -5,6 +5,7 @@ Uses synthetic data — no network calls.
 """
 
 import pytest
+from signals import evaluate_signal, STRATEGY_REGISTRY
 from signals.base import compute_orh, compute_orb_low, compute_vwap, compute_sma
 from signals.breakout import check_breakout
 from signals.episodic_pivot import check_episodic_pivot
@@ -379,3 +380,80 @@ class TestParabolicShortSignal:
         )
         assert result is not None
         assert result.stop_price > result.entry_price
+
+
+# ---------------------------------------------------------------------------
+# Strategy registry
+# ---------------------------------------------------------------------------
+
+class TestStrategyRegistry:
+    def test_all_strategies_registered(self):
+        assert "breakout" in STRATEGY_REGISTRY
+        assert "episodic_pivot" in STRATEGY_REGISTRY
+        assert "parabolic_short" in STRATEGY_REGISTRY
+
+    def test_unknown_setup_type_returns_none(self):
+        result = evaluate_signal("nonexistent", "AAPL", candles_1m=[], current_price=50.0,
+                                 current_volume=0, daily_closes=[], daily_volumes=[])
+        assert result is None
+
+    def test_evaluate_breakout_via_registry(self):
+        candles_1m = make_candles(30, base_price=50.0, step=0.10)
+        orh = compute_orh(candles_1m, n_minutes=5)
+        daily_closes = make_daily_closes(25, start=45.0, drift=0.2)
+        daily_volumes = make_daily_volumes(25, base=1_000_000)
+
+        result = evaluate_signal(
+            "breakout", "AAPL",
+            candles_1m=candles_1m,
+            daily_closes=daily_closes,
+            daily_volumes=daily_volumes,
+            current_price=orh + 0.20,
+            current_volume=2_500_000,
+        )
+        assert result is not None
+        assert result.setup_type == "breakout"
+
+    def test_evaluate_episodic_pivot_via_registry(self):
+        candles_1m = make_candles(30, base_price=115.0, step=0.15)
+        orh = compute_orh(candles_1m, n_minutes=5)
+        daily_volumes = make_daily_volumes(25, base=500_000)
+
+        result = evaluate_signal(
+            "episodic_pivot", "NVDA",
+            candles_1m=candles_1m,
+            daily_closes=[],
+            daily_volumes=daily_volumes,
+            current_price=orh + 0.50,
+            current_volume=2_000_000,
+            gap_pct=15.0,
+        )
+        assert result is not None
+        assert result.setup_type == "episodic_pivot"
+
+    def test_evaluate_parabolic_short_via_registry(self):
+        daily_closes = [10.0, 10.5, 10.8, 16.0, 17.0, 18.0]
+        candles_1m = []
+        for i in range(25):
+            p = 18.0 + i * 0.01
+            candles_1m.append({
+                "open": p, "high": p + 0.15, "low": p - 0.05,
+                "close": p, "volume": 1_000_000,
+            })
+        for i in range(5):
+            p = 13.0 - i * 0.10
+            candles_1m.append({
+                "open": p + 0.05, "high": p + 0.10, "low": p - 0.05,
+                "close": p, "volume": 80_000,
+            })
+
+        result = evaluate_signal(
+            "parabolic_short", "MEME",
+            candles_1m=candles_1m,
+            daily_closes=daily_closes,
+            daily_volumes=[],
+            current_price=12.9,
+            current_volume=100_000,
+        )
+        assert result is not None
+        assert result.setup_type == "parabolic_short"

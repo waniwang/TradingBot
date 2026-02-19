@@ -33,9 +33,7 @@ from risk.manager import RiskManager
 from scanner.gapper import get_premarket_gappers
 from scanner.momentum_rank import rank_by_momentum, get_sp1500_tickers
 from scanner.consolidation import scan_breakout_candidates
-from signals.breakout import check_breakout
-from signals.episodic_pivot import check_episodic_pivot
-from signals.parabolic_short import check_parabolic_short
+from signals import evaluate_signal
 from signals.base import compute_sma
 
 logging.basicConfig(
@@ -355,26 +353,19 @@ def _evaluate_and_enter(
             notify(f"Trading halted: {block_reason}")
         return
 
-    # Evaluate signal
+    # Evaluate signal via strategy registry
     setup = watchlist_entry["setup_type"]
-    sig = None
-
-    if setup == "breakout":
-        sig = check_breakout(
-            ticker, candles_1m, daily_closes, daily_volumes,
-            current_price, current_volume, config
-        )
-    elif setup == "episodic_pivot":
-        gap_pct = watchlist_entry.get("gap_pct", 0.0)
-        sig = check_episodic_pivot(
-            ticker, candles_1m, daily_volumes,
-            current_price, current_volume, gap_pct, config
-        )
-    elif setup == "parabolic_short":
-        sig = check_parabolic_short(
-            ticker, candles_1m, daily_closes,
-            current_price, current_volume, config
-        )
+    sig = evaluate_signal(
+        setup,
+        ticker,
+        candles_1m=candles_1m,
+        daily_closes=daily_closes,
+        daily_volumes=daily_volumes,
+        current_price=current_price,
+        current_volume=current_volume,
+        gap_pct=watchlist_entry.get("gap_pct", 0.0),
+        config=config,
+    )
 
     if sig is None:
         return
