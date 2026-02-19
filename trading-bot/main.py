@@ -10,6 +10,7 @@ APScheduler orchestrates all jobs:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import signal
@@ -109,6 +110,7 @@ def make_notifier(config: dict):
 def job_premarket_scan(config: dict, polygon_api_key: str):
     """6:00 AM ET — scan for EP gappers + breakout momentum candidates."""
     global _watchlist
+    _set_phase("scanning")
     logger.info("=== PRE-MARKET SCAN START ===")
 
     # EP gappers
@@ -133,7 +135,8 @@ def job_premarket_scan(config: dict, polygon_api_key: str):
             seen.add(c["ticker"])
             deduped.append(c)
 
-    _watchlist = deduped[:20]  # cap to 20 symbols for Moomoo subscriptions
+    _watchlist = deduped[:20]
+    _set_phase("watchlist_ready")
     logger.info("=== PRE-MARKET SCAN DONE: %d candidates ===", len(_watchlist))
     for c in _watchlist:
         logger.info("  %s [%s]", c["ticker"], c["setup_type"])
@@ -191,6 +194,7 @@ def job_subscribe_watchlist(
         )
 
     client.subscribe_quotes(tickers, callback=on_bar)
+    _set_phase("observing")
 
 
 def job_intraday_monitor(
@@ -388,6 +392,7 @@ def job_eod_tasks(
     notify,
 ):
     """3:55 PM ET — trailing stop updates, P&L, Telegram summary."""
+    _set_phase("end_of_day")
     logger.info("=== EOD TASKS START ===")
 
     # Update trailing stops
@@ -411,6 +416,7 @@ def job_eod_tasks(
 
     # Reset daily halt for next day
     tracker.set_daily_halt(False)
+    _set_phase("idle")
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +457,51 @@ def _compute_current_weekly_pnl(db_engine) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Status heartbeat — written every 30s, read by the dashboard
+# ---------------------------------------------------------------------------
+
+_current_phase = "idle"
+_scheduler_ref = None
+
+
+def _set_phase(phase: str):
+    global _current_phase
+    _current_phase = phase
+
+
+def _write_status():
+    """Write bot_status.json so the dashboard can read current state."""
+    global _current_phase, _scheduler_ref
+
+    next_job_name = None
+    next_job_time = None
+    if _scheduler_ref:
+        upcoming = sorted(
+            [j for j in _scheduler_ref.get_jobs()
+             if j.next_run_time and j.id != "heartbeat"],
+            key=lambda j: j.next_run_time,
+        )
+        if upcoming:
+            next_job_name = upcoming[0].id
+            next_job_time = upcoming[0].next_run_time.isoformat()
+
+    status = {
+        "running": True,
+        "phase": _current_phase,
+        "environment": os.environ.get("BOT_ENV", "paper"),
+        "last_heartbeat": datetime.now(ET).isoformat(),
+        "next_job": next_job_name,
+        "next_job_time": next_job_time,
+        "watchlist": _watchlist,
+    }
+    try:
+        with open("bot_status.json", "w") as f:
+            json.dump(status, f)
+    except Exception as e:
+        logger.warning("Failed to write bot_status.json: %s", e)
+
+
+# ---------------------------------------------------------------------------
 # Boot
 # ---------------------------------------------------------------------------
 
@@ -479,7 +530,9 @@ def main():
     api_key = os.environ.get("POLYGON_API_KEY") or config["polygon"]["api_key"]
 
     # Scheduler
+    global _scheduler_ref
     scheduler = BackgroundScheduler(timezone=ET)
+    _scheduler_ref = scheduler
 
     scheduler.add_job(
         job_premarket_scan,
@@ -510,8 +563,18 @@ def main():
         replace_existing=True,
     )
 
+    # Heartbeat — writes bot_status.json every 30s for the dashboard
+    scheduler.add_job(
+        _write_status,
+        "interval",
+        seconds=30,
+        id="heartbeat",
+        replace_existing=True,
+    )
+
     scheduler.start()
     logger.info("Scheduler started. Jobs: %s", [j.id for j in scheduler.get_jobs()])
+    _write_status()  # write immediately on startup
 
     # Graceful shutdown
     def shutdown(sig, frame):
