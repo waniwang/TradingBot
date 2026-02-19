@@ -135,9 +135,28 @@ class PositionTracker:
         pos.partial_exit_shares = shares_to_sell
         pos.partial_exit_price = current_price
 
-        # Move stop to break-even
+        # Move stop to break-even — update BROKER FIRST, then DB
         old_stop = pos.stop_price
-        pos.stop_price = pos.entry_price
+        if pos.stop_order_id:
+            try:
+                self.client.modify_stop_order(pos.stop_order_id, pos.entry_price)
+                pos.stop_price = pos.entry_price
+            except Exception as e:
+                logger.error(
+                    "CRITICAL: Failed to move stop to break-even for %s: %s. "
+                    "Stop remains at %.2f — position at risk.",
+                    pos.ticker, e, old_stop,
+                )
+                self.notify(
+                    f"🚨 CRITICAL: Partial exit stop update FAILED for {pos.ticker}\n"
+                    f"Stop was NOT moved to break-even (${pos.entry_price:.2f}).\n"
+                    f"Broker stop still at ${old_stop:.2f}. Check manually."
+                )
+                # Don't update stop_price in DB — keep it consistent with broker
+        else:
+            # No broker stop order; just update DB
+            pos.stop_price = pos.entry_price
+
         session.commit()
 
         self.notify(
@@ -145,13 +164,6 @@ class PositionTracker:
             f"Stop moved to break-even: ${pos.entry_price:.2f} (was ${old_stop:.2f})\n"
             f"Remaining: {remaining} shares"
         )
-
-        # Update broker stop order to break-even
-        if pos.stop_order_id:
-            try:
-                self.client.modify_stop_order(pos.stop_order_id, pos.entry_price)
-            except Exception as e:
-                logger.warning("Failed to update stop order to break-even for %s: %s", pos.ticker, e)
 
     # ------------------------------------------------------------------
     # Close position
@@ -247,15 +259,26 @@ class PositionTracker:
             pos.ticker, pos.stop_price, new_stop, self.trailing_ma_period, ma,
         )
         old_stop = pos.stop_price
-        pos.stop_price = new_stop
-        session.commit()
 
-        # Update broker stop order
+        # Update BROKER FIRST — only commit to DB if broker accepts the change
         if pos.stop_order_id:
             try:
                 self.client.modify_stop_order(pos.stop_order_id, new_stop)
             except Exception as e:
-                logger.warning("Failed to update broker stop for %s: %s", pos.ticker, e)
+                logger.error(
+                    "CRITICAL: Failed to update broker trailing stop for %s: %s. "
+                    "DB stop NOT updated to keep consistency. Stop remains %.2f.",
+                    pos.ticker, e, old_stop,
+                )
+                self.notify(
+                    f"🚨 CRITICAL: Trailing stop update FAILED for {pos.ticker}\n"
+                    f"Stop remains at ${old_stop:.2f} (not updated to ${new_stop:.2f}).\n"
+                    f"Check broker manually."
+                )
+                return  # Do NOT update DB — keep it in sync with broker
+
+        pos.stop_price = new_stop
+        session.commit()
 
         self.notify(
             f"TRAILING STOP UPDATE: {pos.ticker}\n"

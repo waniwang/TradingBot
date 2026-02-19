@@ -60,8 +60,9 @@ class AlpacaClient:
         client.disconnect()
     """
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, notify=None):
         self.env: str = config.get("environment", "paper")
+        self._notify = notify or (lambda msg: None)
         alpaca_cfg = config.get("alpaca", {})
 
         self._api_key: str = (
@@ -340,7 +341,6 @@ class AlpacaClient:
 
     def _stream_watchdog(self):
         """Monitor stream thread every 30s; reconnect if it has died."""
-        import threading
         import time
 
         while not self._watchdog_stop.is_set():
@@ -350,11 +350,16 @@ class AlpacaClient:
 
             if self._stream_thread and not self._stream_thread.is_alive():
                 logger.warning("Stream thread died — attempting reconnect...")
+                self._notify(
+                    "🔴 WebSocket stream disconnected.\nAttempting to reconnect — signals paused."
+                )
                 try:
                     self._start_stream(self._subscribed_tickers)
                     logger.info("Stream reconnected for %s", self._subscribed_tickers)
+                    self._notify("✅ WebSocket stream reconnected. Signals resumed.")
                 except Exception as e:
                     logger.error("Stream reconnect failed: %s", e)
+                    self._notify(f"⚠️ Stream reconnect failed: {e}\nWill retry in 30s.")
 
     def unsubscribe_quotes(self, tickers: list[str]):
         """Unsubscribe from real-time data for a list of tickers."""

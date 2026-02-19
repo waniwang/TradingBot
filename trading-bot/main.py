@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import signal
 import sys
 import threading
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytz
@@ -77,6 +79,16 @@ _daily_bars_cache: dict[str, list[dict]] = {}
 _daily_closes_cache: dict[str, list[float]] = {}
 _daily_volumes_cache: dict[str, list[int]] = {}
 _cache_lock = threading.Lock()       # guards all three caches above
+_entry_locks: dict[str, threading.Lock] = {}
+_entry_locks_meta = threading.Lock()  # guards _entry_locks dict itself
+
+
+def _get_entry_lock(ticker: str) -> threading.Lock:
+    """Return a per-ticker lock to prevent concurrent entry evaluation."""
+    with _entry_locks_meta:
+        if ticker not in _entry_locks:
+            _entry_locks[ticker] = threading.Lock()
+        return _entry_locks[ticker]
 
 
 # ---------------------------------------------------------------------------
@@ -277,18 +289,34 @@ def process_ticker_update(
     if watchlist_entry is None:
         return
 
+    # Acquire per-ticker lock: prevents two bar events from both passing the
+    # duplicate check and submitting two orders in the same millisecond window
+    with _get_entry_lock(ticker):
+        _evaluate_and_enter(
+            ticker, watchlist_entry, candles_1m, daily_closes, daily_volumes,
+            current_price, current_volume, config, client, tracker, risk, db_engine, notify,
+        )
+
+
+def _evaluate_and_enter(
+    ticker, watchlist_entry, candles_1m, daily_closes, daily_volumes,
+    current_price, current_volume, config, client, tracker, risk, db_engine, notify,
+):
+    """Inner entry logic — must be called while holding the per-ticker entry lock."""
+    from db.models import Position, Order
+
     with get_session(db_engine) as session:
-        from db.models import Position, Order
         already_open = session.query(Position).filter_by(ticker=ticker, is_open=True).count()
         if already_open > 0:
             return
-        # Skip if there's already a pending/submitted order for this ticker
-        # (prevents duplicate entries while waiting for fill confirmation)
-        pending = session.query(Order).filter(
+        # Block if any non-terminal order exists for this ticker (includes filled orders
+        # where the position record hasn't been created yet by the background thread)
+        active_order = session.query(Order).filter(
             Order.ticker == ticker,
-            Order.status.in_(["pending", "submitted"]),
+            Order.status.in_(["pending", "submitted", "filled", "partially_filled"]),
+            Order.created_at >= datetime.utcnow() - timedelta(minutes=10),
         ).count()
-        if pending > 0:
+        if active_order > 0:
             return
 
     portfolio_value = client.get_portfolio_value()
@@ -296,7 +324,6 @@ def process_ticker_update(
     weekly_pnl = _compute_current_weekly_pnl(db_engine)
 
     with get_session(db_engine) as session:
-        from db.models import Position
         open_count = session.query(Position).filter_by(is_open=True).count()
 
     can_enter, block_reason = risk.can_enter(
@@ -311,35 +338,56 @@ def process_ticker_update(
 
     # Evaluate signal
     setup = watchlist_entry["setup_type"]
-    signal = None
+    sig = None
 
     if setup == "breakout":
-        signal = check_breakout(
+        sig = check_breakout(
             ticker, candles_1m, daily_closes, daily_volumes,
             current_price, current_volume, config
         )
     elif setup == "episodic_pivot":
         gap_pct = watchlist_entry.get("gap_pct", 0.0)
-        signal = check_episodic_pivot(
+        sig = check_episodic_pivot(
             ticker, candles_1m, daily_volumes,
             current_price, current_volume, gap_pct, config
         )
     elif setup == "parabolic_short":
-        signal = check_parabolic_short(
+        sig = check_parabolic_short(
             ticker, candles_1m, daily_closes,
             current_price, current_volume, config
         )
 
-    if signal is None:
+    if sig is None:
+        return
+
+    # Validate signal prices — never trade on NaN or impossible values
+    if not _validate_signal(ticker, sig):
         return
 
     # Size and place entry
-    shares = risk.calculate_position_size(portfolio_value, signal.entry_price, signal.stop_price)
+    shares = risk.calculate_position_size(portfolio_value, sig.entry_price, sig.stop_price)
     if shares <= 0:
         logger.info("%s: position size = 0, skipping", ticker)
         return
 
-    _execute_entry(ticker, signal, shares, client, db_engine, notify)
+    _execute_entry(ticker, sig, shares, client, db_engine, notify)
+
+
+def _validate_signal(ticker: str, sig) -> bool:
+    """Return False and log an error if signal prices are invalid."""
+    for name, val in [("entry_price", sig.entry_price), ("stop_price", sig.stop_price)]:
+        if not isinstance(val, (int, float)) or math.isnan(val) or val <= 0:
+            logger.error("%s: invalid %s in signal: %s — skipping", ticker, name, val)
+            return False
+    if sig.side == "long" and sig.stop_price >= sig.entry_price:
+        logger.error("%s: long stop %.2f must be below entry %.2f — skipping",
+                     ticker, sig.stop_price, sig.entry_price)
+        return False
+    if sig.side == "short" and sig.stop_price <= sig.entry_price:
+        logger.error("%s: short stop %.2f must be above entry %.2f — skipping",
+                     ticker, sig.stop_price, sig.entry_price)
+        return False
+    return True
 
 
 def _wait_for_fill(client, broker_order_id: str, timeout_secs: int = 60) -> dict | None:
@@ -411,15 +459,28 @@ def _await_fill_and_setup_stop(
             order.filled_avg_price = actual_price
             session.commit()
 
-    # Place GTC stop order with broker
+    # Place GTC stop order with broker — retry up to 3 times
     stop_side = "sell" if signal.side == "long" else "buy_to_cover"
     broker_stop_id = None
-    try:
-        broker_stop_id = client.place_stop_order(
-            ticker, stop_side, filled_qty, signal.stop_price
+    for attempt in range(1, 4):
+        try:
+            broker_stop_id = client.place_stop_order(
+                ticker, stop_side, filled_qty, signal.stop_price
+            )
+            break
+        except Exception as e:
+            logger.error("Stop order attempt %d/3 failed for %s: %s", attempt, ticker, e)
+            if attempt < 3:
+                time.sleep(2 ** attempt)  # 2s, 4s backoff
+    if broker_stop_id is None:
+        logger.critical("UNPROTECTED POSITION: %s %d shares @ %.2f — stop order failed",
+                        ticker, filled_qty, actual_price)
+        notify(
+            f"🚨 CRITICAL — UNPROTECTED POSITION\n"
+            f"{ticker}: {filled_qty} shares @ ${actual_price:.2f}\n"
+            f"Stop order FAILED after 3 attempts.\n"
+            f"Manually place stop at ${signal.stop_price:.2f} NOW."
         )
-    except Exception as e:
-        logger.error("Failed to place stop order for %s: %s", ticker, e)
 
     # Create position record
     with get_session(db_engine) as session:
@@ -555,6 +616,20 @@ def job_eod_tasks(
 # P&L helpers
 # ---------------------------------------------------------------------------
 
+def _safe_pnl_sum(positions) -> float:
+    """Sum realized_pnl, skipping any NaN/None values with a warning."""
+    total = 0.0
+    for p in positions:
+        val = p.realized_pnl
+        if val is None:
+            continue
+        if math.isnan(val):
+            logger.error("NaN realized_pnl on position id=%s ticker=%s — excluded from P&L", p.id, p.ticker)
+            continue
+        total += val
+    return total
+
+
 def _compute_current_daily_pnl(db_engine) -> float:
     from db.models import Position
     from datetime import date
@@ -568,12 +643,12 @@ def _compute_current_daily_pnl(db_engine) -> float:
             )
             .all()
         )
-    return sum(p.realized_pnl or 0.0 for p in closed)
+    return _safe_pnl_sum(closed)
 
 
 def _compute_current_weekly_pnl(db_engine) -> float:
     from db.models import Position
-    from datetime import date, timedelta
+    from datetime import date
     today = date.today()
     week_start = today - timedelta(days=today.weekday())
     with get_session(db_engine) as session:
@@ -585,7 +660,7 @@ def _compute_current_weekly_pnl(db_engine) -> float:
             )
             .all()
         )
-    return sum(p.realized_pnl or 0.0 for p in closed)
+    return _safe_pnl_sum(closed)
 
 
 # ---------------------------------------------------------------------------
@@ -634,6 +709,70 @@ def _write_status():
 
 
 # ---------------------------------------------------------------------------
+# Startup safety checks
+# ---------------------------------------------------------------------------
+
+def _reconcile_on_startup(client, db_engine, notify):
+    """
+    Run at startup to detect unsafe states left by a previous crash:
+      1. Open positions with no stop order → CRITICAL alert
+      2. Orders stuck in 'submitted' state → query broker for actual status
+    """
+    from db.models import Position, Order
+
+    logger.info("Running startup reconciliation...")
+
+    # Check for unprotected open positions (no broker stop order ID)
+    with get_session(db_engine) as session:
+        unprotected = (
+            session.query(Position)
+            .filter(Position.is_open == True, Position.stop_order_id == None)
+            .all()
+        )
+        for pos in unprotected:
+            logger.critical(
+                "UNPROTECTED POSITION at startup: %s %d shares @ %.2f stop=%.2f",
+                pos.ticker, pos.shares, pos.entry_price, pos.stop_price,
+            )
+            notify(
+                f"🚨 STARTUP ALERT — UNPROTECTED POSITION\n"
+                f"{pos.ticker}: {pos.shares} shares @ ${pos.entry_price:.2f}\n"
+                f"No broker stop order recorded.\n"
+                f"Manually place stop at ${pos.stop_price:.2f} NOW."
+            )
+
+    # Check for orders stuck in 'submitted' for more than 10 minutes
+    cutoff = datetime.utcnow() - timedelta(minutes=10)
+    with get_session(db_engine) as session:
+        stuck = (
+            session.query(Order)
+            .filter(Order.status == "submitted", Order.created_at < cutoff)
+            .all()
+        )
+        for order in stuck:
+            logger.warning("Stuck order at startup: %s %s broker_id=%s",
+                           order.ticker, order.side, order.broker_order_id)
+            try:
+                info = client.get_order_status(order.broker_order_id)
+                broker_status = info.get("status", "unknown")
+                logger.info("Broker reports stuck order %s as: %s", order.broker_order_id, broker_status)
+                if broker_status == "filled":
+                    notify(
+                        f"⚠️ STARTUP: Order for {order.ticker} shows filled on broker "
+                        f"but no position recorded.\nCheck account manually."
+                    )
+                else:
+                    # Update DB status to match broker
+                    order.status = broker_status
+                    session.commit()
+            except Exception as e:
+                logger.error("Could not reconcile stuck order %s: %s", order.broker_order_id, e)
+                notify(f"⚠️ STARTUP: Could not reconcile stuck order for {order.ticker}. Check broker.")
+
+    logger.info("Startup reconciliation complete.")
+
+
+# ---------------------------------------------------------------------------
 # Boot
 # ---------------------------------------------------------------------------
 
@@ -646,12 +785,15 @@ def main():
     # Database
     db_engine = init_db(config["database"]["url"])
 
+    # Notifier (constructed first so AlpacaClient can use it for stream alerts)
+    notify = make_notifier(config)
+
     # Broker
-    client = AlpacaClient(config)
+    client = AlpacaClient(config, notify)
     client.connect()
 
-    # Notifier
-    notify = make_notifier(config)
+    # Startup safety check — alert on any unprotected positions from a previous crash
+    _reconcile_on_startup(client, db_engine, notify)
 
     # Risk manager
     risk = RiskManager(config)
