@@ -28,6 +28,7 @@ try:
         StopOrderRequest,
         ReplaceOrderRequest,
         GetOrdersRequest,
+        GetCalendarRequest,
     )
     from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
     from alpaca.data.historical import StockHistoricalDataClient
@@ -112,6 +113,61 @@ class AlpacaClient:
 
     def is_connected(self) -> bool:
         return self._trade is not None or not ALPACA_AVAILABLE
+
+    # ------------------------------------------------------------------
+    # Market calendar
+    # ------------------------------------------------------------------
+
+    def get_market_clock(self) -> dict:
+        """
+        Return current market status from Alpaca's clock endpoint.
+
+        Returns a dict with:
+            is_open       (bool)   — True if market is currently open
+            next_open     (datetime) — next market open time (UTC-aware)
+            next_close    (datetime) — next market close time (UTC-aware)
+
+        Alpaca's clock already accounts for US market holidays and early closes.
+        """
+        if not ALPACA_AVAILABLE:
+            now = datetime.now(timezone.utc)
+            return {"is_open": False, "next_open": now, "next_close": now}
+
+        clock = self._trade.get_clock()
+        return {
+            "is_open": clock.is_open,
+            "next_open": clock.next_open,
+            "next_close": clock.next_close,
+        }
+
+    def is_market_open(self) -> bool:
+        """True if the US equity market is currently open (holiday-aware)."""
+        if not ALPACA_AVAILABLE:
+            return False
+        try:
+            return self._trade.get_clock().is_open
+        except Exception as e:
+            logger.warning("Could not fetch market clock: %s", e)
+            return False
+
+    def is_trading_day(self) -> bool:
+        """
+        True if today is a trading day (not a weekend or US holiday).
+
+        Uses Alpaca's calendar API — accurate for early closes, ad-hoc holidays, etc.
+        Falls back to weekday check if the API call fails.
+        """
+        if not ALPACA_AVAILABLE:
+            return datetime.now(timezone.utc).weekday() < 5
+
+        try:
+            today = datetime.now(timezone.utc).date()
+            req = GetCalendarRequest(start=today, end=today)
+            cal = self._trade.get_calendar(req)
+            return len(cal) > 0  # empty list → not a trading day
+        except Exception as e:
+            logger.warning("Market calendar check failed, falling back to weekday: %s", e)
+            return datetime.now(timezone.utc).weekday() < 5
 
     # ------------------------------------------------------------------
     # Account info

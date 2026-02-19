@@ -132,20 +132,28 @@ def make_notifier(config: dict):
 # Market calendar helpers
 # ---------------------------------------------------------------------------
 
-def is_trading_day() -> bool:
-    """Return True if today is a weekday (Mon–Fri) in ET. Does not account for holidays."""
-    now_et = datetime.now(ET)
-    return now_et.weekday() < 5  # 0=Mon … 4=Fri
+def is_trading_day(client=None) -> bool:
+    """
+    Return True if today is a US equity trading day.
+
+    Uses Alpaca's calendar API when a client is available — correctly handles
+    weekends, federal holidays, and early-close days (e.g. day after Thanksgiving).
+    Falls back to a simple weekday check if no client is passed.
+    """
+    if client is not None:
+        return client.is_trading_day()
+    # Fallback: weekday only (no holiday awareness)
+    return datetime.now(ET).weekday() < 5
 
 
 # ---------------------------------------------------------------------------
 # Scheduled jobs
 # ---------------------------------------------------------------------------
 
-def job_premarket_scan(config: dict, polygon_api_key: str):
+def job_premarket_scan(config: dict, polygon_api_key: str, client: AlpacaClient = None):
     """6:00 AM ET — scan for EP gappers + breakout momentum candidates."""
     global _watchlist
-    if not is_trading_day():
+    if not is_trading_day(client):
         logger.info("Pre-market scan skipped — not a trading day")
         return
     _set_phase("scanning")
@@ -591,7 +599,7 @@ def job_eod_tasks(
     notify,
 ):
     """3:55 PM ET — trailing stop updates, P&L, Telegram summary."""
-    if not is_trading_day():
+    if not is_trading_day(client):
         logger.info("EOD tasks skipped — not a trading day")
         return
     _set_phase("end_of_day")
@@ -822,7 +830,7 @@ def main():
     scheduler.add_job(
         job_premarket_scan,
         CronTrigger(hour=6, minute=0, timezone=ET),
-        args=[config, api_key],
+        args=[config, api_key, client],
         id="premarket_scan",
         replace_existing=True,
     )
