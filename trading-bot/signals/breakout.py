@@ -33,6 +33,7 @@ def check_breakout(
     current_price: float,
     current_volume: int,
     config: dict | None = None,
+    daily_lows: list[float] | None = None,
 ) -> SignalResult | None:
     """
     Evaluate breakout conditions for a ticker.
@@ -45,6 +46,7 @@ def check_breakout(
         current_price: latest trade price
         current_volume: total volume so far today
         config: optional app config (for overriding defaults)
+        daily_lows: recent daily low prices; last element is prior day's low for stop
 
     Returns:
         SignalResult if all conditions met, else None
@@ -80,10 +82,12 @@ def check_breakout(
         )
         return None
 
-    # Stop: below the consolidation / prior day low
-    # Use today's ORB low as a conservative stop proxy
-    today_low = min(c["low"] for c in candles_1m)
-    stop_price = today_low
+    # Stop: prior day's low (from daily bars) is more meaningful than today's ORB low
+    if daily_lows and len(daily_lows) >= 1:
+        stop_price = daily_lows[-1]
+    else:
+        # Fallback: today's intraday low
+        stop_price = min(c["low"] for c in candles_1m)
 
     signal = SignalResult(
         ticker=ticker,

@@ -102,7 +102,7 @@ def analyze_consolidation(
     sig_cfg = config["signals"]
 
     if consolidation_days is None:
-        consolidation_days = sig_cfg["breakout_consolidation_days_max"]
+        consolidation_days = sig_cfg.get("breakout_consolidation_days_max", 40)
 
     df = daily_bars_df
 
@@ -134,7 +134,7 @@ def analyze_consolidation(
     near_ma = check_near_ma(df, ma_period=20)
     result["near_20d_ma"] = near_ma
 
-    # Volume dry-up: recent avg volume < 70% of longer-term avg
+    # Volume dry-up: informational indicator, not gating (included in result dict)
     recent_vol = df["volume"].tail(consol_window // 2).mean()
     longer_vol = df["volume"].tail(consol_window * 2).mean()
     volume_drying = (recent_vol / longer_vol) < 0.70 if longer_vol > 0 else False

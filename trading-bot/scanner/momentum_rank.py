@@ -26,20 +26,24 @@ def compute_rs_score(df: pd.DataFrame) -> dict[str, float]:
     closes = df["close"].values
     current = closes[-1]
 
-    def pct(n: int) -> float:
+    def pct(n: int) -> float | None:
         if len(closes) < n + 1:
-            return 0.0
-        return (current - closes[-(n + 1)]) / closes[-(n + 1)] * 100
+            return None
+        ref = closes[-(n + 1)]
+        if ref <= 0:
+            return None
+        return (current - ref) / ref * 100
 
     rs_1m = pct(21)
     rs_3m = pct(63)
     rs_6m = pct(126)
-    # Equal-weighted composite
-    rs_composite = (rs_1m + rs_3m + rs_6m) / 3.0
+    # Composite from available periods only (don't average in fake zeros)
+    available = [v for v in (rs_1m, rs_3m, rs_6m) if v is not None]
+    rs_composite = sum(available) / len(available) if available else 0.0
     return {
-        "rs_1m": round(rs_1m, 2),
-        "rs_3m": round(rs_3m, 2),
-        "rs_6m": round(rs_6m, 2),
+        "rs_1m": round(rs_1m, 2) if rs_1m is not None else 0.0,
+        "rs_3m": round(rs_3m, 2) if rs_3m is not None else 0.0,
+        "rs_6m": round(rs_6m, 2) if rs_6m is not None else 0.0,
         "rs_composite": round(rs_composite, 2),
     }
 

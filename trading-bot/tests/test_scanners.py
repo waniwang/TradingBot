@@ -20,6 +20,7 @@ from scanner.consolidation import (
     detect_atr_contraction,
     check_near_ma,
 )
+from scanner.parabolic import scan_parabolic_candidates
 
 
 # ---------------------------------------------------------------------------
@@ -329,3 +330,128 @@ class TestCheckNearMa:
             })
         df = pd.DataFrame(rows)
         assert check_near_ma(df, ma_period=20, tolerance_pct=3.0) == False
+
+
+# ---------------------------------------------------------------------------
+# Parabolic scanner tests
+# ---------------------------------------------------------------------------
+
+def _make_parabolic_config():
+    return {
+        "signals": {
+            "parabolic_min_gain_pct": 50.0,
+            "parabolic_min_days": 3,
+        },
+    }
+
+
+def _make_parabolic_df(gain_pct: float = 60.0, days: int = 8) -> pd.DataFrame:
+    """Create a DataFrame with a parabolic move over the last 3 days."""
+    rows = []
+    base_price = 20.0
+    for i in range(days):
+        if i >= days - 3:
+            # Parabolic move: scale up linearly to reach gain_pct
+            progress = (i - (days - 3) + 1) / 3.0
+            price = base_price * (1 + gain_pct / 100 * progress)
+        else:
+            price = base_price + i * 0.1
+        rows.append({
+            "date": pd.Timestamp("2025-06-01") + pd.Timedelta(days=i),
+            "open": round(price - 0.2, 2),
+            "high": round(price + 0.5, 2),
+            "low": round(price - 0.3, 2),
+            "close": round(price, 2),
+            "volume": 1_000_000,
+        })
+    return pd.DataFrame(rows)
+
+
+class TestScanParabolicCandidates:
+    def test_qualifies_parabolic(self):
+        df = _make_parabolic_df(gain_pct=60.0)
+        client = MagicMock()
+        client.get_market_movers_gainers.return_value = [
+            {"symbol": "MEME", "percent_change": 30.0, "price": 30.0},
+        ]
+        client.get_daily_bars_batch.return_value = {"MEME": df}
+
+        result = scan_parabolic_candidates(_make_parabolic_config(), client)
+        assert len(result) == 1
+        assert result[0]["ticker"] == "MEME"
+        assert result[0]["setup_type"] == "parabolic_short"
+        assert result[0]["gain_pct"] >= 50.0
+
+    def test_filters_insufficient_gain(self):
+        df = _make_parabolic_df(gain_pct=20.0)  # below 50% threshold
+        client = MagicMock()
+        client.get_market_movers_gainers.return_value = [
+            {"symbol": "SLOW", "percent_change": 10.0, "price": 25.0},
+        ]
+        client.get_daily_bars_batch.return_value = {"SLOW": df}
+
+        result = scan_parabolic_candidates(_make_parabolic_config(), client)
+        assert len(result) == 0
+
+    def test_empty_movers(self):
+        client = MagicMock()
+        client.get_market_movers_gainers.return_value = []
+
+        result = scan_parabolic_candidates(_make_parabolic_config(), client)
+        assert result == []
+
+    def test_filters_penny_stocks(self):
+        df = _make_parabolic_df(gain_pct=80.0)
+        client = MagicMock()
+        client.get_market_movers_gainers.return_value = [
+            {"symbol": "CHEAP", "percent_change": 80.0, "price": 2.0},  # below $5
+        ]
+        client.get_daily_bars_batch.return_value = {"CHEAP": df}
+
+        result = scan_parabolic_candidates(_make_parabolic_config(), client)
+        assert len(result) == 0
+
+    def test_sorted_by_gain_descending(self):
+        df1 = _make_parabolic_df(gain_pct=60.0)
+        df2 = _make_parabolic_df(gain_pct=80.0)
+        client = MagicMock()
+        client.get_market_movers_gainers.return_value = [
+            {"symbol": "AAA", "percent_change": 30.0, "price": 30.0},
+            {"symbol": "BBB", "percent_change": 50.0, "price": 40.0},
+        ]
+        client.get_daily_bars_batch.return_value = {"AAA": df1, "BBB": df2}
+
+        result = scan_parabolic_candidates(_make_parabolic_config(), client)
+        if len(result) >= 2:
+            assert result[0]["gain_pct"] >= result[1]["gain_pct"]
+
+
+# ---------------------------------------------------------------------------
+# RS score with partial data
+# ---------------------------------------------------------------------------
+
+class TestComputeRsScorePartialData:
+    def test_only_30_rows(self):
+        """With only 30 rows, 1m is available but 3m and 6m should be 0.0."""
+        df = _make_daily_df(30, start_price=50.0, drift=0.5)
+        scores = compute_rs_score(df)
+        assert scores != {}
+        assert scores["rs_1m"] > 0
+        # 3m and 6m should fall back to 0.0 (insufficient data)
+        assert scores["rs_3m"] == 0.0
+        assert scores["rs_6m"] == 0.0
+        # Composite should equal rs_1m (only available period)
+        assert scores["rs_composite"] == scores["rs_1m"]
+
+
+# ---------------------------------------------------------------------------
+# Consolidation with missing config key
+# ---------------------------------------------------------------------------
+
+class TestConsolidationMissingConfig:
+    def test_missing_consolidation_days_max(self):
+        """Config without breakout_consolidation_days_max should use default 40."""
+        config = {"signals": {}}
+        df = _make_consolidating_df(60)
+        result = analyze_consolidation("TEST", config, df)
+        assert result["consolidation_days"] == 40

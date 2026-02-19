@@ -37,6 +37,7 @@ def _eval_breakout(ticker: str, **ctx) -> SignalResult | None:
         ctx["current_price"],
         ctx["current_volume"],
         ctx.get("config"),
+        daily_lows=ctx.get("daily_lows"),
     )
 
 
@@ -60,6 +61,7 @@ def _eval_parabolic_short(ticker: str, **ctx) -> SignalResult | None:
         ctx["current_price"],
         ctx["current_volume"],
         ctx.get("config"),
+        daily_highs=ctx.get("daily_highs"),
     )
 
 

@@ -33,6 +33,7 @@ from risk.manager import RiskManager
 from scanner.gapper import get_premarket_gappers
 from scanner.momentum_rank import rank_by_momentum
 from scanner.consolidation import scan_breakout_candidates
+from scanner.parabolic import scan_parabolic_candidates
 from signals import evaluate_signal
 from signals.base import compute_sma
 
@@ -74,7 +75,9 @@ _watchlist: list[dict] = []          # [{ticker, setup_type, gap_pct, ...}]
 _daily_bars_cache: dict[str, list[dict]] = {}
 _daily_closes_cache: dict[str, list[float]] = {}
 _daily_volumes_cache: dict[str, list[int]] = {}
-_cache_lock = threading.Lock()       # guards all three caches above
+_daily_highs_cache: dict[str, list[float]] = {}
+_daily_lows_cache: dict[str, list[float]] = {}
+_cache_lock = threading.Lock()       # guards all caches above
 _entry_locks: dict[str, threading.Lock] = {}
 _entry_locks_meta = threading.Lock()  # guards _entry_locks dict itself
 
@@ -220,8 +223,17 @@ def job_premarket_scan(config: dict, client: AlpacaClient, notify=None, force: b
         breakout_candidates = []
         errors.append(f"Breakout scan failed: {e}")
 
-    # Merge watchlist (EP first, then breakout)
-    watchlist = ep_candidates + breakout_candidates
+    # Parabolic short candidates
+    try:
+        parabolic_candidates = scan_parabolic_candidates(config, client)
+        logger.info("Parabolic candidates: %d", len(parabolic_candidates))
+    except Exception as e:
+        logger.error("Parabolic scan failed: %s", e)
+        parabolic_candidates = []
+        errors.append(f"Parabolic scan failed: {e}")
+
+    # Merge watchlist (EP first, then breakout, then parabolic)
+    watchlist = ep_candidates + breakout_candidates + parabolic_candidates
     # Deduplicate by ticker (EP takes priority)
     seen = set()
     deduped = []
@@ -272,10 +284,14 @@ def job_subscribe_watchlist(
             daily_bars = client.get_daily_bars(ticker, days=130)
         daily_closes = [b["close"] for b in daily_bars]
         daily_volumes = [b["volume"] for b in daily_bars]
+        daily_highs = [b["high"] for b in daily_bars]
+        daily_lows = [b["low"] for b in daily_bars]
         with _cache_lock:
             _daily_bars_cache[ticker] = daily_bars
             _daily_closes_cache[ticker] = daily_closes
             _daily_volumes_cache[ticker] = daily_volumes
+            _daily_highs_cache[ticker] = daily_highs
+            _daily_lows_cache[ticker] = daily_lows
 
         # Running today's cumulative volume (approximate from bars)
         today_volume = sum(c["volume"] for c in candles_1m)
@@ -291,6 +307,8 @@ def job_subscribe_watchlist(
             candles_1m=candles_1m,
             daily_closes=daily_closes,
             daily_volumes=daily_volumes,
+            daily_highs=daily_highs,
+            daily_lows=daily_lows,
             current_price=current_price,
             current_volume=today_volume,
         )
@@ -325,6 +343,8 @@ def process_ticker_update(
     candles_1m: list | None = None,
     daily_closes: list | None = None,
     daily_volumes: list | None = None,
+    daily_highs: list | None = None,
+    daily_lows: list | None = None,
     current_price: float | None = None,
     current_volume: int | None = None,
 ):
@@ -352,6 +372,12 @@ def process_ticker_update(
     if daily_volumes is None:
         with _cache_lock:
             daily_volumes = list(_daily_volumes_cache.get(ticker, []))
+    if daily_highs is None:
+        with _cache_lock:
+            daily_highs = list(_daily_highs_cache.get(ticker, []))
+    if daily_lows is None:
+        with _cache_lock:
+            daily_lows = list(_daily_lows_cache.get(ticker, []))
     if current_volume is None:
         current_volume = 0
 
@@ -368,12 +394,14 @@ def process_ticker_update(
     with _get_entry_lock(ticker):
         _evaluate_and_enter(
             ticker, watchlist_entry, candles_1m, daily_closes, daily_volumes,
+            daily_highs, daily_lows,
             current_price, current_volume, config, client, tracker, risk, db_engine, notify,
         )
 
 
 def _evaluate_and_enter(
     ticker, watchlist_entry, candles_1m, daily_closes, daily_volumes,
+    daily_highs, daily_lows,
     current_price, current_volume, config, client, tracker, risk, db_engine, notify,
 ):
     """Inner entry logic — must be called while holding the per-ticker entry lock."""
@@ -418,6 +446,8 @@ def _evaluate_and_enter(
         candles_1m=candles_1m,
         daily_closes=daily_closes,
         daily_volumes=daily_volumes,
+        daily_highs=daily_highs,
+        daily_lows=daily_lows,
         current_price=current_price,
         current_volume=current_volume,
         gap_pct=watchlist_entry.get("gap_pct", 0.0),
@@ -466,18 +496,28 @@ def _wait_for_fill(client, broker_order_id: str, timeout_secs: int = 60) -> dict
     import time
     TERMINAL = {"filled", "cancelled", "expired", "rejected", "replaced", "done_for_day"}
     deadline = time.time() + timeout_secs
+    last_info = None
     while time.time() < deadline:
         try:
             info = client.get_order_status(broker_order_id)
             status = info.get("status", "")
             if status == "filled":
                 return info
+            if status == "partially_filled":
+                logger.info("Order %s partially filled (%s shares)", broker_order_id, info.get("filled_qty"))
+                last_info = info
             if status in TERMINAL:
                 logger.info("Order %s ended with status: %s", broker_order_id, status)
                 return None
         except Exception as e:
             logger.warning("Error polling order %s: %s", broker_order_id, e)
         time.sleep(2)
+
+    # On timeout, accept partial fill if any shares were filled
+    if last_info and last_info.get("filled_qty", 0) > 0:
+        logger.info("Order %s timed out but has partial fill of %s shares — accepting",
+                     broker_order_id, last_info["filled_qty"])
+        return last_info
 
     logger.info("Order %s did not fill within %ds", broker_order_id, timeout_secs)
     return None
@@ -515,7 +555,9 @@ def _await_fill_and_setup_stop(
 
     # Order filled — extract actual fill details
     actual_price = fill.get("filled_avg_price") or signal.entry_price
-    filled_qty = fill.get("filled_qty") or shares
+    filled_qty = fill.get("filled_qty")
+    if filled_qty is None:
+        filled_qty = shares
 
     # Update order record
     with get_session(db_engine) as session:
@@ -658,9 +700,19 @@ def job_eod_tasks(
         closes_snapshot = {k: list(v) for k, v in _daily_closes_cache.items()}
     tracker.run_eod_tasks(closes_snapshot)
 
+    # Fetch current prices for unrealized P&L calculation
+    current_prices = {}
+    try:
+        broker_positions = client.get_open_positions()
+        for bp in broker_positions:
+            if bp.get("current_price", 0) > 0:
+                current_prices[bp["symbol"]] = bp["current_price"]
+    except Exception as e:
+        logger.warning("Could not fetch broker positions for P&L: %s", e)
+
     # Compute daily P&L
     portfolio_value = client.get_portfolio_value()
-    daily = tracker.compute_daily_pnl(portfolio_value)
+    daily = tracker.compute_daily_pnl(portfolio_value, current_prices=current_prices)
 
     sign = "+" if daily.total_pnl >= 0 else ""
     summary = (
@@ -699,8 +751,7 @@ def _safe_pnl_sum(positions) -> float:
 
 def _compute_current_daily_pnl(db_engine) -> float:
     from db.models import Position
-    from datetime import date
-    today = date.today()
+    today = datetime.utcnow().date()
     with get_session(db_engine) as session:
         closed = (
             session.query(Position)
@@ -715,8 +766,7 @@ def _compute_current_daily_pnl(db_engine) -> float:
 
 def _compute_current_weekly_pnl(db_engine) -> float:
     from db.models import Position
-    from datetime import date
-    today = date.today()
+    today = datetime.utcnow().date()
     week_start = today - timedelta(days=today.weekday())
     with get_session(db_engine) as session:
         closed = (

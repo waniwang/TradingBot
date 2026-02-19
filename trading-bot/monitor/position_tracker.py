@@ -135,24 +135,28 @@ class PositionTracker:
         pos.partial_exit_shares = shares_to_sell
         pos.partial_exit_price = current_price
 
-        # Move stop to break-even — update BROKER FIRST, then DB
+        # Replace stop: cancel old (full qty), place new (reduced qty) at break-even
         old_stop = pos.stop_price
         if pos.stop_order_id:
             try:
-                self.client.modify_stop_order(pos.stop_order_id, pos.entry_price)
+                self.client.cancel_order(pos.stop_order_id)
+                stop_side = "sell" if pos.side == "long" else "buy_to_cover"
+                new_stop_id = self.client.place_stop_order(
+                    pos.ticker, stop_side, remaining, pos.entry_price
+                )
+                pos.stop_order_id = new_stop_id
                 pos.stop_price = pos.entry_price
             except Exception as e:
                 logger.error(
-                    "CRITICAL: Failed to move stop to break-even for %s: %s. "
-                    "Stop remains at %.2f — position at risk.",
-                    pos.ticker, e, old_stop,
+                    "CRITICAL: Failed to replace stop for %s after partial exit: %s. "
+                    "Stop may be missing — position at risk.",
+                    pos.ticker, e,
                 )
                 self.notify(
-                    f"🚨 CRITICAL: Partial exit stop update FAILED for {pos.ticker}\n"
-                    f"Stop was NOT moved to break-even (${pos.entry_price:.2f}).\n"
-                    f"Broker stop still at ${old_stop:.2f}. Check manually."
+                    f"🚨 CRITICAL: Partial exit stop replacement FAILED for {pos.ticker}\n"
+                    f"Stop was NOT replaced at break-even (${pos.entry_price:.2f}).\n"
+                    f"Old stop at ${old_stop:.2f} may be cancelled. Check manually."
                 )
-                # Don't update stop_price in DB — keep it consistent with broker
         else:
             # No broker stop order; just update DB
             pos.stop_price = pos.entry_price
@@ -290,9 +294,13 @@ class PositionTracker:
     # EOD P&L summary
     # ------------------------------------------------------------------
 
-    def compute_daily_pnl(self, portfolio_value: float) -> DailyPnl:
+    def compute_daily_pnl(
+        self,
+        portfolio_value: float,
+        current_prices: dict[str, float] | None = None,
+    ) -> DailyPnl:
         """Compute and persist today's P&L summary."""
-        today = date.today()
+        today = datetime.utcnow().date()
         with get_session(self.engine) as session:
             # Realized P&L from positions closed today
             closed_today = (
@@ -305,10 +313,14 @@ class PositionTracker:
             )
             realized = sum(p.realized_pnl or 0.0 for p in closed_today)
 
-            # Unrealized from open positions — requires current prices
-            # (caller should pass prices; here we use entry as fallback)
+            # Unrealized from open positions using current prices
             open_positions = session.query(Position).filter_by(is_open=True).all()
-            unrealized = 0.0  # Updated by caller with live prices
+            unrealized = 0.0
+            if current_prices:
+                for pos in open_positions:
+                    price = current_prices.get(pos.ticker)
+                    if price is not None:
+                        unrealized += pos.unrealized_pnl(price)
 
             daily = DailyPnl(
                 trade_date=today,

@@ -32,6 +32,7 @@ def check_parabolic_short(
     current_price: float,
     current_volume: int,
     config: dict | None = None,
+    daily_highs: list[float] | None = None,
 ) -> SignalResult | None:
     """
     Evaluate parabolic short conditions for a ticker.
@@ -43,6 +44,7 @@ def check_parabolic_short(
         current_price: latest trade price
         current_volume: total volume today
         config: optional app config
+        daily_highs: recent daily high prices; used for more accurate parabolic gain calc
 
     Returns:
         SignalResult (side='short') if all conditions met, else None
@@ -60,7 +62,11 @@ def check_parabolic_short(
         return None
 
     base_price = daily_closes[-(min_days + 1)]
-    recent_high = max(daily_closes[-min_days:])
+    # Use daily highs for more accurate parabolic gain (closes underestimate by 2-5%)
+    if daily_highs and len(daily_highs) >= min_days:
+        recent_high = max(daily_highs[-min_days:])
+    else:
+        recent_high = max(daily_closes[-min_days:])
     gain_pct = (recent_high - base_price) / base_price * 100 if base_price > 0 else 0
 
     if gain_pct < min_gain_pct:

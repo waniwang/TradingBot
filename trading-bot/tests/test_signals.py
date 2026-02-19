@@ -381,6 +381,94 @@ class TestParabolicShortSignal:
         assert result is not None
         assert result.stop_price > result.entry_price
 
+    def test_daily_highs_used_for_gain_calc(self):
+        """When daily_highs are provided, the parabolic gain should use them."""
+        daily_closes, candles_1m, current_price = self._make_valid_inputs()
+        # daily_closes: [10.0, 10.5, 10.8, 16.0, 17.0, 18.0]
+        # base_price = closes[-4] = 10.8
+        # With higher daily_highs, the gain should still qualify
+        daily_highs = [10.5, 11.0, 11.5, 17.0, 18.5, 19.5]
+        result = check_parabolic_short(
+            "MEME", candles_1m, daily_closes, current_price, 100_000,
+            daily_highs=daily_highs,
+        )
+        assert result is not None
+        assert result.setup_type == "parabolic_short"
+
+    def test_daily_highs_boost_borderline_case(self):
+        """A borderline case that fails with closes but passes with highs."""
+        # daily_closes gain from base=10.8 to max(closes[-3:])=15.0 = 38.9% < 50%
+        daily_closes = [10.0, 10.5, 10.8, 13.0, 14.0, 15.0]
+        # But highs reach 17.0 → gain = (17.0 - 10.8) / 10.8 = 57.4% > 50%
+        daily_highs = [10.5, 11.0, 11.5, 15.0, 16.0, 17.0]
+
+        # Build candles to produce ORB low ~18, then crash to 12
+        candles_1m = []
+        for i in range(25):
+            p = 18.0 + i * 0.01
+            candles_1m.append({
+                "open": p, "high": p + 0.15, "low": p - 0.05,
+                "close": p, "volume": 1_000_000,
+            })
+        for i in range(5):
+            p = 12.0 - i * 0.10
+            candles_1m.append({
+                "open": p + 0.05, "high": p + 0.10, "low": p - 0.05,
+                "close": p, "volume": 80_000,
+            })
+
+        # Without daily_highs: should fail (38.9% < 50%)
+        result_no_highs = check_parabolic_short(
+            "MEME", candles_1m, daily_closes, 11.5, 100_000
+        )
+        assert result_no_highs is None
+
+        # With daily_highs: should pass (57.4% > 50%)
+        result_with_highs = check_parabolic_short(
+            "MEME", candles_1m, daily_closes, 11.5, 100_000,
+            daily_highs=daily_highs,
+        )
+        assert result_with_highs is not None
+
+
+# ---------------------------------------------------------------------------
+# Breakout with daily_lows
+# ---------------------------------------------------------------------------
+
+class TestBreakoutDailyLows:
+    def _make_valid_inputs_with_lows(self):
+        candles_1m = make_candles(30, base_price=50.0, step=0.10)
+        orh = compute_orh(candles_1m, n_minutes=5)
+        daily_closes = make_daily_closes(25, start=45.0, drift=0.2)
+        daily_volumes = make_daily_volumes(25, base=1_000_000)
+        daily_lows = [c - 1.0 for c in daily_closes]  # lows 1.0 below closes
+        current_price = orh + 0.20
+        current_volume = 2_500_000
+        return candles_1m, daily_closes, daily_volumes, daily_lows, current_price, current_volume
+
+    def test_stop_uses_prior_day_low(self):
+        candles_1m, daily_closes, daily_volumes, daily_lows, current_price, current_volume = (
+            self._make_valid_inputs_with_lows()
+        )
+        result = check_breakout(
+            "AAPL", candles_1m, daily_closes, daily_volumes,
+            current_price, current_volume, daily_lows=daily_lows,
+        )
+        assert result is not None
+        assert result.stop_price == daily_lows[-1]
+
+    def test_stop_falls_back_to_today_low_without_daily_lows(self):
+        candles_1m, daily_closes, daily_volumes, _, current_price, current_volume = (
+            self._make_valid_inputs_with_lows()
+        )
+        result = check_breakout(
+            "AAPL", candles_1m, daily_closes, daily_volumes,
+            current_price, current_volume,
+        )
+        assert result is not None
+        today_low = min(c["low"] for c in candles_1m)
+        assert result.stop_price == today_low
+
 
 # ---------------------------------------------------------------------------
 # Strategy registry
