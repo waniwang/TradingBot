@@ -9,6 +9,7 @@ are approximated from daily bars.
 from __future__ import annotations
 
 import logging
+import random
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -34,6 +35,7 @@ class BacktestPosition:
     days_held: int = 0
     partial_exit_done: bool = False
     partial_exit_shares: int = 0
+    partial_exit_price: float | None = None
 
 
 @dataclass
@@ -53,18 +55,29 @@ class BacktestConfig:
     breakout_lookback: int = 5
     breakout_volume_multiplier: float = 1.5
     breakout_prior_move_pct: float = 30.0
+    breakout_atr_contraction_ratio: float = 0.85
+    breakout_ma_tolerance_pct: float = 3.0
+    breakout_stop_atr_mult: float = 1.0
 
     # EP setup params
     ep_min_gap_pct: float = 10.0
     ep_volume_multiplier: float = 2.0
     ep_prior_rally_max_pct: float = 50.0
+    ep_entry_range_fraction: float = 0.30
+    ep_stop_atr_mult: float = 1.5
 
     # Parabolic setup params
     parabolic_min_gain_pct: float = 50.0
     parabolic_min_days: int = 3
+    parabolic_target_ma_short: int = 10
+    parabolic_target_ma_long: int = 20
 
     # General
     atr_period: int = 14
+    warmup_days: int = 130
+    max_position_pct: float = 25.0
+    slippage_bps: float = 0.0
+    shuffle_seed: int | None = 42
 
 
 class BacktestRunner:
@@ -126,8 +139,8 @@ class BacktestRunner:
         self.daily_equity.append(self.config.initial_capital)
 
         for i, date in enumerate(trading_days):
-            # Skip first 130 days to have enough history
-            if i < 130:
+            # Skip warmup period to have enough history
+            if i < self.config.warmup_days:
                 self.daily_equity.append(self._compute_equity(ticker_data, date))
                 continue
 
@@ -136,11 +149,14 @@ class BacktestRunner:
             # 1. Exit checks on open positions
             self._process_exits(date, ticker_data, prior_dates)
 
-            # 2. Scanner + entry phase
+            # 2. Recompute equity for position sizing
+            self.portfolio_value = self._compute_equity(ticker_data, date)
+
+            # 3. Scanner + entry phase
             if len(self.positions) < self.config.max_positions:
                 self._scan_and_enter(date, ticker_data, prior_dates, setups)
 
-            # 3. Record daily equity
+            # 4. Record daily equity
             equity = self._compute_equity(ticker_data, date)
             self.daily_equity.append(equity)
 
@@ -157,15 +173,16 @@ class BacktestRunner:
         for pos in self.positions:
             df = ticker_data.get(pos.ticker)
             if df is None or date not in df.index:
-                equity += pos.shares * pos.entry_price  # use entry as fallback
-                continue
-            price = float(df.loc[date, "close"])
+                price = pos.entry_price
+            else:
+                price = float(df.loc[date, "close"])
             remaining = pos.shares - pos.partial_exit_shares
             if pos.side == "long":
                 equity += remaining * price
             else:
-                # Short: profit = (entry - current) * shares
-                equity += remaining * (2 * pos.entry_price - price)
+                # Short: unrealized P&L = (entry - current) * shares
+                # Cash already includes sale proceeds, so add the liability
+                equity -= remaining * price
         return equity
 
     def _process_exits(self, date: str, ticker_data: dict, prior_dates: list[str]):
@@ -191,17 +208,19 @@ class BacktestRunner:
                 to_close.append((pos, pos.stop_price, "stop_hit"))
                 continue
 
-            # Parabolic target check (10d/20d MA)
+            # Parabolic target check (short/long MA)
             if pos.setup_type == "parabolic_short" and pos.side == "short":
-                closes = self._get_recent_closes(pos.ticker, date, ticker_data, prior_dates, 20)
-                if len(closes) >= 10:
-                    ma10 = compute_sma(closes, 10)
-                    if ma10 is not None and close <= ma10 and not pos.partial_exit_done:
+                ma_short = self.config.parabolic_target_ma_short
+                ma_long = self.config.parabolic_target_ma_long
+                closes = self._get_recent_closes(pos.ticker, date, ticker_data, prior_dates, ma_long)
+                if len(closes) >= ma_short:
+                    ma_s = compute_sma(closes, ma_short)
+                    if ma_s is not None and close <= ma_s and not pos.partial_exit_done:
                         self._do_partial_exit(pos, close, date)
                         continue
-                    if len(closes) >= 20:
-                        ma20 = compute_sma(closes, 20)
-                        if ma20 is not None and close <= ma20 and pos.partial_exit_done:
+                    if len(closes) >= ma_long:
+                        ma_l = compute_sma(closes, ma_long)
+                        if ma_l is not None and close <= ma_l and pos.partial_exit_done:
                             to_close.append((pos, close, "parabolic_target"))
                             continue
 
@@ -243,7 +262,16 @@ class BacktestRunner:
         cfg = self.config
         already_held = {p.ticker for p in self.positions}
 
-        for ticker, df in ticker_data.items():
+        # Shuffle ticker order to avoid alphabetical bias (seeded for reproducibility)
+        tickers = list(ticker_data.keys())
+        if cfg.shuffle_seed is not None:
+            rng = random.Random(cfg.shuffle_seed + hash(date))
+            rng.shuffle(tickers)
+        else:
+            random.shuffle(tickers)
+
+        for ticker in tickers:
+            df = ticker_data[ticker]
             if len(self.positions) >= cfg.max_positions:
                 break
             if ticker in already_held:
@@ -258,12 +286,12 @@ class BacktestRunner:
             today_low = float(row["low"])
             today_volume = float(row["volume"])
 
-            closes = self._get_recent_closes(ticker, date, ticker_data, prior_dates, 130)
+            closes = self._get_recent_closes(ticker, date, ticker_data, prior_dates, cfg.warmup_days)
             if len(closes) < 30:
                 continue
 
-            highs = self._get_recent_values(ticker, date, ticker_data, prior_dates, 130, "high")
-            lows = self._get_recent_values(ticker, date, ticker_data, prior_dates, 130, "low")
+            highs = self._get_recent_values(ticker, date, ticker_data, prior_dates, cfg.warmup_days, "high")
+            lows = self._get_recent_values(ticker, date, ticker_data, prior_dates, cfg.warmup_days, "low")
             volumes = self._get_recent_values(ticker, date, ticker_data, prior_dates, 20, "volume")
             avg_vol = float(np.mean(volumes)) if volumes else 0
 
@@ -323,7 +351,7 @@ class BacktestRunner:
         older_ranges = [h - l for h, l in zip(consol_highs[:10], consol_lows[:10])]
         avg_recent = np.mean(recent_ranges) if recent_ranges else 1
         avg_older = np.mean(older_ranges) if older_ranges else 1
-        if avg_older == 0 or avg_recent / avg_older > 0.85:
+        if avg_older == 0 or avg_recent / avg_older > cfg.breakout_atr_contraction_ratio:
             return False
 
         # Near both 10d and 20d MA
@@ -332,9 +360,10 @@ class BacktestRunner:
         if ma10 is None or ma20 is None:
             return False
         prev_close = closes[-2] if len(closes) >= 2 else closes[-1]
-        if abs(prev_close - ma10) / ma10 > 0.03:
+        ma_tol = cfg.breakout_ma_tolerance_pct / 100.0
+        if abs(prev_close - ma10) / ma10 > ma_tol:
             return False
-        if abs(prev_close - ma20) / ma20 > 0.03:
+        if abs(prev_close - ma20) / ma20 > ma_tol:
             return False
 
         # Breakout: today's high > max of prior 5 days
@@ -355,8 +384,8 @@ class BacktestRunner:
 
         # ATR cap on stop
         atr = compute_atr_from_list(highs, lows, closes)
-        if atr is not None and (entry_price - stop_price) > atr:
-            stop_price = entry_price - atr
+        if atr is not None and (entry_price - stop_price) > cfg.breakout_stop_atr_mult * atr:
+            stop_price = entry_price - cfg.breakout_stop_atr_mult * atr
 
         if stop_price >= entry_price:
             return False
@@ -389,16 +418,16 @@ class BacktestRunner:
                 return False
 
         # Entry: approximate ORH breakout
-        entry_price = today_open + (today_high - today_open) * 0.3
+        entry_price = today_open + (today_high - today_open) * cfg.ep_entry_range_fraction
         if entry_price <= 0 or today_high < entry_price:
             return False
 
         stop_price = today_low
 
-        # ATR cap (1.5x for EP)
+        # ATR cap
         atr = compute_atr_from_list(highs, lows, closes)
-        if atr is not None and (entry_price - stop_price) > 1.5 * atr:
-            stop_price = entry_price - 1.5 * atr
+        if atr is not None and (entry_price - stop_price) > cfg.ep_stop_atr_mult * atr:
+            stop_price = entry_price - cfg.ep_stop_atr_mult * atr
 
         if stop_price >= entry_price:
             return False
@@ -477,15 +506,25 @@ class BacktestRunner:
         else:
             return (pos.entry_price - current_price) / pos.entry_price * 100
 
+    def _apply_slippage(self, price: float, side: str, direction: str) -> float:
+        """Apply slippage to a price. direction is 'entry' or 'exit'."""
+        if self.config.slippage_bps == 0:
+            return price
+        slip = price * self.config.slippage_bps / 10_000
+        # Slippage always costs: buy higher, sell lower
+        if (side == "long" and direction == "entry") or (side == "short" and direction == "exit"):
+            return price + slip
+        return price - slip
+
     def _size_position(self, entry_price: float, stop_price: float) -> int:
-        """Calculate position size based on risk."""
+        """Calculate position size based on risk using portfolio value."""
         risk_per_share = abs(entry_price - stop_price)
         if risk_per_share <= 0:
             return 0
-        max_risk = self.cash * (self.config.risk_per_trade_pct / 100.0)
+        max_risk = self.portfolio_value * (self.config.risk_per_trade_pct / 100.0)
         shares = int(max_risk / risk_per_share)
         # Cap notional
-        max_notional = self.cash * 0.25  # 25% max per position
+        max_notional = self.portfolio_value * (self.config.max_position_pct / 100.0)
         max_shares = int(max_notional / entry_price) if entry_price > 0 else 0
         return min(shares, max_shares)
 
@@ -493,6 +532,9 @@ class BacktestRunner:
         self, ticker: str, setup_type: str, side: str,
         date: str, entry_price: float, stop_price: float, shares: int,
     ):
+        # Apply slippage to entry
+        entry_price = self._apply_slippage(entry_price, side, "entry")
+
         pos = BacktestPosition(
             ticker=ticker,
             setup_type=setup_type,
@@ -504,46 +546,58 @@ class BacktestRunner:
         )
         self.positions.append(pos)
         cost = shares * entry_price
-        self.cash -= cost
+        if side == "long":
+            self.cash -= cost
+        else:
+            # Short sale: receive proceeds
+            self.cash += cost
         logger.debug(
             "OPEN %s %s %d @ %.2f stop=%.2f [%s]",
             side, ticker, shares, entry_price, stop_price, date,
         )
 
     def _do_partial_exit(self, pos: BacktestPosition, price: float, date: str):
+        price = self._apply_slippage(price, pos.side, "exit")
         shares_to_sell = max(1, int(pos.shares * self.config.partial_exit_fraction))
         pos.partial_exit_done = True
         pos.partial_exit_shares = shares_to_sell
+        pos.partial_exit_price = price
         # Credit cash
         if pos.side == "long":
-            pnl = shares_to_sell * (price - pos.entry_price)
+            self.cash += shares_to_sell * price
         else:
-            pnl = shares_to_sell * (pos.entry_price - price)
-        self.cash += shares_to_sell * pos.entry_price + pnl
+            # Short: buy back shares at current price
+            self.cash -= shares_to_sell * price
 
     def _close_position(
         self, pos: BacktestPosition, exit_price: float,
         date: str, reason: str,
     ):
+        exit_price = self._apply_slippage(exit_price, pos.side, "exit")
         remaining = pos.shares - pos.partial_exit_shares
 
-        # Calculate P&L
+        # Calculate remaining shares P&L
         if pos.side == "long":
-            pnl = remaining * (exit_price - pos.entry_price)
+            remaining_pnl = remaining * (exit_price - pos.entry_price)
         else:
-            pnl = remaining * (pos.entry_price - exit_price)
+            remaining_pnl = remaining * (pos.entry_price - exit_price)
 
-        # Add partial exit P&L if applicable
+        # Calculate partial exit P&L
         partial_pnl = 0.0
-        if pos.partial_exit_done:
+        if pos.partial_exit_done and pos.partial_exit_price is not None:
             if pos.side == "long":
-                # Already credited via _do_partial_exit — just track the trade pnl
-                pass
+                partial_pnl = pos.partial_exit_shares * (pos.partial_exit_price - pos.entry_price)
             else:
-                pass
+                partial_pnl = pos.partial_exit_shares * (pos.entry_price - pos.partial_exit_price)
+
+        total_pnl = remaining_pnl + partial_pnl
 
         # Credit remaining to cash
-        self.cash += remaining * pos.entry_price + pnl
+        if pos.side == "long":
+            self.cash += remaining * exit_price
+        else:
+            # Short: buy back remaining shares
+            self.cash -= remaining * exit_price
 
         trade = Trade(
             ticker=pos.ticker,
@@ -554,7 +608,7 @@ class BacktestRunner:
             entry_price=pos.entry_price,
             exit_price=exit_price,
             shares=pos.shares,
-            pnl=pnl + partial_pnl,
+            pnl=total_pnl,
             exit_reason=reason,
         )
         self.trades.append(trade)

@@ -60,6 +60,10 @@ def compute_metrics(
             "max_drawdown_pct": 0.0,
             "total_return_pct": 0.0,
             "cagr": 0.0,
+            "calmar": 0.0,
+            "avg_days_held": 0.0,
+            "max_consecutive_losses": 0,
+            "avg_trades_per_month": 0.0,
         }
 
     pnls = [t.pnl for t in trades]
@@ -103,6 +107,37 @@ def compute_metrics(
         cagr = (final / initial_capital) ** (1 / years) - 1
         cagr *= 100  # as percentage
 
+    # Calmar ratio (CAGR / max drawdown)
+    calmar = abs(cagr / max_dd_pct) if max_dd_pct > 0 else 0.0
+
+    # Average days held
+    days_held = []
+    for t in trades:
+        try:
+            d0 = pd.Timestamp(t.entry_date)
+            d1 = pd.Timestamp(t.exit_date)
+            days_held.append(max(1, (d1 - d0).days))
+        except Exception:
+            days_held.append(1)
+    avg_days_held = float(np.mean(days_held)) if days_held else 0.0
+
+    # Max consecutive losses
+    max_consec_losses = 0
+    current_streak = 0
+    for p in pnls:
+        if p < 0:
+            current_streak += 1
+            max_consec_losses = max(max_consec_losses, current_streak)
+        else:
+            current_streak = 0
+
+    # Avg trades per month
+    if len(daily_equity) > 1:
+        months = n_days / 21.0  # ~21 trading days per month
+        avg_trades_per_month = total_trades / months if months > 0 else 0.0
+    else:
+        avg_trades_per_month = 0.0
+
     return {
         "total_trades": total_trades,
         "win_rate": round(win_rate, 2),
@@ -114,6 +149,10 @@ def compute_metrics(
         "max_drawdown_pct": round(max_dd_pct, 2),
         "total_return_pct": round(total_return_pct, 2),
         "cagr": round(cagr, 2),
+        "calmar": round(calmar, 2),
+        "avg_days_held": round(avg_days_held, 1),
+        "max_consecutive_losses": max_consec_losses,
+        "avg_trades_per_month": round(avg_trades_per_month, 2),
     }
 
 

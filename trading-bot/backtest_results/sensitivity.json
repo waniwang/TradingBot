@@ -1,0 +1,42 @@
+[
+  {
+    "param": "breakout_volume_multiplier",
+    "sharpe_impact": 2.31
+  },
+  {
+    "param": "breakout_consolidation_days",
+    "sharpe_impact": 1.19
+  },
+  {
+    "param": "parabolic_min_gain_pct",
+    "sharpe_impact": 1.03
+  },
+  {
+    "param": "partial_exit_gain_pct",
+    "sharpe_impact": 0.92
+  },
+  {
+    "param": "breakout_prior_move_pct",
+    "sharpe_impact": 0.92
+  },
+  {
+    "param": "parabolic_min_days",
+    "sharpe_impact": 0.75
+  },
+  {
+    "param": "breakout_atr_contraction_ratio",
+    "sharpe_impact": 0.43000000000000005
+  },
+  {
+    "param": "parabolic_target_ma_short",
+    "sharpe_impact": 0.30999999999999994
+  },
+  {
+    "param": "ep_min_gap_pct",
+    "sharpe_impact": 0.24
+  },
+  {
+    "param": "partial_exit_after_days",
+    "sharpe_impact": 0.18
+  }
+]

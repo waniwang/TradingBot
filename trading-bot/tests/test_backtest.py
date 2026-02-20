@@ -249,3 +249,252 @@ class TestBacktestPosition:
         )
         assert runner._gain_pct(pos, 90.0) == pytest.approx(10.0)
         assert runner._gain_pct(pos, 110.0) == pytest.approx(-10.0)
+
+
+# ---------------------------------------------------------------------------
+# Bug fix tests
+# ---------------------------------------------------------------------------
+
+class TestPartialExitPnL:
+    """Bug 1: Partial exit P&L must be included in Trade.pnl."""
+
+    def test_long_partial_pnl_included(self):
+        runner = BacktestRunner(BacktestConfig(initial_capital=100_000))
+        # Manually open a long position
+        pos = BacktestPosition(
+            ticker="T", setup_type="breakout", side="long",
+            entry_date="2023-01-01", entry_price=50.0,
+            stop_price=48.0, shares=100,
+        )
+        runner.positions.append(pos)
+        runner.cash -= 100 * 50  # buy 100 @ $50
+
+        # Partial exit at $60 (40% of 100 = 40 shares)
+        runner._do_partial_exit(pos, 60.0, "2023-01-05")
+        assert pos.partial_exit_done
+        assert pos.partial_exit_shares == 40
+        assert pos.partial_exit_price == 60.0
+
+        # Close remaining 60 shares at $55
+        runner._close_position(pos, 55.0, "2023-01-10", "trailing_ma_close")
+
+        trade = runner.trades[-1]
+        # Expected: partial = 40 * (60 - 50) = 400, remaining = 60 * (55 - 50) = 300
+        expected_pnl = 400.0 + 300.0
+        assert trade.pnl == pytest.approx(expected_pnl)
+
+    def test_short_partial_pnl_included(self):
+        runner = BacktestRunner(BacktestConfig(initial_capital=100_000))
+        pos = BacktestPosition(
+            ticker="T", setup_type="parabolic_short", side="short",
+            entry_date="2023-01-01", entry_price=100.0,
+            stop_price=110.0, shares=50,
+        )
+        runner.positions.append(pos)
+        runner.cash += 50 * 100  # short: receive proceeds
+
+        # Partial exit at $80 (40% of 50 = 20 shares)
+        runner._do_partial_exit(pos, 80.0, "2023-01-05")
+        assert pos.partial_exit_price == 80.0
+
+        # Close remaining 30 shares at $90
+        runner._close_position(pos, 90.0, "2023-01-10", "parabolic_target")
+
+        trade = runner.trades[-1]
+        # partial = 20 * (100 - 80) = 400, remaining = 30 * (100 - 90) = 300
+        expected_pnl = 400.0 + 300.0
+        assert trade.pnl == pytest.approx(expected_pnl)
+
+
+class TestPortfolioValueSizing:
+    """Bug 2: Position sizing should use portfolio_value, not cash."""
+
+    def test_sizing_uses_portfolio_value(self):
+        runner = BacktestRunner(BacktestConfig(
+            initial_capital=100_000,
+            risk_per_trade_pct=1.0,
+            max_position_pct=25.0,
+        ))
+        # Portfolio value is 100k, risk $1000 with $2 risk per share
+        shares = runner._size_position(50.0, 48.0)
+        assert shares == 500  # $1000 / $2
+
+        # Simulate having a position: cash drops but equity stays
+        runner.cash = 50_000
+        runner.portfolio_value = 100_000  # equity unchanged
+        shares2 = runner._size_position(50.0, 48.0)
+        # Should still size based on portfolio_value (100k), not cash (50k)
+        assert shares2 == 500
+
+
+class TestTickerShuffle:
+    """Bug 3: Tickers should be shuffled each day to avoid alphabetical bias."""
+
+    def test_ticker_order_varies_with_date(self):
+        """Two different dates should produce different ticker orders."""
+        from backtest.runner import BacktestConfig
+        import random
+
+        cfg = BacktestConfig(shuffle_seed=42)
+        tickers = [f"T{i:03d}" for i in range(20)]
+
+        # Simulate shuffle for date "2023-01-01"
+        rng1 = random.Random(cfg.shuffle_seed + hash("2023-01-01"))
+        order1 = tickers.copy()
+        rng1.shuffle(order1)
+
+        # Simulate shuffle for date "2023-01-02"
+        rng2 = random.Random(cfg.shuffle_seed + hash("2023-01-02"))
+        order2 = tickers.copy()
+        rng2.shuffle(order2)
+
+        assert order1 != order2  # different days -> different order
+
+    def test_shuffle_reproducible_with_same_seed(self):
+        """Same seed + same date should produce identical order."""
+        import random
+
+        tickers = [f"T{i:03d}" for i in range(20)]
+        seed = 42
+
+        rng1 = random.Random(seed + hash("2023-06-15"))
+        order1 = tickers.copy()
+        rng1.shuffle(order1)
+
+        rng2 = random.Random(seed + hash("2023-06-15"))
+        order2 = tickers.copy()
+        rng2.shuffle(order2)
+
+        assert order1 == order2
+
+
+class TestShortCashAccounting:
+    """Bug 4: Short positions should add cash on open, deduct on close."""
+
+    def test_short_open_adds_cash(self):
+        runner = BacktestRunner(BacktestConfig(
+            initial_capital=100_000,
+            slippage_bps=0,  # no slippage for precise test
+        ))
+        initial_cash = runner.cash
+
+        runner._open_position("T", "parabolic_short", "short",
+                              "2023-01-01", 100.0, 110.0, 50)
+
+        # Short sale of 50 @ $100 should ADD $5000
+        assert runner.cash == initial_cash + 5_000
+
+    def test_short_close_deducts_cash(self):
+        runner = BacktestRunner(BacktestConfig(
+            initial_capital=100_000,
+            slippage_bps=0,
+        ))
+        pos = BacktestPosition(
+            ticker="T", setup_type="parabolic_short", side="short",
+            entry_date="2023-01-01", entry_price=100.0,
+            stop_price=110.0, shares=50,
+        )
+        runner.positions.append(pos)
+        runner.cash += 50 * 100  # simulate short open
+
+        cash_before_close = runner.cash
+        runner._close_position(pos, 90.0, "2023-01-05", "parabolic_target")
+
+        # Closing short: buy back 50 @ $90 = deduct $4500
+        assert runner.cash == cash_before_close - 50 * 90
+
+    def test_short_equity_correct(self):
+        """Equity should be correct for short positions."""
+        runner = BacktestRunner(BacktestConfig(
+            initial_capital=100_000,
+            slippage_bps=0,
+        ))
+        runner._open_position("T", "parabolic_short", "short",
+                              "2023-01-01", 100.0, 110.0, 50)
+
+        # Build minimal ticker_data
+        df = pd.DataFrame({
+            "close": [90.0],
+        }, index=["2023-01-02"])
+
+        equity = runner._compute_equity({"T": df}, "2023-01-02")
+        # cash = 100_000 + 5_000 = 105_000
+        # short liability = -50 * 90 = -4_500
+        # equity = 105_000 - 4_500 = 100_500
+        # (profit = 50 * (100 - 90) = 500)
+        assert equity == pytest.approx(100_500)
+
+
+class TestSlippage:
+    """Slippage should increase costs for all trades."""
+
+    def test_slippage_applied_to_entry(self):
+        runner = BacktestRunner(BacktestConfig(
+            initial_capital=100_000,
+            slippage_bps=10,  # 10 bps = 0.1%
+        ))
+        # Long entry: price should increase
+        price = runner._apply_slippage(100.0, "long", "entry")
+        assert price == pytest.approx(100.10)
+
+        # Short entry: price should decrease (sell cheaper)
+        price = runner._apply_slippage(100.0, "short", "entry")
+        assert price == pytest.approx(99.90)
+
+    def test_slippage_applied_to_exit(self):
+        runner = BacktestRunner(BacktestConfig(slippage_bps=10))
+        # Long exit (selling): price should decrease
+        price = runner._apply_slippage(100.0, "long", "exit")
+        assert price == pytest.approx(99.90)
+
+        # Short exit (buying back): price should increase
+        price = runner._apply_slippage(100.0, "short", "exit")
+        assert price == pytest.approx(100.10)
+
+
+class TestNewMetrics:
+    """Test new metrics: calmar, avg_days_held, max_consecutive_losses, trades/month."""
+
+    def test_calmar_ratio(self):
+        trades = [
+            Trade("A", "breakout", "long", "2023-01-01", "2023-06-30",
+                  50.0, 75.0, 100, 2500.0, "trailing_ma_close"),
+        ]
+        # Equity with a drawdown so max_dd > 0 (needed for calmar)
+        equity = [100_000, 102_000, 101_000, 103_000, 105_000] + [105_000 + i * 50 for i in range(248)]
+        result = compute_metrics(trades, equity)
+        assert "calmar" in result
+        assert result["calmar"] > 0
+
+    def test_avg_days_held(self):
+        trades = [
+            Trade("A", "breakout", "long", "2023-01-01", "2023-01-11",
+                  50.0, 60.0, 100, 1000.0, "trailing_ma_close"),
+            Trade("B", "breakout", "long", "2023-02-01", "2023-02-21",
+                  30.0, 40.0, 100, 1000.0, "trailing_ma_close"),
+        ]
+        equity = [100_000, 101_000, 102_000]
+        result = compute_metrics(trades, equity)
+        assert result["avg_days_held"] == pytest.approx(15.0)  # (10 + 20) / 2
+
+    def test_max_consecutive_losses(self):
+        trades = [
+            Trade("A", "b", "long", "2023-01-01", "2023-01-02", 50, 55, 10, 50, "x"),
+            Trade("B", "b", "long", "2023-01-03", "2023-01-04", 50, 48, 10, -20, "x"),
+            Trade("C", "b", "long", "2023-01-05", "2023-01-06", 50, 47, 10, -30, "x"),
+            Trade("D", "b", "long", "2023-01-07", "2023-01-08", 50, 46, 10, -40, "x"),
+            Trade("E", "b", "long", "2023-01-09", "2023-01-10", 50, 60, 10, 100, "x"),
+        ]
+        equity = [100_000] * 6
+        result = compute_metrics(trades, equity)
+        assert result["max_consecutive_losses"] == 3
+
+    def test_avg_trades_per_month(self):
+        trades = [
+            Trade("A", "b", "long", f"2023-01-{i+1:02d}", f"2023-01-{i+2:02d}", 50, 55, 10, 50, "x")
+            for i in range(12)
+        ]
+        # ~252 trading days = ~12 months
+        equity = [100_000 + i * 10 for i in range(253)]
+        result = compute_metrics(trades, equity)
+        assert result["avg_trades_per_month"] > 0

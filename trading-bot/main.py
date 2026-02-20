@@ -195,42 +195,48 @@ def job_premarket_scan(config: dict, client: AlpacaClient, notify=None, force: b
         notify("PRE-MARKET SCAN STARTED")
 
     errors = []
+    enabled = config.get("strategies", {}).get("enabled", ["episodic_pivot", "breakout", "parabolic_short"])
 
     # EP gappers
-    try:
-        ep_candidates = get_premarket_gappers(config, client)
-        logger.info("EP candidates: %d", len(ep_candidates))
-    except Exception as e:
-        logger.error("EP gapper scan failed: %s", e)
-        ep_candidates = []
-        errors.append(f"EP gapper scan failed: {e}")
+    ep_candidates = []
+    if "episodic_pivot" in enabled:
+        try:
+            ep_candidates = get_premarket_gappers(config, client)
+            logger.info("EP candidates: %d", len(ep_candidates))
+        except Exception as e:
+            logger.error("EP gapper scan failed: %s", e)
+            errors.append(f"EP gapper scan failed: {e}")
 
     # Momentum rank top names for breakout
-    try:
-        tickers_universe = client.get_tradable_universe(max_tickers=1500)
-        top_momentum = rank_by_momentum(tickers_universe, config, client, top_n=50)
-    except Exception as e:
-        logger.error("Momentum rank failed: %s", e)
-        top_momentum = []
-        errors.append(f"Momentum rank failed: {e}")
+    breakout_candidates = []
+    if "breakout" in enabled:
+        try:
+            tickers_universe = client.get_tradable_universe(max_tickers=1500)
+            top_momentum = rank_by_momentum(tickers_universe, config, client, top_n=50)
+        except Exception as e:
+            logger.error("Momentum rank failed: %s", e)
+            top_momentum = []
+            errors.append(f"Momentum rank failed: {e}")
 
-    # Breakout consolidation filter on top momentum names
-    try:
-        momentum_tickers = [t["ticker"] for t in top_momentum[:50]]
-        breakout_candidates = scan_breakout_candidates(momentum_tickers, config, client)
-    except Exception as e:
-        logger.error("Breakout scan failed: %s", e)
-        breakout_candidates = []
-        errors.append(f"Breakout scan failed: {e}")
+        # Breakout consolidation filter on top momentum names
+        try:
+            momentum_tickers = [t["ticker"] for t in top_momentum[:50]]
+            breakout_candidates = scan_breakout_candidates(momentum_tickers, config, client)
+        except Exception as e:
+            logger.error("Breakout scan failed: %s", e)
+            errors.append(f"Breakout scan failed: {e}")
 
     # Parabolic short candidates
-    try:
-        parabolic_candidates = scan_parabolic_candidates(config, client)
-        logger.info("Parabolic candidates: %d", len(parabolic_candidates))
-    except Exception as e:
-        logger.error("Parabolic scan failed: %s", e)
-        parabolic_candidates = []
-        errors.append(f"Parabolic scan failed: {e}")
+    parabolic_candidates = []
+    if "parabolic_short" in enabled:
+        try:
+            parabolic_candidates = scan_parabolic_candidates(config, client)
+            logger.info("Parabolic candidates: %d", len(parabolic_candidates))
+        except Exception as e:
+            logger.error("Parabolic scan failed: %s", e)
+            errors.append(f"Parabolic scan failed: {e}")
+    else:
+        logger.info("Parabolic short disabled in config")
 
     # Merge watchlist (EP first, then breakout, then parabolic)
     watchlist = ep_candidates + breakout_candidates + parabolic_candidates
@@ -438,8 +444,14 @@ def _evaluate_and_enter(
             notify(f"Trading halted: {block_reason}")
         return
 
-    # Evaluate signal via strategy registry
+    # Check if strategy is enabled
     setup = watchlist_entry["setup_type"]
+    enabled = config.get("strategies", {}).get("enabled", ["episodic_pivot", "breakout", "parabolic_short"])
+    if setup not in enabled:
+        logger.debug("Skipping %s for %s — strategy disabled", setup, ticker)
+        return
+
+    # Evaluate signal via strategy registry
     sig = evaluate_signal(
         setup,
         ticker,

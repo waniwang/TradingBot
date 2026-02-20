@@ -50,6 +50,10 @@ def print_metrics(metrics: dict, label: str = ""):
     print(f"  Max drawdown:       {metrics['max_drawdown_pct']:.1f}%")
     print(f"  Total return:       {metrics['total_return_pct']:.1f}%")
     print(f"  CAGR:               {metrics['cagr']:.1f}%")
+    print(f"  Calmar ratio:       {metrics.get('calmar', 0):.2f}")
+    print(f"  Avg days held:      {metrics.get('avg_days_held', 0):.1f}")
+    print(f"  Max consec losses:  {metrics.get('max_consecutive_losses', 0)}")
+    print(f"  Trades/month:       {metrics.get('avg_trades_per_month', 0):.1f}")
     print()
 
 
