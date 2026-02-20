@@ -188,6 +188,28 @@ def analyze_consolidation(
     return result
 
 
+def classify_consolidation_stage(result: dict[str, Any]) -> str:
+    """
+    Classify a consolidation analysis result into a watchlist stage.
+
+    Takes the output dict from analyze_consolidation() and returns:
+      - "ready"    if qualifies=True (all criteria met)
+      - "watching"  if has_prior_move and some tightening (ATR contracting or ratio < 1.0)
+      - "failed"   otherwise (pattern broke down or never formed)
+    """
+    if result.get("qualifies"):
+        return "ready"
+
+    has_prior_move = result.get("has_prior_move", False)
+    atr_contracting = result.get("atr_contracting", False)
+    atr_ratio = result.get("atr_ratio", 1.0)
+
+    if has_prior_move and (atr_contracting or atr_ratio < 1.0):
+        return "watching"
+
+    return "failed"
+
+
 def scan_breakout_candidates(
     tickers: list[str],
     config: dict,

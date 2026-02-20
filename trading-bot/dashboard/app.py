@@ -28,7 +28,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 import yaml
-from db.models import init_db, get_session, Position, Signal, Order, DailyPnl
+from db.models import init_db, get_session, Position, Signal, Order, DailyPnl, BreakoutWatchlist
 
 ET = ZoneInfo("America/New_York")
 STATUS_FILE = ROOT / "bot_status.json"
@@ -193,6 +193,7 @@ PHASE_LABELS = {
 }
 
 JOB_LABELS = {
+    "nightly_watchlist_scan": "Nightly watchlist scan",
     "premarket_scan":    "Pre-market scan",
     "subscribe_watchlist": "Subscribe watchlist",
     "intraday_monitor":  "Intraday monitor start",
@@ -394,6 +395,62 @@ def main():
                 "Consol Days": w.get("consolidation_days") or "—",
             } for w in watchlist])
             st.dataframe(wdf, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # -----------------------------------------------------------------------
+    # Breakout Pipeline
+    # -----------------------------------------------------------------------
+    st.subheader("Breakout Pipeline")
+    pipeline_counts = status.get("breakout_pipeline", {})
+    bp_ready = pipeline_counts.get("ready", 0)
+    bp_watching = pipeline_counts.get("watching", 0)
+
+    bp1, bp2 = st.columns(2)
+    bp1.metric("Ready", bp_ready)
+    bp2.metric("Watching", bp_watching)
+
+    with get_session(engine) as session:
+        pipeline_rows = (
+            session.query(BreakoutWatchlist)
+            .filter(BreakoutWatchlist.stage.in_(["ready", "watching"]))
+            .order_by(BreakoutWatchlist.stage.desc(), BreakoutWatchlist.rs_composite.desc())
+            .all()
+        )
+
+    if not pipeline_rows:
+        st.info("No breakout pipeline entries. Nightly scan runs at 5:00 PM ET.")
+    else:
+        STAGE_COLORS = {"ready": "#00c853", "watching": "#ffd600"}
+        pipe_df = pd.DataFrame([{
+            "Ticker": r.ticker,
+            "Stage": r.stage.upper(),
+            "Consol Days": r.consolidation_days,
+            "ATR Ratio": r.atr_ratio,
+            "Higher Lows": "Y" if r.higher_lows else "N",
+            "10d MA": "Y" if r.near_10d_ma else "N",
+            "20d MA": "Y" if r.near_20d_ma else "N",
+            "Vol Dry": "Y" if r.volume_drying else "N",
+            "RS Score": f"{r.rs_composite:.1f}" if r.rs_composite else "—",
+            "Days on List": r.days_on_list,
+            "Last Update": r.updated_at.strftime("%m/%d %H:%M") if r.updated_at else "—",
+            "_stage": r.stage,
+        } for r in pipeline_rows])
+
+        def _style_stage(val):
+            if val == "READY":
+                return f"color: {STAGE_COLORS['ready']}; font-weight: bold"
+            if val == "WATCHING":
+                return f"color: {STAGE_COLORS['watching']}; font-weight: bold"
+            return ""
+
+        st.dataframe(
+            pipe_df.drop(columns=["_stage"]).style
+                .map(_style_stage, subset=["Stage"])
+                .format({"ATR Ratio": "{:.3f}"}),
+            use_container_width=True,
+            hide_index=True,
+        )
 
     st.divider()
 

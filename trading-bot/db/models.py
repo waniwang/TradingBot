@@ -164,6 +164,36 @@ class Position(Base):
             return (self.entry_price - current_price) / self.entry_price * 100
 
 
+class BreakoutWatchlist(Base):
+    """Persistent breakout watchlist with lifecycle stages."""
+
+    __tablename__ = "breakout_watchlist"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    stage: Mapped[str] = mapped_column(
+        Enum("watching", "ready", "failed", "triggered", name="watchlist_stage_enum"),
+        default="watching",
+    )
+    consolidation_days: Mapped[int] = mapped_column(Integer, default=0)
+    atr_ratio: Mapped[float] = mapped_column(Float, default=1.0)
+    higher_lows: Mapped[bool] = mapped_column(Boolean, default=False)
+    near_10d_ma: Mapped[bool] = mapped_column(Boolean, default=False)
+    near_20d_ma: Mapped[bool] = mapped_column(Boolean, default=False)
+    volume_drying: Mapped[bool] = mapped_column(Boolean, default=False)
+    rs_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    stage_changed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    notes: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    @property
+    def days_on_list(self) -> int:
+        return (datetime.utcnow().date() - self.added_at.date()).days
+
+
 class DailyPnl(Base):
     """End-of-day P&L summary."""
 

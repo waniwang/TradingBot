@@ -16,6 +16,7 @@ import math
 import os
 import signal
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timedelta
@@ -34,6 +35,12 @@ from scanner.gapper import get_premarket_gappers
 from scanner.momentum_rank import rank_by_momentum
 from scanner.consolidation import scan_breakout_candidates
 from scanner.parabolic import scan_parabolic_candidates
+from scanner.watchlist_manager import (
+    run_nightly_scan,
+    get_ready_candidates,
+    mark_triggered,
+    get_pipeline_counts,
+)
 from signals import evaluate_signal
 from signals.base import compute_sma
 
@@ -72,6 +79,7 @@ def load_config(path: str = "config.yaml") -> dict:
 # ---------------------------------------------------------------------------
 
 _watchlist: list[dict] = []          # [{ticker, setup_type, gap_pct, ...}]
+_db_engine = None                    # set in main(), used by _write_status
 _daily_bars_cache: dict[str, list[dict]] = {}
 _daily_closes_cache: dict[str, list[float]] = {}
 _daily_volumes_cache: dict[str, list[int]] = {}
@@ -183,8 +191,8 @@ def _format_watchlist_notification(watchlist: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def job_premarket_scan(config: dict, client: AlpacaClient, notify=None, force: bool = False):
-    """6:00 AM ET — scan for EP gappers + breakout momentum candidates."""
+def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=None, force: bool = False):
+    """6:00 AM ET — scan for EP gappers + read breakout candidates from DB."""
     global _watchlist
     if not force and not is_trading_day(client):
         logger.info("Pre-market scan skipped — not a trading day")
@@ -207,24 +215,15 @@ def job_premarket_scan(config: dict, client: AlpacaClient, notify=None, force: b
             logger.error("EP gapper scan failed: %s", e)
             errors.append(f"EP gapper scan failed: {e}")
 
-    # Momentum rank top names for breakout
+    # Breakout candidates from persistent watchlist DB (populated by nightly scan)
     breakout_candidates = []
     if "breakout" in enabled:
         try:
-            tickers_universe = client.get_tradable_universe(max_tickers=1500)
-            top_momentum = rank_by_momentum(tickers_universe, config, client, top_n=50)
+            breakout_candidates = get_ready_candidates(db_engine)
+            logger.info("Breakout candidates from DB: %d ready", len(breakout_candidates))
         except Exception as e:
-            logger.error("Momentum rank failed: %s", e)
-            top_momentum = []
-            errors.append(f"Momentum rank failed: {e}")
-
-        # Breakout consolidation filter on top momentum names
-        try:
-            momentum_tickers = [t["ticker"] for t in top_momentum[:50]]
-            breakout_candidates = scan_breakout_candidates(momentum_tickers, config, client)
-        except Exception as e:
-            logger.error("Breakout scan failed: %s", e)
-            errors.append(f"Breakout scan failed: {e}")
+            logger.error("Breakout DB read failed: %s", e)
+            errors.append(f"Breakout DB read failed: {e}")
 
     # Parabolic short candidates
     parabolic_candidates = []
@@ -683,6 +682,13 @@ def _execute_entry(ticker, signal, shares, client, db_engine, notify):
         session.commit()
         order_db_id = db_order.id
 
+    # Mark breakout watchlist entry as triggered
+    if signal.setup_type == "breakout" and _db_engine is not None:
+        try:
+            mark_triggered(ticker, _db_engine)
+        except Exception as e:
+            logger.warning("Failed to mark %s as triggered in watchlist: %s", ticker, e)
+
     notify(
         f"ENTRY ORDER PLACED: {ticker} ({signal.setup_type})\n"
         f"Side: {signal.side.upper()} {shares} shares @ ${signal.entry_price:.2f}\n"
@@ -758,6 +764,39 @@ def job_eod_tasks(
     _set_phase("idle")
 
 
+def job_nightly_watchlist_scan(config: dict, client: AlpacaClient, db_engine, notify):
+    """5:00 PM ET — run heavy breakout watchlist scan and persist to DB."""
+    if not is_trading_day(client):
+        logger.info("Nightly watchlist scan skipped — not a trading day")
+        return
+    logger.info("=== NIGHTLY WATCHLIST SCAN START ===")
+    if notify:
+        notify("NIGHTLY WATCHLIST SCAN STARTED")
+
+    try:
+        summary = run_nightly_scan(config, client, db_engine)
+    except Exception as e:
+        logger.error("Nightly watchlist scan failed: %s", e)
+        if notify:
+            notify(f"NIGHTLY WATCHLIST SCAN FAILED: {e}")
+        return
+
+    if "error" in summary:
+        if notify:
+            notify(f"NIGHTLY WATCHLIST SCAN ERROR: {summary['error']}")
+        return
+
+    msg = (
+        f"NIGHTLY WATCHLIST SCAN DONE\n"
+        f"Ready: {summary.get('ready', 0)} | Watching: {summary.get('watching', 0)}\n"
+        f"New: {summary.get('new', 0)} | Updated: {summary.get('updated', 0)}\n"
+        f"Failed: {summary.get('failed', 0)} | Aged out: {summary.get('aged_out', 0)}"
+    )
+    logger.info(msg)
+    if notify:
+        notify(msg)
+
+
 # ---------------------------------------------------------------------------
 # P&L helpers
 # ---------------------------------------------------------------------------
@@ -821,24 +860,37 @@ def _set_phase(phase: str):
 
 
 TRIGGER_FILE = Path("trigger_scan")
+TRIGGER_NIGHTLY_FILE = Path("trigger_nightly_scan")
 
 # State needed by _check_trigger — set in main() after objects are created
 _trigger_args: dict = {}
 
 
 def _check_trigger():
-    """Check for trigger_scan file and run the premarket scan if found."""
-    if not TRIGGER_FILE.exists():
-        return
-    TRIGGER_FILE.unlink(missing_ok=True)
-    logger.info("Manual scan trigger detected — running premarket scan now")
+    """Check for trigger files and run scans if found."""
     args = _trigger_args
-    if args:
+    if not args:
+        return
+
+    if TRIGGER_FILE.exists():
+        TRIGGER_FILE.unlink(missing_ok=True)
+        logger.info("Manual scan trigger detected — running premarket scan now")
         import threading
         t = threading.Thread(
             target=job_premarket_scan,
-            args=[args["config"], args["client"], args["notify"]],
+            args=[args["config"], args["client"], args["db_engine"], args["notify"]],
             kwargs={"force": True},
+            daemon=True,
+        )
+        t.start()
+
+    if TRIGGER_NIGHTLY_FILE.exists():
+        TRIGGER_NIGHTLY_FILE.unlink(missing_ok=True)
+        logger.info("Manual nightly scan trigger detected — running nightly watchlist scan now")
+        import threading
+        t = threading.Thread(
+            target=job_nightly_watchlist_scan,
+            args=[args["config"], args["client"], args["db_engine"], args["notify"]],
             daemon=True,
         )
         t.start()
@@ -862,6 +914,14 @@ def _write_status():
             next_job_name = upcoming[0].id
             next_job_time = upcoming[0].next_run_time.isoformat()
 
+    # Include breakout pipeline counts if DB engine is available
+    pipeline = {}
+    if _db_engine is not None:
+        try:
+            pipeline = get_pipeline_counts(_db_engine)
+        except Exception:
+            pass
+
     status = {
         "running": True,
         "phase": _current_phase,
@@ -870,12 +930,19 @@ def _write_status():
         "next_job": next_job_name,
         "next_job_time": next_job_time,
         "watchlist": _watchlist,
+        "breakout_pipeline": pipeline,
     }
     try:
-        with open("bot_status.json", "w") as f:
+        fd, tmp_path = tempfile.mkstemp(dir=".", suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
             json.dump(status, f)
+        os.replace(tmp_path, "bot_status.json")
     except Exception as e:
         logger.warning("Failed to write bot_status.json: %s", e)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -971,9 +1038,30 @@ def main():
     # Position tracker
     tracker = PositionTracker(config, db_engine, client, notify)
 
+    # Restore watchlist from bot_status.json if it was written today
+    global _watchlist
+    try:
+        with open("bot_status.json") as f:
+            saved = json.load(f)
+        saved_wl = saved.get("watchlist", [])
+        hb = saved.get("last_heartbeat")
+        if saved_wl and hb:
+            hb_date = datetime.fromisoformat(hb).date()
+            if hb_date == datetime.now(ET).date():
+                _watchlist = saved_wl
+                _set_phase(saved.get("phase", "watchlist_ready"))
+                logger.info("Restored watchlist from bot_status.json: %d candidates",
+                            len(_watchlist))
+    except Exception as e:
+        logger.warning("Could not restore watchlist: %s", e)
+
+    # Set module-level DB engine for _write_status and mark_triggered
+    global _db_engine
+    _db_engine = db_engine
+
     # Set trigger args so _check_trigger can run manual scans
     global _trigger_args
-    _trigger_args = {"config": config, "client": client, "notify": notify}
+    _trigger_args = {"config": config, "client": client, "db_engine": db_engine, "notify": notify}
 
     # Scheduler
     global _scheduler_ref
@@ -981,9 +1069,16 @@ def main():
     _scheduler_ref = scheduler
 
     scheduler.add_job(
+        job_nightly_watchlist_scan,
+        CronTrigger(hour=17, minute=0, timezone=ET),
+        args=[config, client, db_engine, notify],
+        id="nightly_watchlist_scan",
+        replace_existing=True,
+    )
+    scheduler.add_job(
         job_premarket_scan,
         CronTrigger(hour=6, minute=0, timezone=ET),
-        args=[config, client, notify],
+        args=[config, client, db_engine, notify],
         id="premarket_scan",
         replace_existing=True,
     )
