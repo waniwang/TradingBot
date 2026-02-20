@@ -117,6 +117,7 @@ class Position(Base):
     initial_stop_price: Mapped[float] = mapped_column(Float, nullable=False)
 
     partial_exit_done: Mapped[bool] = mapped_column(Boolean, default=False)
+    partial_exit_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     partial_exit_shares: Mapped[int] = mapped_column(Integer, default=0)
     partial_exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
 

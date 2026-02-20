@@ -93,12 +93,16 @@ class PositionTracker:
             self._close_position(session, pos, current_price, reason="stop_hit")
             return
 
-        # 2. Parabolic short: check profit targets at 10d/20d MA
+        # 2. Check pending partial exit fill before any logic that could re-trigger
+        if self._check_pending_partial_exit(session, pos):
+            return  # pending order exists — wait for it
+
+        # 3. Parabolic short: check profit targets at 10d/20d MA
         if pos.setup_type == "parabolic_short" and pos.side == "short":
             if self._check_parabolic_target(session, pos, current_price, daily_closes):
                 return
 
-        # 3. Check partial exit conditions
+        # 4. Check partial exit conditions
         if not pos.partial_exit_done:
             days_held = pos.days_held
             gain_pct = pos.gain_pct(current_price)
@@ -154,25 +158,80 @@ class PositionTracker:
 
     def _do_partial_exit(self, session, pos: Position, current_price: float):
         shares_to_sell = max(1, int(pos.shares * self.partial_exit_fraction))
-        remaining = pos.shares - shares_to_sell
 
         logger.info(
-            "Partial exit %s: selling %d/%d shares @ %.2f",
+            "Partial exit %s: placing limit order for %d/%d shares @ %.2f",
             pos.ticker, shares_to_sell, pos.shares, current_price,
         )
 
         try:
             order_side = "sell" if pos.side == "long" else "buy_to_cover"
-            self.client.place_limit_order(
+            order_id = self.client.place_limit_order(
                 pos.ticker, order_side, shares_to_sell, current_price
             )
         except Exception as e:
             logger.error("Partial exit order failed for %s: %s", pos.ticker, e)
             return
 
-        pos.partial_exit_done = True
+        # Track the pending order — don't mark done or resize stop until confirmed
+        pos.partial_exit_order_id = order_id
         pos.partial_exit_shares = shares_to_sell
         pos.partial_exit_price = current_price
+        session.commit()
+
+        self.notify(
+            f"PARTIAL EXIT ORDER PLACED: {pos.ticker}\n"
+            f"Selling {shares_to_sell}/{pos.shares} shares @ ${current_price:.2f}\n"
+            f"Awaiting fill confirmation before resizing stop."
+        )
+
+    def _check_pending_partial_exit(self, session, pos: Position) -> bool:
+        """
+        Poll a pending partial exit order. If filled, finalize the partial exit
+        and resize the stop. Returns True if a pending order was found (filled or not).
+        """
+        if not pos.partial_exit_order_id or pos.partial_exit_done:
+            return False
+
+        try:
+            status_info = self.client.get_order_status(pos.partial_exit_order_id)
+        except Exception as e:
+            logger.warning("Failed to poll partial exit order for %s: %s", pos.ticker, e)
+            return True  # still pending, don't re-trigger
+
+        status = status_info.get("status", "")
+        filled_qty = status_info.get("filled_qty", 0)
+
+        if status == "filled":
+            self._finalize_partial_exit(session, pos, filled_qty)
+            return True
+
+        if status in ("cancelled", "expired", "rejected", "done_for_day"):
+            logger.warning(
+                "Partial exit order for %s ended with status %s (filled %d) — clearing",
+                pos.ticker, status, filled_qty,
+            )
+            if filled_qty > 0:
+                # Partially filled before cancellation — finalize what we got
+                self._finalize_partial_exit(session, pos, filled_qty)
+            else:
+                # Order failed entirely — clear pending state so it can retry
+                pos.partial_exit_order_id = None
+                pos.partial_exit_shares = 0
+                pos.partial_exit_price = None
+                session.commit()
+            return True
+
+        # Still pending (new, accepted, partially_filled) — wait
+        return True
+
+    def _finalize_partial_exit(self, session, pos: Position, filled_qty: int):
+        """Mark partial exit done and resize the stop order for remaining shares."""
+        remaining = pos.shares - filled_qty
+
+        pos.partial_exit_done = True
+        pos.partial_exit_shares = filled_qty
+        pos.partial_exit_order_id = None
 
         # Replace stop: cancel old (full qty), place new (reduced qty) at break-even
         old_stop = pos.stop_price
@@ -192,7 +251,7 @@ class PositionTracker:
                     pos.ticker, e,
                 )
                 self.notify(
-                    f"🚨 CRITICAL: Partial exit stop replacement FAILED for {pos.ticker}\n"
+                    f"CRITICAL: Partial exit stop replacement FAILED for {pos.ticker}\n"
                     f"Stop was NOT replaced at break-even (${pos.entry_price:.2f}).\n"
                     f"Old stop at ${old_stop:.2f} may be cancelled. Check manually."
                 )
@@ -203,7 +262,7 @@ class PositionTracker:
         session.commit()
 
         self.notify(
-            f"PARTIAL EXIT: {pos.ticker} sold {shares_to_sell} shares @ ${current_price:.2f}\n"
+            f"PARTIAL EXIT FILLED: {pos.ticker} sold {filled_qty} shares\n"
             f"Stop moved to break-even: ${pos.entry_price:.2f} (was ${old_stop:.2f})\n"
             f"Remaining: {remaining} shares"
         )

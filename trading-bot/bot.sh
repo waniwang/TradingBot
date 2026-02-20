@@ -33,6 +33,12 @@ fi
 # ---------------------------------------------------------------------------
 
 local_start() {
+  # Run DB migrations before starting
+  echo "==> Running DB migrations..."
+  cd "$BOT_DIR"
+  source .env 2>/dev/null || true
+  .venv/bin/alembic upgrade head 2>&1 | grep -v "^$"
+
   # Check if already running
   if [ -f "$BOT_PID" ] && kill -0 "$(cat "$BOT_PID")" 2>/dev/null; then
     echo "Bot is already running (PID $(cat "$BOT_PID"))"
@@ -243,6 +249,9 @@ print('yes' if in_hours else 'no')
         --exclude='.env' \
         -e "ssh -o StrictHostKeyChecking=no" \
         ./ "$SERVER:$REMOTE_DIR/"
+
+      echo "==> Running DB migrations..."
+      $SSH "cd $REMOTE_DIR && .venv/bin/alembic upgrade head"
 
       echo "==> Restarting bot + dashboard..."
       $SSH "systemctl restart trading-bot trading-dashboard"

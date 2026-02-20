@@ -358,9 +358,6 @@ def process_ticker_update(
     Called for each ticker on every 1m candle update (via Alpaca stream callback).
     Checks signals for watchlist items and manages open positions.
     """
-    if tracker.is_halted:
-        return
-
     # Use pre-fetched data when available (from stream callback)
     if candles_1m is None or current_price is None:
         try:
@@ -387,8 +384,12 @@ def process_ticker_update(
     if current_volume is None:
         current_volume = 0
 
-    # Update open positions (stop checks, partial exits)
+    # Always manage open positions (stop checks, partial exits) even when halted
     tracker.on_candle_update(ticker, current_price, candles_1m, daily_closes)
+
+    # Skip new entries when halted
+    if tracker.is_halted:
+        return
 
     # Check if this ticker is on the watchlist (no open position yet)
     watchlist_entry = next((c for c in _watchlist if c["ticker"] == ticker), None)
@@ -529,6 +530,13 @@ def _wait_for_fill(client, broker_order_id: str, timeout_secs: int = 60) -> dict
     if last_info and last_info.get("filled_qty", 0) > 0:
         logger.info("Order %s timed out but has partial fill of %s shares — accepting",
                      broker_order_id, last_info["filled_qty"])
+        # Cancel the remaining unfilled quantity to prevent orphaned fills
+        try:
+            client.cancel_order(broker_order_id)
+            logger.info("Cancelled remainder of partially filled order %s", broker_order_id)
+        except Exception as e:
+            logger.warning("Failed to cancel remainder of order %s: %s — "
+                           "orphaned qty may fill later", broker_order_id, e)
         return last_info
 
     logger.info("Order %s did not fill within %ds", broker_order_id, timeout_secs)
@@ -570,12 +578,13 @@ def _await_fill_and_setup_stop(
     filled_qty = fill.get("filled_qty")
     if filled_qty is None:
         filled_qty = shares
+    is_partial = filled_qty < shares
 
     # Update order record
     with get_session(db_engine) as session:
         order = session.query(Order).filter_by(id=order_db_id).first()
         if order:
-            order.status = "filled"
+            order.status = "partial_fill" if is_partial else "filled"
             order.filled_qty = filled_qty
             order.filled_avg_price = actual_price
             session.commit()
@@ -740,6 +749,12 @@ def job_eod_tasks(
 
     # Reset daily halt for next day
     tracker.set_daily_halt(False)
+    # Reset weekly halt on Friday EOD (new week starts Monday)
+    from zoneinfo import ZoneInfo
+    et_now = datetime.now(ZoneInfo("America/New_York"))
+    if et_now.weekday() == 4:  # Friday
+        tracker.set_weekly_halt(False)
+        logger.info("Weekly halt reset (end of week)")
     _set_phase("idle")
 
 

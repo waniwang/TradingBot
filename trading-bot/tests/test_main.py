@@ -259,18 +259,36 @@ class TestPartialExitStopReplacement:
         return tracker, engine, client, pos_id
 
     def test_partial_exit_replaces_stop_order(self):
-        """After partial exit, old stop should be cancelled and new one placed with reduced qty."""
+        """After partial exit fill confirmation, old stop should be cancelled and new one placed."""
         from db.models import get_session, Position
 
         tracker, engine, client, pos_id = self._make_tracker_with_position()
 
-        # Trigger partial exit: price at 120 → 20% gain > 15% threshold
+        # Phase 1: Trigger partial exit — places limit order but does NOT resize stop yet
         tracker.on_candle_update("AAPL", 120.0, [], [])
 
-        # Verify cancel was called on old stop
-        client.cancel_order.assert_called_once_with("old-stop-789")
+        # Verify limit order was placed
+        client.place_limit_order.assert_called_once()
+        # Stop should NOT have been touched yet
+        client.cancel_order.assert_not_called()
+        client.place_stop_order.assert_not_called()
 
-        # Verify new stop placed with reduced qty (100 - 40 = 60 shares)
+        with get_session(engine) as session:
+            pos = session.query(Position).filter_by(id=pos_id).first()
+            assert pos.partial_exit_done is False
+            assert pos.partial_exit_order_id == "partial-order-123"
+
+        # Phase 2: Next candle — mock reports the partial exit order as filled
+        client.get_order_status.return_value = {
+            "order_id": "partial-order-123",
+            "status": "filled",
+            "filled_qty": 40,
+            "filled_avg_price": 120.0,
+        }
+        tracker.on_candle_update("AAPL", 120.0, [], [])
+
+        # Now stop should be replaced
+        client.cancel_order.assert_called_once_with("old-stop-789")
         client.place_stop_order.assert_called_once_with("AAPL", "sell", 60, 100.0)
 
         # Verify DB updated with new stop order ID
@@ -279,3 +297,4 @@ class TestPartialExitStopReplacement:
             assert pos.stop_order_id == "new-stop-456"
             assert pos.stop_price == 100.0  # break-even
             assert pos.partial_exit_done is True
+            assert pos.partial_exit_order_id is None
