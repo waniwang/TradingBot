@@ -1,7 +1,8 @@
-"""SQLAlchemy models: Signal, Order, Position, DailyPnl."""
+"""SQLAlchemy models: Signal, Order, Position, DailyPnl, Watchlist."""
 
 from __future__ import annotations
 
+import json as _json
 import os
 from datetime import datetime, date
 
@@ -15,6 +16,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Text,
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, Session
@@ -164,6 +166,63 @@ class Position(Base):
             return (self.entry_price - current_price) / self.entry_price * 100
 
 
+class Watchlist(Base):
+    """Unified watchlist for ALL setup types (breakout, EP, parabolic)."""
+
+    __tablename__ = "watchlist"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    setup_type: Mapped[str] = mapped_column(
+        Enum("breakout", "episodic_pivot", "parabolic_short", name="watchlist_setup_type_enum"),
+        nullable=False,
+    )
+    stage: Mapped[str] = mapped_column(
+        Enum("watching", "ready", "active", "triggered", "expired", "failed",
+             name="watchlist_unified_stage_enum"),
+        default="watching",
+    )
+    scan_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    stage_changed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    notes: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    @property
+    def meta(self) -> dict:
+        """Parse metadata_json into dict."""
+        if not self.metadata_json:
+            return {}
+        try:
+            return _json.loads(self.metadata_json)
+        except (ValueError, TypeError):
+            return {}
+
+    @meta.setter
+    def meta(self, value: dict):
+        self.metadata_json = _json.dumps(value) if value else None
+
+    def to_dict(self) -> dict:
+        """Return dict compatible with the in-memory _watchlist format."""
+        d = {
+            "ticker": self.ticker,
+            "setup_type": self.setup_type,
+            "stage": self.stage,
+            "scan_date": str(self.scan_date),
+            "watchlist_id": self.id,
+        }
+        d.update(self.meta)
+        return d
+
+    @property
+    def days_on_list(self) -> int:
+        return (datetime.utcnow().date() - self.added_at.date()).days
+
+
+# DEPRECATED — kept temporarily for migration; use Watchlist instead.
 class BreakoutWatchlist(Base):
     """Persistent breakout watchlist with lifecycle stages."""
 

@@ -28,7 +28,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 import yaml
-from db.models import init_db, get_session, Position, Signal, Order, DailyPnl, BreakoutWatchlist
+from db.models import init_db, get_session, Position, Signal, Order, DailyPnl, Watchlist
 
 ET = ZoneInfo("America/New_York")
 STATUS_FILE = ROOT / "bot_status.json"
@@ -240,6 +240,20 @@ def pnl_color(val: float) -> str:
     return "⚪"
 
 
+def _quality_from_meta(meta: dict) -> str:
+    """Summarize breakout quality flags from metadata dict."""
+    flags = []
+    if meta.get("higher_lows"):
+        flags.append("Higher Lows")
+    if meta.get("volume_drying"):
+        flags.append("Vol Dry")
+    if meta.get("near_10d_ma"):
+        flags.append("Near 10d MA")
+    if meta.get("near_20d_ma"):
+        flags.append("Near 20d MA")
+    return ", ".join(flags) if flags else "—"
+
+
 # ---------------------------------------------------------------------------
 # Main app
 # ---------------------------------------------------------------------------
@@ -322,132 +336,154 @@ def main():
     st.divider()
 
     # -----------------------------------------------------------------------
-    # Open positions + Watchlist (side by side)
+    # Open Positions
     # -----------------------------------------------------------------------
-    left, right = st.columns([3, 2])
+    st.subheader("Open Positions")
+    if not open_positions:
+        st.info("No open positions.")
+    else:
+        rows = []
+        for p in open_positions:
+            live = get_live_price(p.ticker)
+            price = live if (live is not None and live > 0) else p.entry_price
+            unreal = p.unrealized_pnl(price)
+            gain = p.gain_pct(price)
+            remaining = p.shares - p.partial_exit_shares
+            rows.append({
+                "Ticker": p.ticker,
+                "Setup": p.setup_type.replace("_", " ").title(),
+                "Side": p.side.upper(),
+                "Shares": remaining,
+                "Entry": p.entry_price,
+                "Stop": p.stop_price,
+                "Current": price,
+                "Gain %": f"{gain:+.2f}%",
+                "Unreal P&L": unreal,
+                "Days": p.days_held,
+                "Partial": "✓" if p.partial_exit_done else "",
+            })
 
-    with left:
-        st.subheader("Open Positions")
-        if not open_positions:
-            st.info("No open positions.")
-        else:
-            rows = []
-            for p in open_positions:
-                live = get_live_price(p.ticker)
-                price = live if (live is not None and live > 0) else p.entry_price
-                unreal = p.unrealized_pnl(price)
-                gain = p.gain_pct(price)
-                remaining = p.shares - p.partial_exit_shares
-                rows.append({
-                    "_id": p.id,
-                    "Ticker": p.ticker,
-                    "Setup": p.setup_type.replace("_", " ").title(),
-                    "Side": p.side.upper(),
-                    "Shares": remaining,
-                    "Entry": p.entry_price,
-                    "Stop": p.stop_price,
-                    "Current": price,
-                    "Gain %": f"{gain:+.2f}%",
-                    "Unreal P&L": unreal,
-                    "Days": p.days_held,
-                    "Partial": "✓" if p.partial_exit_done else "",
-                })
+        df = pd.DataFrame(rows)
+        st.dataframe(
+            df.style.format({
+                "Entry": "${:.2f}",
+                "Stop": "${:.2f}",
+                "Current": "${:.2f}",
+                "Unreal P&L": "${:+.2f}",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
 
-            df = pd.DataFrame(rows).drop(columns=["_id"])
-            st.dataframe(
-                df.style.format({
-                    "Entry": "${:.2f}",
-                    "Stop": "${:.2f}",
-                    "Current": "${:.2f}",
-                    "Unreal P&L": "${:+.2f}",
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            st.caption("Manual close:")
-            btn_cols = st.columns(min(len(open_positions), 4))
-            for i, p in enumerate(open_positions):
-                with btn_cols[i % 4]:
-                    if st.button(f"Flatten {p.ticker}", key=f"flat_{p.id}"):
-                        try:
-                            remaining = p.shares - p.partial_exit_shares
-                            get_alpaca().close_position(p.ticker, remaining, p.side)
-                            st.success(f"Market close order sent for {p.ticker}")
-                        except Exception as e:
-                            st.error(str(e))
-
-    with right:
-        st.subheader("Watchlist")
-        watchlist = status.get("watchlist", [])
-        if not watchlist:
-            st.info("No watchlist yet — runs at 6:00 AM ET.")
-        else:
-            st.metric("Candidates", len(watchlist))
-            wdf = pd.DataFrame([{
-                "Ticker": w["ticker"],
-                "Setup": w.get("setup_type", "").replace("_", " ").title(),
-                "Gap %": f"{w['gap_pct']:.1f}%" if w.get("gap_pct") else "—",
-                "Pre-Mkt": f"${w['premarket_price']:.2f}" if w.get("premarket_price") else "—",
-                "Prev Close": f"${w['prev_close']:.2f}" if w.get("prev_close") else "—",
-                "Volume": f"{w['premarket_volume']:,.0f}" if w.get("premarket_volume") else "—",
-                "ATR Ratio": f"{w['atr_ratio']:.3f}" if w.get("atr_ratio") else "—",
-                "Consol Days": w.get("consolidation_days") or "—",
-            } for w in watchlist])
-            st.dataframe(wdf, use_container_width=True, hide_index=True)
+        st.caption("Manual close:")
+        btn_cols = st.columns(min(len(open_positions), 4))
+        for i, p in enumerate(open_positions):
+            with btn_cols[i % 4]:
+                if st.button(f"Flatten {p.ticker}", key=f"flat_{p.id}"):
+                    try:
+                        remaining = p.shares - p.partial_exit_shares
+                        get_alpaca().close_position(p.ticker, remaining, p.side)
+                        st.success(f"Market close order sent for {p.ticker}")
+                    except Exception as e:
+                        st.error(str(e))
 
     st.divider()
 
     # -----------------------------------------------------------------------
-    # Breakout Pipeline
+    # Watchlist (unified — reads from DB)
     # -----------------------------------------------------------------------
-    st.subheader("Breakout Pipeline")
-    pipeline_counts = status.get("breakout_pipeline", {})
-    bp_ready = pipeline_counts.get("ready", 0)
-    bp_watching = pipeline_counts.get("watching", 0)
-
-    bp1, bp2 = st.columns(2)
-    bp1.metric("Ready", bp_ready)
-    bp2.metric("Watching", bp_watching)
+    st.subheader("Watchlist")
 
     with get_session(engine) as session:
-        pipeline_rows = (
-            session.query(BreakoutWatchlist)
-            .filter(BreakoutWatchlist.stage.in_(["ready", "watching"]))
-            .order_by(BreakoutWatchlist.stage.desc(), BreakoutWatchlist.rs_composite.desc())
+        active_rows = (
+            session.query(Watchlist)
+            .filter_by(stage="active")
+            .all()
+        )
+        watching_rows = (
+            session.query(Watchlist)
+            .filter_by(stage="watching")
             .all()
         )
 
-    if not pipeline_rows:
-        st.info("No breakout pipeline entries. Nightly scan runs at 5:00 PM ET.")
+    display_rows = []
+
+    # Active candidates (today's tradeable items)
+    for row in active_rows:
+        meta = row.meta
+        setup = row.setup_type.replace("_", " ").title()
+        r = {
+            "Ticker": row.ticker,
+            "Setup": setup,
+            "Stage": "ACTIVE",
+            "_sort": 0,
+        }
+        if row.setup_type == "episodic_pivot":
+            gap = meta.get("gap_pct")
+            r["Gap %"] = f"{gap:.1f}%" if gap else "—"
+            r["Pre-Mkt Vol"] = f"{meta['pre_mkt_rvol']:.1f}x" if meta.get("pre_mkt_rvol") else "—"
+            r["Consol Days"] = "—"
+            r["ATR Ratio"] = "—"
+            r["RS Score"] = "—"
+            r["Quality"] = "—"
+        elif row.setup_type == "breakout":
+            r["Gap %"] = "—"
+            r["Pre-Mkt Vol"] = "—"
+            r["Consol Days"] = meta.get("consolidation_days", "—")
+            atr = meta.get("atr_ratio")
+            r["ATR Ratio"] = f"{atr:.3f}" if atr else "—"
+            rs = meta.get("rs_composite")
+            r["RS Score"] = f"{rs:.1f}" if rs else "—"
+            r["Quality"] = _quality_from_meta(meta)
+        else:  # parabolic_short
+            r["Gap %"] = "—"
+            r["Pre-Mkt Vol"] = "—"
+            r["Consol Days"] = "—"
+            r["ATR Ratio"] = "—"
+            r["RS Score"] = "—"
+            r["Quality"] = "—"
+        display_rows.append(r)
+
+    # Watching candidates (breakout pipeline, not yet ready)
+    active_tickers = {row.ticker for row in active_rows}
+    for row in watching_rows:
+        if row.ticker in active_tickers:
+            continue
+        meta = row.meta
+        atr = meta.get("atr_ratio")
+        rs = meta.get("rs_composite")
+        display_rows.append({
+            "Ticker": row.ticker,
+            "Setup": "Breakout",
+            "Stage": "WATCHING",
+            "Gap %": "—",
+            "Pre-Mkt Vol": "—",
+            "Consol Days": meta.get("consolidation_days", "—"),
+            "ATR Ratio": f"{atr:.3f}" if atr else "—",
+            "RS Score": f"{rs:.1f}" if rs else "—",
+            "Quality": _quality_from_meta(meta),
+            "_sort": 1,
+        })
+
+    if not display_rows:
+        st.info("No candidates yet — premarket scan runs at 6:00 AM ET, nightly scan at 5:00 PM ET.")
     else:
-        STAGE_COLORS = {"ready": "#00c853", "watching": "#ffd600"}
-        pipe_df = pd.DataFrame([{
-            "Ticker": r.ticker,
-            "Stage": r.stage.upper(),
-            "Consol Days": r.consolidation_days,
-            "ATR Ratio": r.atr_ratio,
-            "Higher Lows": "Y" if r.higher_lows else "N",
-            "10d MA": "Y" if r.near_10d_ma else "N",
-            "20d MA": "Y" if r.near_20d_ma else "N",
-            "Vol Dry": "Y" if r.volume_drying else "N",
-            "RS Score": f"{r.rs_composite:.1f}" if r.rs_composite else "—",
-            "Days on List": r.days_on_list,
-            "Last Update": r.updated_at.strftime("%m/%d %H:%M") if r.updated_at else "—",
-            "_stage": r.stage,
-        } for r in pipeline_rows])
+        n_active = sum(1 for r in display_rows if r["_sort"] == 0)
+        n_watching = sum(1 for r in display_rows if r["_sort"] == 1)
+        wm1, wm2 = st.columns(2)
+        wm1.metric("Active", n_active)
+        wm2.metric("Watching", n_watching)
+
+        mdf = pd.DataFrame(display_rows).drop(columns=["_sort"])
+
+        STAGE_COLORS = {"ACTIVE": "#00c853", "WATCHING": "#ffd600"}
 
         def _style_stage(val):
-            if val == "READY":
-                return f"color: {STAGE_COLORS['ready']}; font-weight: bold"
-            if val == "WATCHING":
-                return f"color: {STAGE_COLORS['watching']}; font-weight: bold"
-            return ""
+            color = STAGE_COLORS.get(val, "")
+            return f"color: {color}; font-weight: bold" if color else ""
 
         st.dataframe(
-            pipe_df.drop(columns=["_stage"]).style
-                .map(_style_stage, subset=["Stage"])
-                .format({"ATR Ratio": "{:.3f}"}),
+            mdf.style.map(_style_stage, subset=["Stage"]),
             use_container_width=True,
             hide_index=True,
         )

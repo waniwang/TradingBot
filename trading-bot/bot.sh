@@ -125,7 +125,6 @@ else:
 print(f\"  Phase:      {d.get('phase','?')}\")
 print(f\"  Heartbeat:  {hb}{stale}\")
 print(f\"  Next job:   {d.get('next_job','?')} at {d.get('next_job_time','?')}\")
-print(f\"  Watchlist:  {len(d.get('watchlist',[]))} symbols\")
 "
   fi
 
@@ -164,7 +163,6 @@ else:
 print(f\"  Phase:      {d.get('phase','?')}\")
 print(f\"  Heartbeat:  {hb}{stale}\")
 print(f\"  Next job:   {d.get('next_job','?')} at {d.get('next_job_time','?')}\")
-print(f\"  Watchlist:  {len(d.get('watchlist',[]))} symbols\")
 "
   fi
   echo ""

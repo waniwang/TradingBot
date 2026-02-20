@@ -40,6 +40,10 @@ from scanner.watchlist_manager import (
     get_ready_candidates,
     mark_triggered,
     get_pipeline_counts,
+    persist_candidates,
+    promote_ready_to_active,
+    expire_stale_active,
+    get_active_watchlist,
 )
 from signals import evaluate_signal
 from signals.base import compute_sma
@@ -202,52 +206,49 @@ def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=Non
     if notify:
         notify("PRE-MARKET SCAN STARTED")
 
+    today = datetime.now(ET).date()
     errors = []
     enabled = config.get("strategies", {}).get("enabled", ["episodic_pivot", "breakout", "parabolic_short"])
 
-    # EP gappers
-    ep_candidates = []
+    # 1. Expire/demote yesterday's stale entries
+    try:
+        expire_stale_active(today, db_engine)
+    except Exception as e:
+        logger.error("Failed to expire stale active entries: %s", e)
+
+    # 2. EP gappers — persist to DB as active
     if "episodic_pivot" in enabled:
         try:
             ep_candidates = get_premarket_gappers(config, client)
             logger.info("EP candidates: %d", len(ep_candidates))
+            persist_candidates(ep_candidates, "episodic_pivot", "active", today, db_engine)
         except Exception as e:
             logger.error("EP gapper scan failed: %s", e)
             errors.append(f"EP gapper scan failed: {e}")
 
-    # Breakout candidates from persistent watchlist DB (populated by nightly scan)
-    breakout_candidates = []
+    # 3. Breakout: promote ready -> active for today
     if "breakout" in enabled:
         try:
-            breakout_candidates = get_ready_candidates(db_engine)
-            logger.info("Breakout candidates from DB: %d ready", len(breakout_candidates))
+            promoted = promote_ready_to_active(today, db_engine)
+            logger.info("Breakout candidates promoted to active: %d", promoted)
         except Exception as e:
-            logger.error("Breakout DB read failed: %s", e)
-            errors.append(f"Breakout DB read failed: {e}")
+            logger.error("Breakout promotion failed: %s", e)
+            errors.append(f"Breakout promotion failed: {e}")
 
-    # Parabolic short candidates
-    parabolic_candidates = []
+    # 4. Parabolic short candidates — persist to DB as active
     if "parabolic_short" in enabled:
         try:
             parabolic_candidates = scan_parabolic_candidates(config, client)
             logger.info("Parabolic candidates: %d", len(parabolic_candidates))
+            persist_candidates(parabolic_candidates, "parabolic_short", "active", today, db_engine)
         except Exception as e:
             logger.error("Parabolic scan failed: %s", e)
             errors.append(f"Parabolic scan failed: {e}")
     else:
         logger.info("Parabolic short disabled in config")
 
-    # Merge watchlist (EP first, then breakout, then parabolic)
-    watchlist = ep_candidates + breakout_candidates + parabolic_candidates
-    # Deduplicate by ticker (EP takes priority)
-    seen = set()
-    deduped = []
-    for c in watchlist:
-        if c["ticker"] not in seen:
-            seen.add(c["ticker"])
-            deduped.append(c)
-
-    _watchlist = deduped[:20]
+    # 5. Load unified active watchlist from DB
+    _watchlist = get_active_watchlist(db_engine)[:20]
     _set_phase("watchlist_ready")
     logger.info("=== PRE-MARKET SCAN DONE: %d candidates ===", len(_watchlist))
     for c in _watchlist:
@@ -682,10 +683,10 @@ def _execute_entry(ticker, signal, shares, client, db_engine, notify):
         session.commit()
         order_db_id = db_order.id
 
-    # Mark breakout watchlist entry as triggered
-    if signal.setup_type == "breakout" and _db_engine is not None:
+    # Mark watchlist entry as triggered (all setup types)
+    if _db_engine is not None:
         try:
-            mark_triggered(ticker, _db_engine)
+            mark_triggered(ticker, _db_engine, setup_type=signal.setup_type)
         except Exception as e:
             logger.warning("Failed to mark %s as triggered in watchlist: %s", ticker, e)
 
@@ -721,6 +722,13 @@ def job_eod_tasks(
         return
     _set_phase("end_of_day")
     logger.info("=== EOD TASKS START ===")
+
+    # Expire unfired active entries at end of day
+    today = datetime.now(ET).date()
+    try:
+        expire_stale_active(today, db_engine)
+    except Exception as e:
+        logger.warning("Failed to expire active entries at EOD: %s", e)
 
     # Pass a snapshot of the cache to avoid race with the stream callback thread
     with _cache_lock:
@@ -914,14 +922,6 @@ def _write_status():
             next_job_name = upcoming[0].id
             next_job_time = upcoming[0].next_run_time.isoformat()
 
-    # Include breakout pipeline counts if DB engine is available
-    pipeline = {}
-    if _db_engine is not None:
-        try:
-            pipeline = get_pipeline_counts(_db_engine)
-        except Exception:
-            pass
-
     status = {
         "running": True,
         "phase": _current_phase,
@@ -929,8 +929,6 @@ def _write_status():
         "last_heartbeat": datetime.now(ET).isoformat(),
         "next_job": next_job_name,
         "next_job_time": next_job_time,
-        "watchlist": _watchlist,
-        "breakout_pipeline": pipeline,
     }
     try:
         fd, tmp_path = tempfile.mkstemp(dir=".", suffix=".tmp")
@@ -1038,22 +1036,27 @@ def main():
     # Position tracker
     tracker = PositionTracker(config, db_engine, client, notify)
 
-    # Restore watchlist from bot_status.json if it was written today
+    # Restore watchlist from DB (active entries survive restarts with full data)
     global _watchlist
+    try:
+        _watchlist = get_active_watchlist(db_engine)
+        if _watchlist:
+            _set_phase("watchlist_ready")
+            logger.info("Restored watchlist from DB: %d active candidates", len(_watchlist))
+    except Exception as e:
+        logger.warning("Could not restore watchlist from DB: %s", e)
+
+    # Restore phase from bot_status.json if available
     try:
         with open("bot_status.json") as f:
             saved = json.load(f)
-        saved_wl = saved.get("watchlist", [])
         hb = saved.get("last_heartbeat")
-        if saved_wl and hb:
+        if hb:
             hb_date = datetime.fromisoformat(hb).date()
-            if hb_date == datetime.now(ET).date():
-                _watchlist = saved_wl
-                _set_phase(saved.get("phase", "watchlist_ready"))
-                logger.info("Restored watchlist from bot_status.json: %d candidates",
-                            len(_watchlist))
-    except Exception as e:
-        logger.warning("Could not restore watchlist: %s", e)
+            if hb_date == datetime.now(ET).date() and saved.get("phase"):
+                _set_phase(saved["phase"])
+    except Exception:
+        pass
 
     # Set module-level DB engine for _write_status and mark_triggered
     global _db_engine
