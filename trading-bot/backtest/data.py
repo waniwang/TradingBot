@@ -125,10 +125,14 @@ def fetch_historical_bars(
 
 def get_sp500_tickers() -> list[str]:
     """Fetch current S&P 500 constituents from Wikipedia."""
+    import urllib.request
+
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     try:
-        tables = pd.read_html(
-            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        )
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req) as resp:
+            html = resp.read().decode("utf-8")
+        tables = pd.read_html(html)
         df = tables[0]
         tickers = df["Symbol"].str.replace(".", "-", regex=False).tolist()
         return tickers

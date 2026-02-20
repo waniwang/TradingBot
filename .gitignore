@@ -4,3 +4,5 @@
 # IDE
 .idea/
 .vscode/
+
+backtest_cache/
