@@ -6,7 +6,10 @@ Uses synthetic data — no network calls.
 
 import pytest
 from signals import evaluate_signal, STRATEGY_REGISTRY
-from signals.base import compute_orh, compute_orb_low, compute_vwap, compute_sma
+from signals.base import (
+    compute_orh, compute_orb_low, compute_vwap, compute_sma,
+    compute_atr_from_list,
+)
 from signals.breakout import check_breakout
 from signals.episodic_pivot import check_episodic_pivot
 from signals.parabolic_short import check_parabolic_short
@@ -435,31 +438,20 @@ class TestParabolicShortSignal:
 # Breakout with daily_lows
 # ---------------------------------------------------------------------------
 
-class TestBreakoutDailyLows:
-    def _make_valid_inputs_with_lows(self):
+class TestBreakoutStopLogic:
+    def _make_valid_inputs(self):
         candles_1m = make_candles(30, base_price=50.0, step=0.10)
         orh = compute_orh(candles_1m, n_minutes=5)
         daily_closes = make_daily_closes(25, start=45.0, drift=0.2)
         daily_volumes = make_daily_volumes(25, base=1_000_000)
-        daily_lows = [c - 1.0 for c in daily_closes]  # lows 1.0 below closes
         current_price = orh + 0.20
         current_volume = 2_500_000
-        return candles_1m, daily_closes, daily_volumes, daily_lows, current_price, current_volume
+        return candles_1m, daily_closes, daily_volumes, current_price, current_volume
 
-    def test_stop_uses_prior_day_low(self):
-        candles_1m, daily_closes, daily_volumes, daily_lows, current_price, current_volume = (
-            self._make_valid_inputs_with_lows()
-        )
-        result = check_breakout(
-            "AAPL", candles_1m, daily_closes, daily_volumes,
-            current_price, current_volume, daily_lows=daily_lows,
-        )
-        assert result is not None
-        assert result.stop_price == daily_lows[-1]
-
-    def test_stop_falls_back_to_today_low_without_daily_lows(self):
-        candles_1m, daily_closes, daily_volumes, _, current_price, current_volume = (
-            self._make_valid_inputs_with_lows()
+    def test_stop_is_lod(self):
+        """Breakout stop should be LOD (Qullamaggie rule)."""
+        candles_1m, daily_closes, daily_volumes, current_price, current_volume = (
+            self._make_valid_inputs()
         )
         result = check_breakout(
             "AAPL", candles_1m, daily_closes, daily_volumes,
@@ -468,6 +460,33 @@ class TestBreakoutDailyLows:
         assert result is not None
         today_low = min(c["low"] for c in candles_1m)
         assert result.stop_price == today_low
+
+    def test_stop_capped_by_atr(self):
+        """When LOD is far below entry, stop should be capped at 1x ATR."""
+        candles_1m = make_candles(30, base_price=50.0, step=0.10)
+        orh = compute_orh(candles_1m, n_minutes=5)
+        # Insert an artificially low candle to create a wide stop
+        candles_1m[10] = {
+            "open": 30.0, "high": 30.5, "low": 20.0,
+            "close": 30.0, "volume": 50_000,
+        }
+
+        daily_closes = make_daily_closes(25, start=45.0, drift=0.2)
+        daily_volumes = make_daily_volumes(25, base=1_000_000)
+        daily_highs = [c + 1.0 for c in daily_closes]
+        daily_lows = [c - 1.0 for c in daily_closes]
+        current_price = orh + 0.20
+        current_volume = 2_500_000
+
+        result = check_breakout(
+            "AAPL", candles_1m, daily_closes, daily_volumes,
+            current_price, current_volume,
+            daily_highs=daily_highs, daily_lows=daily_lows,
+        )
+        assert result is not None
+        # Stop should NOT be 20.0 (the artificial LOD) — ATR cap kicks in
+        assert result.stop_price > 20.0
+        assert result.stop_price < result.entry_price
 
 
 # ---------------------------------------------------------------------------
@@ -545,3 +564,83 @@ class TestStrategyRegistry:
         )
         assert result is not None
         assert result.setup_type == "parabolic_short"
+
+
+# ---------------------------------------------------------------------------
+# compute_atr_from_list
+# ---------------------------------------------------------------------------
+
+class TestComputeAtrFromList:
+    def test_basic(self):
+        highs = [h + 1.0 for h in range(20)]
+        lows = [l - 1.0 for l in range(20)]
+        closes = list(range(20))
+        atr = compute_atr_from_list(highs, lows, [float(c) for c in closes])
+        assert atr is not None
+        assert atr > 0
+
+    def test_insufficient_data(self):
+        assert compute_atr_from_list([10.0] * 5, [9.0] * 5, [9.5] * 5) is None
+
+    def test_constant_bars(self):
+        # ATR = high - low when all bars are identical
+        n = 20
+        highs = [11.0] * n
+        lows = [9.0] * n
+        closes = [10.0] * n
+        atr = compute_atr_from_list(highs, lows, closes)
+        assert atr is not None
+        assert atr == pytest.approx(2.0, rel=0.01)
+
+
+# ---------------------------------------------------------------------------
+# EP with ATR cap
+# ---------------------------------------------------------------------------
+
+class TestEpisodicPivotAtrCap:
+    def test_ep_stop_capped_by_atr(self):
+        """EP stop should be capped at 1.5x ATR when LOD is very far."""
+        candles_1m = make_candles(30, base_price=115.0, step=0.15)
+        orh = compute_orh(candles_1m, n_minutes=5)
+        # Insert an artificially low candle to make LOD very wide
+        candles_1m[15] = {
+            "open": 50.0, "high": 50.5, "low": 40.0,
+            "close": 50.0, "volume": 50_000,
+        }
+
+        daily_volumes = make_daily_volumes(25, base=500_000)
+        daily_closes = make_daily_closes(25, start=100.0, drift=0.5)
+        daily_highs = [c + 2.0 for c in daily_closes]
+        daily_lows = [c - 2.0 for c in daily_closes]
+        current_price = orh + 0.50
+        current_volume = 2_000_000
+        gap_pct = 15.0
+
+        result = check_episodic_pivot(
+            "NVDA", candles_1m, daily_volumes,
+            current_price, current_volume, gap_pct,
+            daily_highs=daily_highs, daily_lows=daily_lows,
+            daily_closes=daily_closes,
+        )
+        assert result is not None
+        # Stop should NOT be 40.0 (the artificial LOD)
+        assert result.stop_price > 40.0
+        assert result.stop_price < result.entry_price
+
+    def test_ep_stop_is_lod_when_within_atr(self):
+        """When LOD is within 1.5x ATR, the stop should remain at LOD."""
+        candles_1m = make_candles(30, base_price=115.0, step=0.15)
+        orh = compute_orh(candles_1m, n_minutes=5)
+
+        daily_volumes = make_daily_volumes(25, base=500_000)
+        current_price = orh + 0.50
+        current_volume = 2_000_000
+        gap_pct = 15.0
+
+        result = check_episodic_pivot(
+            "NVDA", candles_1m, daily_volumes,
+            current_price, current_volume, gap_pct,
+        )
+        assert result is not None
+        lod = min(c["low"] for c in candles_1m)
+        assert result.stop_price == lod

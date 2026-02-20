@@ -5,9 +5,10 @@
 ### Core
 | Component | Choice | Rationale |
 |---|---|---|
-| Language | Python 3.12 | Dominant quant/trading ecosystem |
-| Deps | Poetry | Reproducible virtual environments |
+| Language | Python 3.14 | Dominant quant/trading ecosystem |
+| Deps | pip + venv | Simple virtual environment management |
 | Scheduling | APScheduler | Cron-style jobs for market schedule |
+| Indicators | pandas `rolling()` | SMA, ATR computed with plain pandas (pandas-ta incompatible with Python 3.14) |
 
 ### Broker & Execution
 | Component | Tool | Notes |
@@ -28,29 +29,27 @@ Dashboard: https://alpaca.markets (paper account available for free)
 ### Market Data
 | Use case | Provider | Why |
 |---|---|---|
-| Pre-market universe scan | **Polygon.io** REST API | Scans all US equities; Moomoo charges per-symbol subscription |
-| Intraday 1m/5m candles | **Moomoo** push callbacks | Real-time, already subscribed for execution |
-| Level 2 / order book | **Moomoo** | Available via `get_order_book()` |
-| Historical OHLCV (backtesting) | **Polygon.io** `/v2/aggs/` | 2+ years of history |
+| Pre-market universe scan | **Alpaca** screener/snapshots | Built-in screener API, no extra subscription |
+| Daily bars (scanners) | **yfinance** | Free, batch download for large universes |
+| Intraday 1m/5m candles | **Alpaca** data API | Real-time bars for signal detection (IEX feed on free tier) |
+| Historical OHLCV (backtesting) | **yfinance** | 2+ years of daily bars, cached as parquet files |
 
-Polygon.io docs: https://polygon.io/docs/stocks
-
-### Technical Indicators
-- **pandas-ta** — MA (10d/20d), ATR, VWAP, RSI — all computed in-process
-- No TA-Lib dependency (install headaches)
+Note: Alpaca free tier uses IEX feed (~2% of stocks). yfinance used for batch daily bars where broader coverage is needed. Batch of 1500 tickers takes ~14 min in batches of 500.
 
 ### Data Storage
-- **SQLite** (development / early paper trading)
+- **SQLite** (development / paper trading)
 - **PostgreSQL** (when moving to live or running on VPS)
-- ORM: **SQLAlchemy**
+- ORM: **SQLAlchemy** — all DB ops use `Session` context manager via `get_session(engine)`
 
 ### Backtesting
-- **vectorbt** — fast, vectorized, pandas-native
-- Historical data from Polygon.io `/v2/aggs/ticker/{ticker}/range/1/day/`
+- **Custom pandas-based engine** (`backtest/runner.py`) — daily bar-by-bar simulation
+- Historical data from yfinance, cached as parquet in `backtest/cache/`
+- Entry approximations from daily bars (no intraday data for history)
+- See [verification.md](verification.md) for how to run backtests and interpret results
 
 ### Monitoring
 - **Streamlit** — dashboard: open positions, daily P&L, signals fired, stop levels
-- **python-telegram-bot** — push alerts: fill confirmed, stop hit, daily summary
+- **python-telegram-bot** — push alerts: fill confirmed, stop hit, daily summary (Phase 7)
 
 ---
 
@@ -58,25 +57,28 @@ Polygon.io docs: https://polygon.io/docs/stocks
 
 ```
 ═══════════════════════════════════════════════════════════
-PRE-MARKET (6:00 – 9:25 AM ET)
+PRE-MARKET (6:00 - 9:25 AM ET)
 ═══════════════════════════════════════════════════════════
-  Polygon.io REST API
+  Alpaca screener + snapshots
     ├── Gap scanner: stocks up 10%+ premarket on volume  →  EP candidates
+    └── Parabolic screener: multi-day runners             →  Short candidates
+
+  yfinance batch daily bars
     ├── Momentum ranker: top 1-2% by 1m/3m/6m RS         →  Breakout candidates
-    └── Parabolic screener: 50%+ in 5 days, 3+ up days   →  Short candidates
+    └── Consolidation detector: ATR contraction + MAs     →  Breakout candidates
 
   ↓
   Watchlist Builder
-    → Subscribe to real-time Moomoo data for each candidate
+    → Subscribe to Alpaca data stream for each candidate
 
 ═══════════════════════════════════════════════════════════
 MARKET OPEN (9:30 AM ET)
 ═══════════════════════════════════════════════════════════
-  Moomoo push callbacks (1m candles, quotes)
+  Alpaca data stream (1m candles, quotes)
     ↓
   Signal Engine (per candidate)
-    ├── Breakout: price > ORH + volume spike + above 20d MA
-    ├── EP: price > ORH + volume > 2x premarket avg
+    ├── Breakout: price > ORH + volume > 1.5x + above 10d & 20d MA
+    ├── EP: price > ORH + volume > 2x avg + gap 10%+
     └── Parabolic Short: price < ORB low + VWAP failure
 
   ↓
@@ -86,7 +88,7 @@ MARKET OPEN (9:30 AM ET)
     └── Check: new position < 10% of portfolio notional
 
   ↓
-  Order Executor
+  Order Executor (Alpaca)
     ├── Place LIMIT buy/short order (entry)
     ├── On fill: immediately place STOP order (initial stop)
     └── Log to DB: signal, order, position
@@ -95,17 +97,18 @@ MARKET OPEN (9:30 AM ET)
 INTRADAY MONITOR LOOP (every 1m candle)
 ═══════════════════════════════════════════════════════════
   For each open position:
-    ├── Stop hit? → market close, log exit, unsubscribe
+    ├── Stop hit? → market close, log exit
+    ├── Parabolic short? → check MA profit targets (10d/20d)
     ├── Days in trade >= 3 AND price up >= 15%?
-    │     → sell 1/3-1/2 as limit order
+    │     → sell 40% as limit order
     │     → move stop to break-even
-    └── End of day: update trailing stop to prior 10d/20d MA close
+    └── End of day: check trailing MA close exits
 
 ═══════════════════════════════════════════════════════════
 END OF DAY (4:00 PM ET)
 ═══════════════════════════════════════════════════════════
   → Compute daily P&L
-  → Check: any position closed below 10/20d MA today? → schedule close at open tomorrow
+  → Check trailing MA exits: close if today's close < 10d MA (for longs)
   → Send Telegram daily summary
   → Update Streamlit dashboard
 ```
@@ -116,23 +119,31 @@ END OF DAY (4:00 PM ET)
 
 | Time (ET) | Job | Description |
 |---|---|---|
-| 6:00 AM | `run_premarket_scan` | Polygon.io gap + momentum + parabolic scan |
-| 9:25 AM | `finalize_watchlist` | Subscribe Moomoo push for final candidates |
+| 6:00 AM | `job_premarket_scan` | Alpaca screener + yfinance gap/momentum/consolidation/parabolic scan |
+| 9:25 AM | `finalize_watchlist` | Prepare final candidates for signal monitoring |
 | 9:30 AM | `start_intraday_monitor` | Activate signal engine + position tracker |
-| 4:00 PM | `run_eod_tasks` | Trail stops, compute P&L, send Telegram summary |
+| 4:00 PM | `run_eod_tasks` | Trail stops (MA close check), compute P&L, send Telegram summary |
+
+All scheduled jobs run in ET timezone (`America/New_York`).
 
 ---
 
 ## Key Design Decisions
 
-### Why Polygon.io for scanning (not Moomoo)?
-Moomoo charges a per-symbol subscription fee for real-time quotes. Scanning the entire US equities universe (~8,000 symbols) would be prohibitively expensive. Polygon.io's REST API allows cheap bulk scans. Only the final watchlist (~10-20 symbols) gets subscribed in Moomoo.
+### Why Alpaca?
+Pure REST + WebSocket API, no gateway process needed. Free paper trading account. Native Python SDK (`alpaca-py`). Supports both paper and live with a single config flag.
+
+### Why yfinance for daily bars?
+Alpaca's free tier (IEX feed) covers only ~2% of stocks. yfinance provides free daily OHLCV for the full US equity universe. Used for scanner daily bars and backtesting historical data.
 
 ### Why SQLite first?
 Simpler dev/paper trading setup. SQLAlchemy ORM abstracts the database; switching to PostgreSQL later requires only a connection string change.
 
-### Why pandas-ta over TA-Lib?
-TA-Lib requires compiled C extensions that are painful to install on different OS/architecture combinations. pandas-ta is pure Python/pandas, installs cleanly with pip/poetry.
+### Why plain pandas instead of pandas-ta?
+pandas-ta depends on numba, which is incompatible with Python 3.14. SMA and ATR are computed with `pandas.rolling()` — simple and dependency-free.
+
+### Why custom backtest engine instead of vectorbt?
+vectorbt also has numba dependency issues with Python 3.14. The custom engine in `backtest/runner.py` provides full control over entry approximations from daily bars and matches our exact signal/exit logic.
 
 ### Why limit orders for all entries?
-Momentum names can move extremely fast around the ORH level. A market order could result in significant slippage. Limit orders with a small tolerance (entry ≤ ORH + 0.5%) ensure we don't chase.
+Momentum names can move extremely fast around the ORH level. A market order could result in significant slippage. Limit orders with a small tolerance (entry <= ORH + 0.5%) ensure we don't chase.

@@ -17,8 +17,17 @@ signals:
   ep_min_gap_pct: 10.0                     # min gap % to qualify as Episodic Pivot
   breakout_consolidation_days_min: 10      # min days for valid consolidation
   breakout_consolidation_days_max: 40      # max days for valid consolidation
-  parabolic_min_gain_pct: 50.0             # min gain % for parabolic short candidate
+  parabolic_min_gain_pct: 50.0             # legacy — used if per-cap keys not set
+  parabolic_min_gain_pct_largecap: 50.0    # large-cap (price > $50): min gain %
+  parabolic_min_gain_pct_smallcap: 200.0   # small-cap (price < $20): min gain %
   parabolic_min_days: 3                    # min consecutive up days for parabolic
+  breakout_volume_multiplier: 1.5          # volume / 20d avg threshold for breakout
+  ep_volume_multiplier: 2.0               # volume / 20d avg threshold for EP
+  orh_minutes: 5                           # opening range duration in minutes
+  atr_period: 14                           # ATR calculation period
+  consolidation_atr_ratio: 0.85            # ATR contraction ratio threshold
+  consolidation_ma_tolerance_pct: 3.0      # % tolerance for near-MA check
+  consolidation_prior_move_pct: 30.0       # min prior move % for breakout setup
 
 exits:
   partial_exit_after_days: 3              # sell partial after this many days in trade

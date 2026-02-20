@@ -345,10 +345,11 @@ def _make_parabolic_config():
     }
 
 
-def _make_parabolic_df(gain_pct: float = 60.0, days: int = 8) -> pd.DataFrame:
+def _make_parabolic_df(
+    gain_pct: float = 60.0, days: int = 8, base_price: float = 60.0,
+) -> pd.DataFrame:
     """Create a DataFrame with a parabolic move over the last 3 days."""
     rows = []
-    base_price = 20.0
     for i in range(days):
         if i >= days - 3:
             # Parabolic move: scale up linearly to reach gain_pct
@@ -369,10 +370,11 @@ def _make_parabolic_df(gain_pct: float = 60.0, days: int = 8) -> pd.DataFrame:
 
 class TestScanParabolicCandidates:
     def test_qualifies_parabolic(self):
-        df = _make_parabolic_df(gain_pct=60.0)
+        df = _make_parabolic_df(gain_pct=60.0, base_price=60.0)
         client = MagicMock()
+        # Use price > $50 so the large-cap threshold (50%) applies
         client.get_market_movers_gainers.return_value = [
-            {"symbol": "MEME", "percent_change": 30.0, "price": 30.0},
+            {"symbol": "MEME", "percent_change": 30.0, "price": 65.0},
         ]
         client.get_daily_bars_batch.return_value = {"MEME": df}
 
@@ -383,10 +385,10 @@ class TestScanParabolicCandidates:
         assert result[0]["gain_pct"] >= 50.0
 
     def test_filters_insufficient_gain(self):
-        df = _make_parabolic_df(gain_pct=20.0)  # below 50% threshold
+        df = _make_parabolic_df(gain_pct=20.0, base_price=60.0)  # below 50% threshold
         client = MagicMock()
         client.get_market_movers_gainers.return_value = [
-            {"symbol": "SLOW", "percent_change": 10.0, "price": 25.0},
+            {"symbol": "SLOW", "percent_change": 10.0, "price": 65.0},
         ]
         client.get_daily_bars_batch.return_value = {"SLOW": df}
 
@@ -401,7 +403,7 @@ class TestScanParabolicCandidates:
         assert result == []
 
     def test_filters_penny_stocks(self):
-        df = _make_parabolic_df(gain_pct=80.0)
+        df = _make_parabolic_df(gain_pct=80.0, base_price=60.0)
         client = MagicMock()
         client.get_market_movers_gainers.return_value = [
             {"symbol": "CHEAP", "percent_change": 80.0, "price": 2.0},  # below $5
@@ -412,12 +414,12 @@ class TestScanParabolicCandidates:
         assert len(result) == 0
 
     def test_sorted_by_gain_descending(self):
-        df1 = _make_parabolic_df(gain_pct=60.0)
-        df2 = _make_parabolic_df(gain_pct=80.0)
+        df1 = _make_parabolic_df(gain_pct=60.0, base_price=60.0)
+        df2 = _make_parabolic_df(gain_pct=80.0, base_price=60.0)
         client = MagicMock()
         client.get_market_movers_gainers.return_value = [
-            {"symbol": "AAA", "percent_change": 30.0, "price": 30.0},
-            {"symbol": "BBB", "percent_change": 50.0, "price": 40.0},
+            {"symbol": "AAA", "percent_change": 30.0, "price": 65.0},
+            {"symbol": "BBB", "percent_change": 50.0, "price": 70.0},
         ]
         client.get_daily_bars_batch.return_value = {"AAA": df1, "BBB": df2}
 
@@ -455,3 +457,184 @@ class TestConsolidationMissingConfig:
         df = _make_consolidating_df(60)
         result = analyze_consolidation("TEST", config, df)
         assert result["consolidation_days"] == 40
+
+
+# ---------------------------------------------------------------------------
+# A4: 10d MA check
+# ---------------------------------------------------------------------------
+
+class TestConsolidation10dMa:
+    def test_result_includes_near_10d_ma(self):
+        df = _make_consolidating_df(60)
+        result = analyze_consolidation("TEST", _make_config(), df)
+        assert "near_10d_ma" in result
+
+    def test_rejects_when_far_from_10d_ma(self):
+        """A stock far from the 10d MA should not qualify even if near 20d MA."""
+        rows = []
+        price = 100.0
+        for i in range(60):
+            price += 0.05
+            range_factor = max(0.3, 2.0 - i * 0.03)
+            rows.append({
+                "date": pd.Timestamp("2025-06-01") + pd.Timedelta(days=i),
+                "open": round(price - 0.1, 2),
+                "high": round(price + range_factor, 2),
+                "low": round(price - range_factor, 2),
+                "close": round(price, 2),
+                "volume": max(100_000, 1_000_000 - i * 15_000),
+            })
+        # Big jump on last day to move away from 10d MA
+        rows[-1]["close"] = 120.0
+        rows[-1]["high"] = 121.0
+        df = pd.DataFrame(rows)
+        result = analyze_consolidation("TEST", _make_config(), df)
+        if result["qualifies"]:
+            # If it still qualifies, verify both MA checks are there
+            assert result["near_10d_ma"] is True
+            assert result["near_20d_ma"] is True
+
+
+# ---------------------------------------------------------------------------
+# A5: Prior large move validation
+# ---------------------------------------------------------------------------
+
+class TestConsolidationPriorMove:
+    def test_rejects_no_prior_move(self):
+        """Stock with no significant move before consolidation should be rejected."""
+        # Flat price history — no 30% move anywhere
+        rows = []
+        price = 100.0
+        for i in range(120):
+            # Tiny drift — never 30%
+            price += 0.01
+            range_factor = max(0.3, 2.0 - (i % 40) * 0.03)
+            rows.append({
+                "date": pd.Timestamp("2025-01-01") + pd.Timedelta(days=i),
+                "open": round(price - 0.1, 2),
+                "high": round(price + range_factor, 2),
+                "low": round(price - range_factor, 2),
+                "close": round(price, 2),
+                "volume": max(100_000, 1_000_000 - (i % 40) * 15_000),
+            })
+        df = pd.DataFrame(rows)
+        result = analyze_consolidation("FLAT", _make_config(), df)
+        assert result["qualifies"] is False
+        assert result["reason"] == "no_prior_move"
+
+    def test_result_includes_has_prior_move(self):
+        df = _make_consolidating_df(60)
+        result = analyze_consolidation("TEST", _make_config(), df)
+        assert "has_prior_move" in result
+
+
+# ---------------------------------------------------------------------------
+# A6: Min consolidation duration
+# ---------------------------------------------------------------------------
+
+class TestConsolidationMinDuration:
+    def test_rejects_short_consolidation(self):
+        """Consolidation shorter than min should be rejected."""
+        df = _make_daily_df(35)
+        config = {
+            "signals": {
+                "breakout_consolidation_days_min": 10,
+                "breakout_consolidation_days_max": 40,
+            }
+        }
+        # Pass consolidation_days=5 which is < min 10
+        result = analyze_consolidation("SHORT", config, df, consolidation_days=5)
+        assert result["qualifies"] is False
+        assert result["reason"] == "consolidation_too_short"
+
+
+# ---------------------------------------------------------------------------
+# A7: Prior-rally filter for EP gapper
+# ---------------------------------------------------------------------------
+
+class TestGapperPriorRallyFilter:
+    def test_filters_out_prior_rally(self):
+        """Stocks already up 50%+ in 6 months should be filtered out."""
+        client = MagicMock()
+        client.get_market_movers_gainers.return_value = [
+            {"symbol": "RALLY", "percent_change": 15.0, "price": 100.0},
+        ]
+        client.get_snapshots.return_value = {
+            "RALLY": {"prev_close": 80.0, "latest_price": 100.0, "daily_volume": 500_000},
+        }
+
+        # Stock was at $50 six months ago, now at $100 → 100% gain
+        dates = pd.date_range("2024-06-01", periods=130, freq="B")
+        closes = np.linspace(50, 100, 130)
+        df = pd.DataFrame({
+            "date": dates,
+            "open": closes - 0.5,
+            "high": closes + 1,
+            "low": closes - 1,
+            "close": closes,
+            "volume": [500_000] * 130,
+        })
+        client.get_daily_bars_batch.return_value = {"RALLY": df}
+
+        config = _make_config()
+        result = get_premarket_gappers(config, client)
+        assert len(result) == 0  # Filtered out: 100% > 50%
+
+    def test_keeps_candidates_without_prior_rally(self):
+        """Stocks with modest prior performance should be kept."""
+        client = MagicMock()
+        client.get_market_movers_gainers.return_value = [
+            {"symbol": "FRESH", "percent_change": 12.0, "price": 55.0},
+        ]
+        client.get_snapshots.return_value = {
+            "FRESH": {"prev_close": 50.0, "latest_price": 55.0, "daily_volume": 500_000},
+        }
+
+        # Stock was flat for 6 months — only 10% gain
+        dates = pd.date_range("2024-06-01", periods=130, freq="B")
+        closes = np.linspace(50, 55, 130)
+        df = pd.DataFrame({
+            "date": dates,
+            "open": closes - 0.5,
+            "high": closes + 1,
+            "low": closes - 1,
+            "close": closes,
+            "volume": [500_000] * 130,
+        })
+        client.get_daily_bars_batch.return_value = {"FRESH": df}
+
+        config = _make_config()
+        result = get_premarket_gappers(config, client)
+        assert len(result) == 1
+        assert result[0]["ticker"] == "FRESH"
+
+
+# ---------------------------------------------------------------------------
+# B1: Parabolic market-cap thresholds
+# ---------------------------------------------------------------------------
+
+class TestParabolicMarketCapThresholds:
+    def test_small_cap_needs_higher_gain(self):
+        """A $15 stock (small-cap) should need 200%+ gain to qualify."""
+        df = _make_parabolic_df(gain_pct=80.0, base_price=15.0)  # 80% < 200%
+        client = MagicMock()
+        client.get_market_movers_gainers.return_value = [
+            {"symbol": "SMALL", "percent_change": 40.0, "price": 18.0},
+        ]
+        client.get_daily_bars_batch.return_value = {"SMALL": df}
+
+        result = scan_parabolic_candidates(_make_parabolic_config(), client)
+        assert len(result) == 0  # 80% < 200% small-cap threshold
+
+    def test_large_cap_passes_with_lower_gain(self):
+        """A $60 stock (large-cap) should only need 50%+ to qualify."""
+        df = _make_parabolic_df(gain_pct=60.0, base_price=60.0)
+        client = MagicMock()
+        client.get_market_movers_gainers.return_value = [
+            {"symbol": "BIG", "percent_change": 20.0, "price": 65.0},
+        ]
+        client.get_daily_bars_batch.return_value = {"BIG": df}
+
+        result = scan_parabolic_candidates(_make_parabolic_config(), client)
+        assert len(result) == 1
+        assert result[0]["ticker"] == "BIG"

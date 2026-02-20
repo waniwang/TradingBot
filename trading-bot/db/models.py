@@ -125,6 +125,8 @@ class Position(Base):
         Enum(
             "stop_hit",
             "trailing_stop",
+            "trailing_ma_close",
+            "parabolic_target",
             "manual",
             "daily_loss_limit",
             name="exit_reason_enum",

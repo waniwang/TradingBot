@@ -38,7 +38,8 @@ def scan_parabolic_candidates(
         recent_high, parabolic_days, setup_type
     """
     sig_cfg = config.get("signals", {})
-    min_gain_pct = float(sig_cfg.get("parabolic_min_gain_pct", 50.0))
+    min_gain_largecap = float(sig_cfg.get("parabolic_min_gain_pct_largecap", 50.0))
+    min_gain_smallcap = float(sig_cfg.get("parabolic_min_gain_pct_smallcap", 200.0))
     min_days = int(sig_cfg.get("parabolic_min_days", 3))
 
     # Step 1: Get top gainers from screener (same source as gapper.py)
@@ -79,7 +80,19 @@ def scan_parabolic_candidates(
 
         gain_pct = (recent_high - base_price) / base_price * 100
 
-        if gain_pct < min_gain_pct:
+        # B1: Use price as proxy for market cap —
+        # price > $50 → large-cap threshold, price < $20 → small-cap threshold
+        latest_price = float(closes[-1])
+        if latest_price > 50:
+            threshold = min_gain_largecap
+        elif latest_price < 20:
+            threshold = min_gain_smallcap
+        else:
+            # Mid-range: interpolate between thresholds
+            t = (latest_price - 20) / 30  # 0 at $20, 1 at $50
+            threshold = min_gain_smallcap + t * (min_gain_largecap - min_gain_smallcap)
+
+        if gain_pct < threshold:
             continue
 
         candidates.append({
@@ -94,7 +107,7 @@ def scan_parabolic_candidates(
     candidates.sort(key=lambda x: x["gain_pct"], reverse=True)
     result = candidates[:max_results]
     logger.info(
-        "Parabolic scan: found %d candidates (min_gain=%.1f%%, min_days=%d)",
-        len(result), min_gain_pct, min_days,
+        "Parabolic scan: found %d candidates (largecap=%.1f%%, smallcap=%.1f%%, min_days=%d)",
+        len(result), min_gain_largecap, min_gain_smallcap, min_days,
     )
     return result

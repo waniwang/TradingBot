@@ -14,21 +14,24 @@
 | [implementation-plan.md](implementation-plan.md) | Phase-by-phase build plan with checklists |
 | [config-reference.md](config-reference.md) | Full config.yaml schema and parameter documentation |
 | [file-structure.md](file-structure.md) | Project file tree with description of each module |
-| [verification.md](verification.md) | Test plan, backtest targets, paper trading checklist |
+| [verification.md](verification.md) | Test plan, backtest targets, how to run backtests, paper trading checklist |
 | [risks-and-mitigations.md](risks-and-mitigations.md) | Known risks and how they are handled |
+| [operations.md](operations.md) | Bot operations: start/stop/deploy commands |
 
 ---
 
 ## Quick Context
 
-- **Trader modeled after**: Kristjan Kullamägi ("qullamaggie") — momentum trader
-- **Broker**: Moomoo (futu-api) — paper trade via `TrdEnv.SIMULATE`, live via `TrdEnv.REAL`
-- **Data**: Polygon.io for scanning; Moomoo push for real-time intraday
-- **Language**: Python 3.12 + Poetry
-- **Setups**: Breakout, Episodic Pivot (long), Parabolic Short (start with longs only)
+- **Trader modeled after**: Kristjan Kullamagi ("qullamaggie") — momentum trader
+- **Broker**: Alpaca (`alpaca-py`) — paper trade via `paper=True`, live via `paper=False`
+- **Data**: Alpaca screener/snapshots for scanning; yfinance for daily bars and backtesting
+- **Language**: Python 3.14 + pip/venv
+- **Setups**: Breakout (long), Episodic Pivot (long), Parabolic Short
 
 ---
 
 ## Current Status
 
-See [implementation-plan.md](implementation-plan.md) for the phase checklist.
+- Phases 1-5 complete (foundation, scanners, signals, risk/execution, backtesting)
+- Phase 6 (paper trading) and Phase 7 (Telegram notifications) pending
+- See [implementation-plan.md](implementation-plan.md) for the full phase checklist

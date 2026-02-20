@@ -16,6 +16,7 @@ from signals.base import (
     compute_orh,
     compute_sma,
     compute_avg_volume,
+    compute_atr_from_list,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ def check_breakout(
     current_volume: int,
     config: dict | None = None,
     daily_lows: list[float] | None = None,
+    daily_highs: list[float] | None = None,
 ) -> SignalResult | None:
     """
     Evaluate breakout conditions for a ticker.
@@ -46,17 +48,23 @@ def check_breakout(
         current_price: latest trade price
         current_volume: total volume so far today
         config: optional app config (for overriding defaults)
-        daily_lows: recent daily low prices; last element is prior day's low for stop
+        daily_lows: recent daily low prices (unused, kept for backward compat)
+        daily_highs: recent daily high prices (used for ATR cap calculation)
 
     Returns:
         SignalResult if all conditions met, else None
     """
-    if len(candles_1m) < ORH_MINUTES:
+    # Read configurable thresholds (fall back to module-level constants)
+    sig_cfg = config.get("signals", {}) if config else {}
+    vol_mult = float(sig_cfg.get("breakout_volume_multiplier", VOLUME_MULTIPLIER))
+    orh_min = int(sig_cfg.get("orh_minutes", ORH_MINUTES))
+
+    if len(candles_1m) < orh_min:
         logger.debug("%s: not enough 1m candles to compute ORH (%d)", ticker, len(candles_1m))
         return None
 
     # 1. Compute ORH
-    orh = compute_orh(candles_1m, n_minutes=ORH_MINUTES)
+    orh = compute_orh(candles_1m, n_minutes=orh_min)
 
     # 2. Price must be above ORH
     if current_price <= orh:
@@ -75,19 +83,21 @@ def check_breakout(
     # 4. Volume must be elevated (> 1.5x 20d avg daily volume)
     avg_vol = compute_avg_volume(daily_volumes, period=20)
     vol_ratio = current_volume / avg_vol if avg_vol > 0 else 0.0
-    if vol_ratio < VOLUME_MULTIPLIER:
+    if vol_ratio < vol_mult:
         logger.debug(
             "%s: volume ratio %.2f below threshold %.1f",
-            ticker, vol_ratio, VOLUME_MULTIPLIER,
+            ticker, vol_ratio, vol_mult,
         )
         return None
 
-    # Stop: prior day's low (from daily bars) is more meaningful than today's ORB low
-    if daily_lows and len(daily_lows) >= 1:
-        stop_price = daily_lows[-1]
-    else:
-        # Fallback: today's intraday low
-        stop_price = min(c["low"] for c in candles_1m)
+    # Stop: low of day (LOD) — Qullamaggie's rule
+    stop_price = min(c["low"] for c in candles_1m)
+
+    # Cap stop width at 1x ATR (never risk more than 1 ATR per share)
+    if daily_highs and daily_lows and daily_closes and len(daily_closes) >= 15:
+        atr = compute_atr_from_list(daily_highs, daily_lows, daily_closes)
+        if atr is not None and (current_price - stop_price) > atr:
+            stop_price = current_price - atr
 
     signal = SignalResult(
         ticker=ticker,

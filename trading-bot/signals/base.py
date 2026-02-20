@@ -103,6 +103,37 @@ def compute_sma(closes: list[float] | pd.Series, period: int) -> float | None:
     return float(result)
 
 
+def compute_atr_from_list(
+    daily_highs: list[float],
+    daily_lows: list[float],
+    daily_closes: list[float],
+    period: int = 14,
+) -> float | None:
+    """
+    Compute the latest ATR value from plain lists (no DataFrame needed).
+
+    Returns None if insufficient data.
+    """
+    n = len(daily_closes)
+    if n < period + 1 or len(daily_highs) < period + 1 or len(daily_lows) < period + 1:
+        return None
+
+    true_ranges = []
+    for i in range(1, n):
+        h = daily_highs[i]
+        l = daily_lows[i]
+        prev_c = daily_closes[i - 1]
+        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+        true_ranges.append(tr)
+
+    if len(true_ranges) < period:
+        return None
+
+    # Simple moving average of the last `period` true ranges
+    atr = sum(true_ranges[-period:]) / period
+    return atr
+
+
 def compute_avg_volume(volumes: list[int] | pd.Series, period: int = 20) -> float:
     """Return the N-period average daily volume."""
     s = pd.Series(volumes) if not isinstance(volumes, pd.Series) else volumes

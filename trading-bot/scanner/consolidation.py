@@ -106,6 +106,8 @@ def analyze_consolidation(
 
     df = daily_bars_df
 
+    min_days = sig_cfg.get("breakout_consolidation_days_min", 10)
+
     result: dict[str, Any] = {
         "ticker": ticker,
         "qualifies": False,
@@ -113,7 +115,9 @@ def analyze_consolidation(
         "atr_contracting": False,
         "atr_ratio": 1.0,
         "higher_lows": False,
+        "near_10d_ma": False,
         "near_20d_ma": False,
+        "has_prior_move": False,
         "setup_type": "breakout",
         "reason": "",
     }
@@ -122,17 +126,39 @@ def analyze_consolidation(
         result["reason"] = "insufficient_data"
         return result
 
+    consol_window = min(consolidation_days, len(df))
+
+    # A6: Enforce minimum consolidation duration
+    if consol_window < min_days:
+        result["reason"] = "consolidation_too_short"
+        return result
+
+    # A5: Check for prior large move (30%+ in the ~2 months before consolidation)
+    lookback = min(len(df) - consol_window, 60)
+    if lookback > 10:
+        prior_closes = df["close"].iloc[-(consol_window + lookback):-consol_window]
+        if len(prior_closes) > 0:
+            move_pct = (prior_closes.max() - prior_closes.min()) / prior_closes.min() * 100
+            result["has_prior_move"] = move_pct >= 30
+            if move_pct < 30:
+                result["reason"] = "no_prior_move"
+                return result
+    else:
+        result["has_prior_move"] = True  # insufficient data to check — pass through
+
     atr = compute_atr(df)
     contracting, atr_ratio = detect_atr_contraction(atr, window=consolidation_days)
     result["atr_contracting"] = contracting
     result["atr_ratio"] = atr_ratio
 
-    consol_window = min(consolidation_days, len(df))
     higher_lows = detect_higher_lows(df["low"].tail(consol_window), consol_window)
     result["higher_lows"] = higher_lows
 
-    near_ma = check_near_ma(df, ma_period=20)
-    result["near_20d_ma"] = near_ma
+    # A4: Check both 10d and 20d MA (stock should surf both)
+    near_10d = check_near_ma(df, ma_period=10)
+    near_20d = check_near_ma(df, ma_period=20)
+    result["near_10d_ma"] = near_10d
+    result["near_20d_ma"] = near_20d
 
     # Volume dry-up: informational indicator, not gating (included in result dict)
     recent_vol = df["volume"].tail(consol_window // 2).mean()
@@ -140,20 +166,24 @@ def analyze_consolidation(
     volume_drying = (recent_vol / longer_vol) < 0.70 if longer_vol > 0 else False
     result["volume_drying"] = volume_drying
 
-    # Qualify: need ATR contraction + higher lows + near MA
+    # Qualify: need ATR contraction + higher lows + near BOTH MAs
     if not contracting:
         result["reason"] = "atr_not_contracting"
     elif not higher_lows:
         result["reason"] = "no_higher_lows"
-    elif not near_ma:
-        result["reason"] = "price_far_from_ma"
+    elif not near_10d:
+        result["reason"] = "price_far_from_10d_ma"
+    elif not near_20d:
+        result["reason"] = "price_far_from_20d_ma"
     else:
         result["qualifies"] = True
         result["reason"] = "ok"
 
     logger.debug(
-        "Consolidation check %s: qualifies=%s atr_ratio=%.3f higher_lows=%s near_ma=%s",
-        ticker, result["qualifies"], atr_ratio, higher_lows, near_ma,
+        "Consolidation check %s: qualifies=%s atr_ratio=%.3f higher_lows=%s "
+        "near_10d=%s near_20d=%s prior_move=%s",
+        ticker, result["qualifies"], atr_ratio, higher_lows,
+        near_10d, near_20d, result["has_prior_move"],
     )
     return result
 

@@ -93,7 +93,12 @@ class PositionTracker:
             self._close_position(session, pos, current_price, reason="stop_hit")
             return
 
-        # 2. Check partial exit conditions
+        # 2. Parabolic short: check profit targets at 10d/20d MA
+        if pos.setup_type == "parabolic_short" and pos.side == "short":
+            if self._check_parabolic_target(session, pos, current_price, daily_closes):
+                return
+
+        # 3. Check partial exit conditions
         if not pos.partial_exit_done:
             days_held = pos.days_held
             gain_pct = pos.gain_pct(current_price)
@@ -102,6 +107,40 @@ class PositionTracker:
                 and gain_pct >= self.partial_exit_gain_pct
             ):
                 self._do_partial_exit(session, pos, current_price)
+
+    def _check_parabolic_target(
+        self, session, pos: Position, current_price: float, daily_closes: list[float]
+    ) -> bool:
+        """
+        For parabolic short positions, cover at 10d/20d MA profit targets.
+        Returns True if a target exit was triggered.
+        """
+        from signals.base import compute_sma
+
+        if not daily_closes or len(daily_closes) < 20:
+            return False
+
+        ma10 = compute_sma(daily_closes, 10)
+        ma20 = compute_sma(daily_closes, 20)
+
+        # Cover half at 10d MA, rest at 20d MA
+        if not pos.partial_exit_done and ma10 is not None and current_price <= ma10:
+            logger.info(
+                "Parabolic target: %s price %.2f <= 10d MA %.2f — partial cover",
+                pos.ticker, current_price, ma10,
+            )
+            self._do_partial_exit(session, pos, current_price)
+            return True
+
+        if pos.partial_exit_done and ma20 is not None and current_price <= ma20:
+            logger.info(
+                "Parabolic target: %s price %.2f <= 20d MA %.2f — full cover",
+                pos.ticker, current_price, ma20,
+            )
+            self._close_position(session, pos, current_price, reason="parabolic_target")
+            return True
+
+        return False
 
     def _is_stop_hit(self, pos: Position, current_price: float) -> bool:
         if pos.side == "long":
@@ -233,16 +272,50 @@ class PositionTracker:
     def run_eod_tasks(self, daily_closes_map: dict[str, list[float]]):
         """
         Called at ~3:55 PM ET.
-        - Updates trailing stops for all open positions.
-        - Schedules positions to close if price has closed below trailing MA.
+        - Checks for MA-close exits (daily close below trailing MA).
+        - Updates trailing stops for remaining open positions.
         """
         with get_session(self.engine) as session:
+            positions = session.query(Position).filter_by(is_open=True).all()
+
+            # First: check if today's close is below the trailing MA
+            # (only for positions that have already done a partial exit)
+            self._check_ma_close_exits(session, positions, daily_closes_map)
+
+            # Refresh the list — some positions may have been closed above
             positions = session.query(Position).filter_by(is_open=True).all()
             for pos in positions:
                 closes = daily_closes_map.get(pos.ticker)
                 if not closes:
                     continue
                 self._update_trailing_stop(session, pos, closes)
+
+    def _check_ma_close_exits(self, session, positions, daily_closes_map):
+        """Exit positions where today's close is below the trailing MA."""
+        from signals.base import compute_sma
+
+        for pos in positions:
+            if not pos.partial_exit_done:
+                continue  # only trail after partial exit
+            closes = daily_closes_map.get(pos.ticker)
+            if not closes or len(closes) < self.trailing_ma_period:
+                continue
+            ma = compute_sma(closes, self.trailing_ma_period)
+            if ma is None:
+                continue
+            todays_close = closes[-1]
+            if pos.side == "long" and todays_close < ma:
+                logger.info(
+                    "MA close exit %s: close %.2f < MA%d %.2f",
+                    pos.ticker, todays_close, self.trailing_ma_period, ma,
+                )
+                self._close_position(session, pos, todays_close, reason="trailing_ma_close")
+            elif pos.side == "short" and todays_close > ma:
+                logger.info(
+                    "MA close exit %s: close %.2f > MA%d %.2f",
+                    pos.ticker, todays_close, self.trailing_ma_period, ma,
+                )
+                self._close_position(session, pos, todays_close, reason="trailing_ma_close")
 
     def _update_trailing_stop(
         self, session, pos: Position, daily_closes: list[float]

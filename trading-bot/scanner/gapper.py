@@ -87,6 +87,36 @@ def get_premarket_gappers(
             "setup_type": "episodic_pivot",
         })
 
+    # A7: Filter out stocks that already rallied 50%+ in prior 6 months
+    if candidates:
+        tickers_to_check = [c["ticker"] for c in candidates]
+        try:
+            bars_6m = client.get_daily_bars_batch(tickers_to_check, days=130)
+        except Exception as e:
+            logger.warning("Failed to fetch 6m bars for EP rally filter: %s", e)
+            bars_6m = {}
+        filtered = []
+        for c in candidates:
+            df = bars_6m.get(c["ticker"])
+            if df is None or (hasattr(df, "empty") and df.empty):
+                filtered.append(c)  # keep if insufficient data
+                continue
+            closes = df["close"].values if hasattr(df, "values") else list(df["close"])
+            if len(closes) < 60:
+                filtered.append(c)
+                continue
+            # Check 6-month performance (exclude last day which is the gap day)
+            if len(closes) >= 2:
+                prior_gain = (closes[-2] - closes[0]) / closes[0] * 100
+                if prior_gain >= 50:
+                    logger.debug(
+                        "%s: already up %.1f%% in 6m — skipping EP",
+                        c["ticker"], prior_gain,
+                    )
+                    continue
+            filtered.append(c)
+        candidates = filtered
+
     candidates.sort(key=lambda x: x["gap_pct"], reverse=True)
     result = candidates[:max_results]
     logger.info("Gapper scan: found %d EP candidates (min_gap=%.1f%%)", len(result), min_gap_pct)

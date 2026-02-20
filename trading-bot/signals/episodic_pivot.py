@@ -15,6 +15,7 @@ from signals.base import (
     SignalResult,
     compute_orh,
     compute_avg_volume,
+    compute_atr_from_list,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,9 @@ def check_episodic_pivot(
     current_volume: int,
     gap_pct: float,                   # % gap from previous close to open/premarket
     config: dict | None = None,
+    daily_highs: list[float] | None = None,
+    daily_lows: list[float] | None = None,
+    daily_closes: list[float] | None = None,
 ) -> SignalResult | None:
     """
     Evaluate episodic pivot conditions for a ticker.
@@ -47,21 +51,22 @@ def check_episodic_pivot(
     Returns:
         SignalResult if all conditions met, else None
     """
-    min_gap = 10.0
-    if config:
-        min_gap = float(config.get("signals", {}).get("ep_min_gap_pct", 10.0))
+    sig_cfg = config.get("signals", {}) if config else {}
+    min_gap = float(sig_cfg.get("ep_min_gap_pct", 10.0))
+    vol_mult = float(sig_cfg.get("ep_volume_multiplier", VOLUME_MULTIPLIER))
+    orh_min = int(sig_cfg.get("orh_minutes", ORH_MINUTES))
 
     # 1. Gap must be >= min threshold
     if gap_pct < min_gap:
         logger.debug("%s: gap %.2f%% below threshold %.1f%%", ticker, gap_pct, min_gap)
         return None
 
-    if len(candles_1m) < ORH_MINUTES:
+    if len(candles_1m) < orh_min:
         logger.debug("%s: not enough 1m candles for ORH (%d)", ticker, len(candles_1m))
         return None
 
     # 2. Compute ORH
-    orh = compute_orh(candles_1m, n_minutes=ORH_MINUTES)
+    orh = compute_orh(candles_1m, n_minutes=orh_min)
 
     # 3. Price must be above ORH
     if current_price <= orh:
@@ -71,16 +76,22 @@ def check_episodic_pivot(
     # 4. Volume must be elevated
     avg_vol = compute_avg_volume(daily_volumes, period=20)
     vol_ratio = current_volume / avg_vol if avg_vol > 0 else 0.0
-    if vol_ratio < VOLUME_MULTIPLIER:
+    if vol_ratio < vol_mult:
         logger.debug(
             "%s: volume ratio %.2f below EP threshold %.1f",
-            ticker, vol_ratio, VOLUME_MULTIPLIER,
+            ticker, vol_ratio, vol_mult,
         )
         return None
 
     # Stop: low of day at time of entry
     lod = min(c["low"] for c in candles_1m)
     stop_price = lod
+
+    # Cap stop width at 1.5x ATR (EP allows wider stops than breakout)
+    if daily_highs and daily_lows and daily_closes and len(daily_closes) >= 15:
+        atr = compute_atr_from_list(daily_highs, daily_lows, daily_closes)
+        if atr is not None and (current_price - stop_price) > 1.5 * atr:
+            stop_price = current_price - 1.5 * atr
 
     signal = SignalResult(
         ticker=ticker,
