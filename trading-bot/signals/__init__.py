@@ -39,6 +39,7 @@ def _eval_breakout(ticker: str, **ctx) -> SignalResult | None:
         ctx.get("config"),
         daily_lows=ctx.get("daily_lows"),
         daily_highs=ctx.get("daily_highs"),
+        minutes_since_open=ctx.get("minutes_since_open"),
     )
 
 
@@ -54,6 +55,7 @@ def _eval_episodic_pivot(ticker: str, **ctx) -> SignalResult | None:
         daily_highs=ctx.get("daily_highs"),
         daily_lows=ctx.get("daily_lows"),
         daily_closes=ctx.get("daily_closes"),
+        minutes_since_open=ctx.get("minutes_since_open"),
     )
 
 

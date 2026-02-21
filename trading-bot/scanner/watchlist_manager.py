@@ -58,6 +58,15 @@ def persist_candidates(
     with get_session(db_engine) as session:
         for c in candidates:
             ticker = c["ticker"]
+            # Skip if this ticker+setup_type+scan_date already exists (dedup on retry)
+            existing = (
+                session.query(Watchlist)
+                .filter_by(ticker=ticker, setup_type=setup_type, scan_date=scan_date)
+                .first()
+            )
+            if existing:
+                logger.debug("Skipping duplicate %s/%s for %s", ticker, setup_type, scan_date)
+                continue
             # Build metadata from all keys except 'ticker' and 'setup_type'
             meta = {k: v for k, v in c.items() if k not in ("ticker", "setup_type")}
             row = Watchlist(

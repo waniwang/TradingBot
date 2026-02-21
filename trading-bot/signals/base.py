@@ -135,11 +135,78 @@ def compute_atr_from_list(
 
 
 def compute_avg_volume(volumes: list[int] | pd.Series, period: int = 20) -> float:
-    """Return the N-period average daily volume."""
+    """Return the N-period average daily volume. Returns 0.0 if data is empty or NaN."""
     s = pd.Series(volumes) if not isinstance(volumes, pd.Series) else volumes
+    if len(s) == 0:
+        return 0.0
     if len(s) < period:
-        return float(s.mean())
-    return float(s.tail(period).mean())
+        result = s.mean()
+    else:
+        result = s.tail(period).mean()
+    if pd.isna(result):
+        return 0.0
+    return float(result)
+
+
+# ---------------------------------------------------------------------------
+# Intraday cumulative volume profile (fraction of daily volume by minute)
+# ---------------------------------------------------------------------------
+
+# Empirical U-shaped curve: heavy at open, light midday, picks up into close.
+# Key anchor points (cumulative fraction of total daily volume by minute offset
+# from 9:30 ET):
+#   0 min  (9:30) = 0.00    5 min  (9:35) = 0.065   15 min (9:45) = 0.14
+#  30 min (10:00) = 0.22   60 min (10:30) = 0.33   120 min(11:30) = 0.50
+# 180 min (12:30) = 0.60  240 min (13:30) = 0.70   300 min(14:30) = 0.80
+# 360 min (15:30) = 0.92  390 min (16:00) = 1.00
+_PROFILE_ANCHORS = [
+    (0, 0.00), (5, 0.065), (15, 0.14), (30, 0.22), (60, 0.33),
+    (120, 0.50), (180, 0.60), (240, 0.70), (300, 0.80), (360, 0.92),
+    (390, 1.00),
+]
+
+
+def _cumulative_volume_fraction(minutes_since_open: int) -> float:
+    """
+    Return expected cumulative fraction of daily volume at *minutes_since_open*
+    minutes after 9:30 ET using linear interpolation of the anchor profile.
+    """
+    if minutes_since_open <= 0:
+        return 0.0
+    if minutes_since_open >= 390:
+        return 1.0
+    for i in range(1, len(_PROFILE_ANCHORS)):
+        t0, f0 = _PROFILE_ANCHORS[i - 1]
+        t1, f1 = _PROFILE_ANCHORS[i]
+        if minutes_since_open <= t1:
+            alpha = (minutes_since_open - t0) / (t1 - t0)
+            return f0 + alpha * (f1 - f0)
+    return 1.0  # pragma: no cover
+
+
+def compute_rvol(
+    today_volume: int,
+    avg_daily_volume: float,
+    minutes_since_open: int,
+) -> float:
+    """
+    Compute time-of-day-normalized relative volume (RVOL).
+
+    RVOL = today_volume / (avg_daily_volume * expected_fraction_at_this_time)
+
+    An RVOL of 2.0 at 9:35 AM means the stock has traded 2x the volume
+    normally expected in the first 5 minutes — the kind of surge Qullamaggie
+    looks for on breakout/EP entries.
+
+    Returns 0.0 if inputs are invalid (zero avg volume or pre-market).
+    """
+    if avg_daily_volume <= 0 or minutes_since_open <= 0:
+        return 0.0
+    expected_fraction = _cumulative_volume_fraction(minutes_since_open)
+    if expected_fraction <= 0:
+        return 0.0
+    expected_volume = avg_daily_volume * expected_fraction
+    return today_volume / expected_volume
 
 
 def candles_to_df(candles: list[dict]) -> pd.DataFrame:

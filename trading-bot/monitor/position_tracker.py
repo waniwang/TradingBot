@@ -250,10 +250,12 @@ class PositionTracker:
                     "Stop may be missing — position at risk.",
                     pos.ticker, e,
                 )
+                # Old stop was cancelled but new one failed — mark as unprotected
+                pos.stop_order_id = None
                 self.notify(
                     f"CRITICAL: Partial exit stop replacement FAILED for {pos.ticker}\n"
                     f"Stop was NOT replaced at break-even (${pos.entry_price:.2f}).\n"
-                    f"Old stop at ${old_stop:.2f} may be cancelled. Check manually."
+                    f"Old stop at ${old_stop:.2f} was cancelled. NO ACTIVE STOP. Check manually."
                 )
         else:
             # No broker stop order; just update DB

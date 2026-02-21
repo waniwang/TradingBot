@@ -37,9 +37,15 @@ def compute_rs_score(df: pd.DataFrame) -> dict[str, float]:
     rs_1m = pct(21)
     rs_3m = pct(63)
     rs_6m = pct(126)
-    # Composite from available periods only (don't average in fake zeros)
-    available = [v for v in (rs_1m, rs_3m, rs_6m) if v is not None]
-    rs_composite = sum(available) / len(available) if available else 0.0
+    # Weighted composite: 50% 1m, 30% 3m, 20% 6m — favors recent momentum
+    # per Qullamaggie's emphasis on stocks "moving NOW"
+    weights = [(rs_1m, 0.50), (rs_3m, 0.30), (rs_6m, 0.20)]
+    available = [(v, w) for v, w in weights if v is not None]
+    if available:
+        total_weight = sum(w for _, w in available)
+        rs_composite = sum(v * w for v, w in available) / total_weight
+    else:
+        rs_composite = 0.0
     return {
         "rs_1m": round(rs_1m, 2) if rs_1m is not None else 0.0,
         "rs_3m": round(rs_3m, 2) if rs_3m is not None else 0.0,

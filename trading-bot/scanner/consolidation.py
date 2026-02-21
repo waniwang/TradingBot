@@ -133,13 +133,18 @@ def analyze_consolidation(
         result["reason"] = "consolidation_too_short"
         return result
 
-    # A5: Check for prior large move (30%+ in the ~2 months before consolidation)
+    # A5: Check for prior large directional advance (30%+ from low to high
+    # in the ~2 months before consolidation). Uses directional move (low→high)
+    # rather than range, matching Qullamaggie's "the stock had a big move UP".
     lookback = min(len(df) - consol_window, 60)
     if lookback > 10:
-        prior_closes = df["close"].iloc[-(consol_window + lookback):-consol_window]
-        if len(prior_closes) > 0:
-            move_pct = (prior_closes.max() - prior_closes.min()) / prior_closes.min() * 100
-            result["has_prior_move"] = move_pct >= 30
+        prior_section = df.iloc[-(consol_window + lookback):-consol_window]
+        if len(prior_section) > 0:
+            low_idx = prior_section["low"].idxmin()
+            high_after_low = prior_section.loc[low_idx:, "high"].max()
+            low_val = prior_section["low"].loc[low_idx]
+            move_pct = (high_after_low - low_val) / low_val * 100 if low_val > 0 else 0
+            result["has_prior_move"] = bool(move_pct >= 30)
             if move_pct < 30:
                 result["reason"] = "no_prior_move"
                 return result
@@ -148,23 +153,23 @@ def analyze_consolidation(
 
     atr = compute_atr(df)
     contracting, atr_ratio = detect_atr_contraction(atr, window=consolidation_days)
-    result["atr_contracting"] = contracting
-    result["atr_ratio"] = atr_ratio
+    result["atr_contracting"] = bool(contracting)
+    result["atr_ratio"] = float(atr_ratio)
 
     higher_lows = detect_higher_lows(df["low"].tail(consol_window), consol_window)
-    result["higher_lows"] = higher_lows
+    result["higher_lows"] = bool(higher_lows)
 
     # A4: Check both 10d and 20d MA (stock should surf both)
     near_10d = check_near_ma(df, ma_period=10)
     near_20d = check_near_ma(df, ma_period=20)
-    result["near_10d_ma"] = near_10d
-    result["near_20d_ma"] = near_20d
+    result["near_10d_ma"] = bool(near_10d)
+    result["near_20d_ma"] = bool(near_20d)
 
     # Volume dry-up: informational indicator, not gating (included in result dict)
     recent_vol = df["volume"].tail(consol_window // 2).mean()
     longer_vol = df["volume"].tail(consol_window * 2).mean()
     volume_drying = (recent_vol / longer_vol) < 0.70 if longer_vol > 0 else False
-    result["volume_drying"] = volume_drying
+    result["volume_drying"] = bool(volume_drying)
 
     # Qualify: need ATR contraction + higher lows + near BOTH MAs
     if not contracting:
@@ -176,7 +181,7 @@ def analyze_consolidation(
     elif not near_20d:
         result["reason"] = "price_far_from_20d_ma"
     else:
-        result["qualifies"] = True
+        result["qualifies"] = True  # already native bool
         result["reason"] = "ok"
 
     logger.debug(

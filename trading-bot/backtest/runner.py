@@ -199,13 +199,16 @@ class BacktestRunner:
             close = float(row["close"])
             low = float(row["low"])
             high = float(row["high"])
+            today_open = float(row["open"])
 
-            # Stop check
+            # Stop check — use gap-adjusted fill price (open if gapped through stop)
             if pos.side == "long" and low <= pos.stop_price:
-                to_close.append((pos, pos.stop_price, "stop_hit"))
+                fill_price = min(today_open, pos.stop_price) if today_open < pos.stop_price else pos.stop_price
+                to_close.append((pos, fill_price, "stop_hit"))
                 continue
             elif pos.side == "short" and high >= pos.stop_price:
-                to_close.append((pos, pos.stop_price, "stop_hit"))
+                fill_price = max(today_open, pos.stop_price) if today_open > pos.stop_price else pos.stop_price
+                to_close.append((pos, fill_price, "stop_hit"))
                 continue
 
             # Parabolic target check (short/long MA)

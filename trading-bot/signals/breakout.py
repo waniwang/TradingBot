@@ -3,13 +3,15 @@ Breakout signal module.
 
 Fires when:
 1. Current price breaks above the Opening Range High (ORH)
-2. Price is above the 20-day moving average
-3. Current volume bar is > 1.5x the 20-day average daily volume
+2. Price is not too far above ORH (max extension guard)
+3. Price is above the 20-day moving average
+4. Time-of-day-normalized RVOL exceeds threshold
 """
 
 from __future__ import annotations
 
 import logging
+import math
 
 from signals.base import (
     SignalResult,
@@ -17,6 +19,7 @@ from signals.base import (
     compute_sma,
     compute_avg_volume,
     compute_atr_from_list,
+    compute_rvol,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,6 +27,7 @@ logger = logging.getLogger(__name__)
 VOLUME_MULTIPLIER = 1.5
 MA_PERIOD = 20
 ORH_MINUTES = 5
+MAX_EXTENSION_PCT = 3.0  # max % above ORH to prevent chasing
 
 
 def check_breakout(
@@ -36,6 +40,7 @@ def check_breakout(
     config: dict | None = None,
     daily_lows: list[float] | None = None,
     daily_highs: list[float] | None = None,
+    minutes_since_open: int | None = None,
 ) -> SignalResult | None:
     """
     Evaluate breakout conditions for a ticker.
@@ -50,6 +55,8 @@ def check_breakout(
         config: optional app config (for overriding defaults)
         daily_lows: recent daily low prices (unused, kept for backward compat)
         daily_highs: recent daily high prices (used for ATR cap calculation)
+        minutes_since_open: minutes elapsed since 9:30 ET (for RVOL);
+            falls back to len(candles_1m) if not provided
 
     Returns:
         SignalResult if all conditions met, else None
@@ -58,6 +65,12 @@ def check_breakout(
     sig_cfg = config.get("signals", {}) if config else {}
     vol_mult = float(sig_cfg.get("breakout_volume_multiplier", VOLUME_MULTIPLIER))
     orh_min = int(sig_cfg.get("orh_minutes", ORH_MINUTES))
+    max_ext = float(sig_cfg.get("breakout_max_extension_pct", MAX_EXTENSION_PCT))
+
+    # Input validation — reject NaN/None/invalid prices
+    if current_price is None or not isinstance(current_price, (int, float)) or math.isnan(current_price) or current_price <= 0:
+        logger.debug("%s: invalid current_price %s", ticker, current_price)
+        return None
 
     if len(candles_1m) < orh_min:
         logger.debug("%s: not enough 1m candles to compute ORH (%d)", ticker, len(candles_1m))
@@ -71,7 +84,16 @@ def check_breakout(
         logger.debug("%s: price %.2f not above ORH %.2f", ticker, current_price, orh)
         return None
 
-    # 3. Price must be above the 20d MA
+    # 3. Extension guard — skip if price has run too far above ORH
+    extension_pct = (current_price - orh) / orh * 100
+    if extension_pct > max_ext:
+        logger.debug(
+            "%s: price %.2f is %.1f%% above ORH %.2f (max %.1f%%) — too extended",
+            ticker, current_price, extension_pct, orh, max_ext,
+        )
+        return None
+
+    # 4. Price must be above the 20d MA
     ma20 = compute_sma(daily_closes, MA_PERIOD)
     if ma20 is None:
         logger.debug("%s: insufficient data for 20d MA", ticker)
@@ -80,13 +102,14 @@ def check_breakout(
         logger.debug("%s: price %.2f below 20d MA %.2f", ticker, current_price, ma20)
         return None
 
-    # 4. Volume must be elevated (> 1.5x 20d avg daily volume)
+    # 5. Time-of-day-normalized RVOL must be elevated
     avg_vol = compute_avg_volume(daily_volumes, period=20)
-    vol_ratio = current_volume / avg_vol if avg_vol > 0 else 0.0
-    if vol_ratio < vol_mult:
+    elapsed = minutes_since_open if minutes_since_open is not None else len(candles_1m)
+    rvol = compute_rvol(current_volume, avg_vol, elapsed)
+    if rvol < vol_mult:
         logger.debug(
-            "%s: volume ratio %.2f below threshold %.1f",
-            ticker, vol_ratio, vol_mult,
+            "%s: RVOL %.2f below threshold %.1f (vol=%d, avg_daily=%d, elapsed=%dmin)",
+            ticker, rvol, vol_mult, current_volume, int(avg_vol), elapsed,
         )
         return None
 
@@ -106,8 +129,8 @@ def check_breakout(
         entry_price=current_price,
         stop_price=stop_price,
         orh=orh,
-        volume_ratio=round(vol_ratio, 2),
-        notes=f"price>{orh:.2f} ORH, above 20dMA {ma20:.2f}, vol_ratio={vol_ratio:.2f}x",
+        volume_ratio=round(rvol, 2),
+        notes=f"price>{orh:.2f} ORH (+{extension_pct:.1f}%), above 20dMA {ma20:.2f}, RVOL={rvol:.2f}x",
     )
-    logger.info("BREAKOUT SIGNAL: %s entry=%.2f stop=%.2f", ticker, current_price, stop_price)
+    logger.info("BREAKOUT SIGNAL: %s entry=%.2f stop=%.2f RVOL=%.2f", ticker, current_price, stop_price, rvol)
     return signal

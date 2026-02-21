@@ -102,6 +102,44 @@ def _get_entry_lock(ticker: str) -> threading.Lock:
         return _entry_locks[ticker]
 
 
+def _clear_daily_caches():
+    """Clear all daily bar caches. Called at start of each trading day."""
+    with _cache_lock:
+        _daily_bars_cache.clear()
+        _daily_closes_cache.clear()
+        _daily_volumes_cache.clear()
+        _daily_highs_cache.clear()
+        _daily_lows_cache.clear()
+    logger.info("Daily bar caches cleared")
+
+
+def _prefetch_daily_bars(client, tickers: list[str]):
+    """
+    Pre-fetch daily bars for watchlist tickers using yfinance batch download.
+
+    Populates _daily_bars_cache so on_bar callbacks use cached data instead of
+    making per-ticker REST calls to Alpaca (which are slow on IEX).
+    """
+    if not tickers:
+        return
+    logger.info("Pre-fetching daily bars for %d watchlist tickers...", len(tickers))
+    try:
+        bars_by_symbol = client.get_daily_bars_batch(tickers, days=130)
+        with _cache_lock:
+            for ticker, df in bars_by_symbol.items():
+                if df is None or df.empty:
+                    continue
+                bars_list = df.to_dict("records")
+                _daily_bars_cache[ticker] = bars_list
+                _daily_closes_cache[ticker] = [b["close"] for b in bars_list]
+                _daily_volumes_cache[ticker] = [int(b["volume"]) for b in bars_list]
+                _daily_highs_cache[ticker] = [b["high"] for b in bars_list]
+                _daily_lows_cache[ticker] = [b["low"] for b in bars_list]
+        logger.info("Pre-fetched daily bars for %d/%d tickers", len(bars_by_symbol), len(tickers))
+    except Exception as e:
+        logger.error("Daily bars pre-fetch failed: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Telegram notifier (simple async wrapper)
 # ---------------------------------------------------------------------------
@@ -206,6 +244,9 @@ def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=Non
     if notify:
         notify("PRE-MARKET SCAN STARTED")
 
+    # Clear stale caches from yesterday
+    _clear_daily_caches()
+
     today = datetime.now(ET).date()
     errors = []
     enabled = config.get("strategies", {}).get("enabled", ["episodic_pivot", "breakout", "parabolic_short"])
@@ -254,6 +295,11 @@ def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=Non
     for c in _watchlist:
         logger.info("  %s [%s]", c["ticker"], c["setup_type"])
 
+    # 6. Pre-fetch daily bars for all watchlist tickers (yfinance batch)
+    # This populates caches so on_bar callbacks don't need per-ticker REST calls
+    if _watchlist:
+        _prefetch_daily_bars(client, [c["ticker"] for c in _watchlist])
+
     # Send Telegram notifications
     if notify:
         notify(_format_watchlist_notification(_watchlist))
@@ -280,10 +326,9 @@ def job_subscribe_watchlist(
         """Called by AlpacaClient stream for every 1m bar update."""
         ticker = bar["ticker"]
         current_price = bar["close"]
-        current_volume_bar = bar["volume"]
 
-        # Fetch recent candles and daily history for signal evaluation
-        candles_1m = client.get_candles_1m(ticker, count=30)
+        # Fetch ALL of today's 1m candles (up to 390 for a full day)
+        candles_1m = client.get_candles_1m(ticker, count=390)
         with _cache_lock:
             daily_bars = _daily_bars_cache.get(ticker)
         if not daily_bars:
@@ -299,8 +344,14 @@ def job_subscribe_watchlist(
             _daily_highs_cache[ticker] = daily_highs
             _daily_lows_cache[ticker] = daily_lows
 
-        # Running today's cumulative volume (approximate from bars)
+        # Cumulative volume from all of today's 1m candles
         today_volume = sum(c["volume"] for c in candles_1m)
+
+        # Compute minutes since market open (9:30 ET)
+        from zoneinfo import ZoneInfo
+        et_now = datetime.now(ZoneInfo("America/New_York"))
+        market_open = et_now.replace(hour=9, minute=30, second=0, microsecond=0)
+        minutes_since_open = max(1, int((et_now - market_open).total_seconds() / 60))
 
         process_ticker_update(
             ticker=ticker,
@@ -317,6 +368,7 @@ def job_subscribe_watchlist(
             daily_lows=daily_lows,
             current_price=current_price,
             current_volume=today_volume,
+            minutes_since_open=minutes_since_open,
         )
 
     client.subscribe_quotes(tickers, callback=on_bar)
@@ -353,6 +405,7 @@ def process_ticker_update(
     daily_lows: list | None = None,
     current_price: float | None = None,
     current_volume: int | None = None,
+    minutes_since_open: int | None = None,
 ):
     """
     Called for each ticker on every 1m candle update (via Alpaca stream callback).
@@ -361,7 +414,7 @@ def process_ticker_update(
     # Use pre-fetched data when available (from stream callback)
     if candles_1m is None or current_price is None:
         try:
-            candles_1m = client.get_candles_1m(ticker, count=30)
+            candles_1m = client.get_candles_1m(ticker, count=390)
             bar = client.get_latest_bar(ticker)
             current_price = bar["last_price"]
             current_volume = bar["volume"]
@@ -384,6 +437,13 @@ def process_ticker_update(
     if current_volume is None:
         current_volume = 0
 
+    # Compute minutes_since_open if not provided
+    if minutes_since_open is None:
+        from zoneinfo import ZoneInfo
+        et_now = datetime.now(ZoneInfo("America/New_York"))
+        market_open = et_now.replace(hour=9, minute=30, second=0, microsecond=0)
+        minutes_since_open = max(1, int((et_now - market_open).total_seconds() / 60))
+
     # Always manage open positions (stop checks, partial exits) even when halted
     tracker.on_candle_update(ticker, current_price, candles_1m, daily_closes)
 
@@ -403,6 +463,7 @@ def process_ticker_update(
             ticker, watchlist_entry, candles_1m, daily_closes, daily_volumes,
             daily_highs, daily_lows,
             current_price, current_volume, config, client, tracker, risk, db_engine, notify,
+            minutes_since_open=minutes_since_open,
         )
 
 
@@ -410,6 +471,7 @@ def _evaluate_and_enter(
     ticker, watchlist_entry, candles_1m, daily_closes, daily_volumes,
     daily_highs, daily_lows,
     current_price, current_volume, config, client, tracker, risk, db_engine, notify,
+    minutes_since_open=None,
 ):
     """Inner entry logic — must be called while holding the per-ticker entry lock."""
     from db.models import Position, Order
@@ -465,6 +527,7 @@ def _evaluate_and_enter(
         current_volume=current_volume,
         gap_pct=watchlist_entry.get("gap_pct", 0.0),
         config=config,
+        minutes_since_open=minutes_since_open,
     )
 
     if sig is None:
@@ -584,10 +647,39 @@ def _await_fill_and_setup_stop(
     with get_session(db_engine) as session:
         order = session.query(Order).filter_by(id=order_db_id).first()
         if order:
-            order.status = "partial_fill" if is_partial else "filled"
+            order.status = "partially_filled" if is_partial else "filled"
             order.filled_qty = filled_qty
             order.filled_avg_price = actual_price
             session.commit()
+
+    # Create position record IMMEDIATELY so the position tracker can monitor it
+    # (stop_order_id will be updated after stop placement)
+    with get_session(db_engine) as session:
+        pos = Position(
+            ticker=ticker,
+            setup_type=signal.setup_type,
+            side=signal.side,
+            entry_order_id=order_db_id,
+            stop_order_id=None,  # will be set after stop placement
+            shares=filled_qty,
+            entry_price=actual_price,
+            stop_price=signal.stop_price,
+            initial_stop_price=signal.stop_price,
+        )
+        session.add(pos)
+        session.commit()
+        pos_db_id = pos.id
+
+    logger.info(
+        "Position opened: %s %s %d @ %.2f stop=%.2f (placing stop order...)",
+        signal.side, ticker, filled_qty, actual_price, signal.stop_price,
+    )
+    notify(
+        f"ENTRY FILLED: {ticker} ({signal.setup_type})\n"
+        f"Side: {signal.side.upper()} {filled_qty} shares @ ${actual_price:.2f}\n"
+        f"Stop: ${signal.stop_price:.2f} (placing broker stop...)\n"
+        f"Risk/share: ${signal.risk_per_share:.2f}"
+    )
 
     # Place GTC stop order with broker — retry up to 3 times
     stop_side = "sell" if signal.side == "long" else "buy_to_cover"
@@ -606,38 +698,19 @@ def _await_fill_and_setup_stop(
         logger.critical("UNPROTECTED POSITION: %s %d shares @ %.2f — stop order failed",
                         ticker, filled_qty, actual_price)
         notify(
-            f"🚨 CRITICAL — UNPROTECTED POSITION\n"
+            f"CRITICAL — UNPROTECTED POSITION\n"
             f"{ticker}: {filled_qty} shares @ ${actual_price:.2f}\n"
             f"Stop order FAILED after 3 attempts.\n"
             f"Manually place stop at ${signal.stop_price:.2f} NOW."
         )
-
-    # Create position record
-    with get_session(db_engine) as session:
-        pos = Position(
-            ticker=ticker,
-            setup_type=signal.setup_type,
-            side=signal.side,
-            entry_order_id=order_db_id,
-            stop_order_id=broker_stop_id,
-            shares=filled_qty,
-            entry_price=actual_price,
-            stop_price=signal.stop_price,
-            initial_stop_price=signal.stop_price,
-        )
-        session.add(pos)
-        session.commit()
-
-    logger.info(
-        "Position opened: %s %s %d @ %.2f stop=%.2f broker_stop=%s",
-        signal.side, ticker, filled_qty, actual_price, signal.stop_price, broker_stop_id,
-    )
-    notify(
-        f"ENTRY FILLED: {ticker} ({signal.setup_type})\n"
-        f"Side: {signal.side.upper()} {filled_qty} shares @ ${actual_price:.2f}\n"
-        f"Stop: ${signal.stop_price:.2f} (order id: {broker_stop_id or 'none'})\n"
-        f"Risk/share: ${signal.risk_per_share:.2f}"
-    )
+    else:
+        # Update position with the broker stop order ID
+        with get_session(db_engine) as session:
+            pos = session.query(Position).filter_by(id=pos_db_id).first()
+            if pos:
+                pos.stop_order_id = broker_stop_id
+                session.commit()
+        logger.info("Stop order placed for %s: %s", ticker, broker_stop_id)
 
 
 def _execute_entry(ticker, signal, shares, client, db_engine, notify):
@@ -730,12 +803,7 @@ def job_eod_tasks(
     except Exception as e:
         logger.warning("Failed to expire active entries at EOD: %s", e)
 
-    # Pass a snapshot of the cache to avoid race with the stream callback thread
-    with _cache_lock:
-        closes_snapshot = {k: list(v) for k, v in _daily_closes_cache.items()}
-    tracker.run_eod_tasks(closes_snapshot)
-
-    # Fetch current prices for unrealized P&L calculation
+    # Fetch current prices from broker — used both for today's close proxy and P&L
     current_prices = {}
     try:
         broker_positions = client.get_open_positions()
@@ -744,6 +812,15 @@ def job_eod_tasks(
                 current_prices[bp["symbol"]] = bp["current_price"]
     except Exception as e:
         logger.warning("Could not fetch broker positions for P&L: %s", e)
+
+    # Pass a snapshot of the cache with today's close appended from broker prices
+    # so the trailing MA check uses today's actual close (not yesterday's)
+    with _cache_lock:
+        closes_snapshot = {k: list(v) for k, v in _daily_closes_cache.items()}
+    for ticker, price in current_prices.items():
+        if ticker in closes_snapshot:
+            closes_snapshot[ticker].append(price)
+    tracker.run_eod_tasks(closes_snapshot)
 
     # Compute daily P&L
     portfolio_value = client.get_portfolio_value()
@@ -947,6 +1024,80 @@ def _write_status():
 # Startup safety checks
 # ---------------------------------------------------------------------------
 
+def job_reconcile_positions(client, db_engine, notify):
+    """
+    Periodic reconciliation (every 5 min during market hours).
+
+    Detects when GTC stop orders fill at the broker without our knowledge.
+    The DB doesn't learn about broker stop fills unless we poll for them.
+    """
+    from db.models import Position
+
+    if not client.is_market_open():
+        return
+
+    with get_session(db_engine) as session:
+        open_positions = session.query(Position).filter_by(is_open=True).all()
+        if not open_positions:
+            return
+
+        for pos in open_positions:
+            # Check if the GTC stop order has filled at the broker
+            if not pos.stop_order_id:
+                continue
+            try:
+                info = client.get_order_status(pos.stop_order_id)
+            except Exception as e:
+                logger.warning("Reconcile: failed to check stop order for %s: %s", pos.ticker, e)
+                continue
+
+            status = info.get("status", "")
+            if status == "filled":
+                fill_price = info.get("filled_avg_price", pos.stop_price)
+                filled_qty = info.get("filled_qty", 0)
+                logger.warning(
+                    "RECONCILE: Stop order for %s filled at broker (price=%.2f qty=%d) — closing in DB",
+                    pos.ticker, fill_price, filled_qty,
+                )
+
+                remaining = pos.shares - pos.partial_exit_shares
+                if pos.side == "long":
+                    pnl = remaining * (fill_price - pos.entry_price)
+                else:
+                    pnl = remaining * (pos.entry_price - fill_price)
+
+                # Include partial exit P&L
+                if pos.partial_exit_done and pos.partial_exit_price is not None:
+                    if pos.side == "long":
+                        pnl += pos.partial_exit_shares * (pos.partial_exit_price - pos.entry_price)
+                    else:
+                        pnl += pos.partial_exit_shares * (pos.entry_price - pos.partial_exit_price)
+
+                pos.exit_price = fill_price
+                pos.exit_reason = "stop_hit"
+                pos.realized_pnl = pnl
+                pos.is_open = False
+                pos.closed_at = datetime.utcnow()
+                session.commit()
+
+                sign = "+" if pnl >= 0 else ""
+                notify(
+                    f"STOP FILLED (reconciled): {pos.ticker}\n"
+                    f"Exit: ${fill_price:.2f} | P&L: {sign}${pnl:.2f}"
+                )
+            elif status in ("cancelled", "expired", "rejected"):
+                logger.warning(
+                    "RECONCILE: Stop order for %s is %s at broker — position may be unprotected",
+                    pos.ticker, status,
+                )
+                pos.stop_order_id = None
+                session.commit()
+                notify(
+                    f"RECONCILE ALERT: Stop for {pos.ticker} is {status} at broker.\n"
+                    f"Position may be UNPROTECTED. Check manually."
+                )
+
+
 def _reconcile_on_startup(client, db_engine, notify):
     """
     Run at startup to detect unsafe states left by a previous crash:
@@ -1104,6 +1255,16 @@ def main():
         CronTrigger(hour=15, minute=55, timezone=ET),
         args=[config, client, tracker, db_engine, notify],
         id="eod_tasks",
+        replace_existing=True,
+    )
+
+    # Reconcile broker positions every 5 min during market hours
+    scheduler.add_job(
+        job_reconcile_positions,
+        "interval",
+        minutes=5,
+        args=[client, db_engine, notify],
+        id="reconcile_positions",
         replace_existing=True,
     )
 

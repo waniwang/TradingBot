@@ -8,7 +8,7 @@ import pytest
 from signals import evaluate_signal, STRATEGY_REGISTRY
 from signals.base import (
     compute_orh, compute_orb_low, compute_vwap, compute_sma,
-    compute_atr_from_list,
+    compute_atr_from_list, compute_rvol, _cumulative_volume_fraction,
 )
 from signals.breakout import check_breakout
 from signals.episodic_pivot import check_episodic_pivot
@@ -176,10 +176,12 @@ class TestBreakoutSignal:
         candles_1m, daily_closes, daily_volumes, current_price, current_volume = (
             self._make_valid_inputs()
         )
-        current_volume = 500_000  # below 1.5x avg of 1M
+        # With RVOL: at 30 min mark, expected fraction ≈ 0.22
+        # avg_vol ≈ 1M, so expected_by_now ≈ 220k. Need RVOL < 1.5 → vol < 330k
+        current_volume = 200_000
         result = check_breakout(
             "AAPL", candles_1m, daily_closes, daily_volumes,
-            current_price, current_volume
+            current_price, current_volume, minutes_since_open=30,
         )
         assert result is None
 
@@ -644,3 +646,263 @@ class TestEpisodicPivotAtrCap:
         assert result is not None
         lod = min(c["low"] for c in candles_1m)
         assert result.stop_price == lod
+
+
+# ---------------------------------------------------------------------------
+# RVOL (time-of-day relative volume)
+# ---------------------------------------------------------------------------
+
+class TestCumulativeVolumeFraction:
+    def test_at_open(self):
+        assert _cumulative_volume_fraction(0) == 0.0
+
+    def test_at_close(self):
+        assert _cumulative_volume_fraction(390) == 1.0
+
+    def test_after_close(self):
+        assert _cumulative_volume_fraction(400) == 1.0
+
+    def test_at_5_minutes(self):
+        assert _cumulative_volume_fraction(5) == pytest.approx(0.065, rel=1e-3)
+
+    def test_at_30_minutes(self):
+        assert _cumulative_volume_fraction(30) == pytest.approx(0.22, rel=1e-3)
+
+    def test_monotonically_increasing(self):
+        prev = 0.0
+        for m in range(1, 391):
+            cur = _cumulative_volume_fraction(m)
+            assert cur >= prev, f"fraction decreased at minute {m}"
+            prev = cur
+
+    def test_interpolation_midpoints(self):
+        # 10 min is between anchors (5, 0.065) and (15, 0.14)
+        f10 = _cumulative_volume_fraction(10)
+        assert 0.065 < f10 < 0.14
+
+
+class TestComputeRvol:
+    def test_basic(self):
+        # At 5 min in, 6.5% of daily volume expected
+        # If today_volume equals expected → RVOL = 1.0
+        avg_daily = 1_000_000
+        expected_at_5min = avg_daily * 0.065
+        rvol = compute_rvol(int(expected_at_5min), avg_daily, 5)
+        assert rvol == pytest.approx(1.0, rel=0.01)
+
+    def test_high_rvol_at_open(self):
+        # 200k volume in first 5 min vs 1M daily avg → expected 65k → RVOL ≈ 3.08
+        rvol = compute_rvol(200_000, 1_000_000, 5)
+        assert rvol == pytest.approx(3.08, rel=0.05)
+
+    def test_low_rvol_midday(self):
+        # 300k at 120 min mark (50% expected) → expected 500k → RVOL = 0.6
+        rvol = compute_rvol(300_000, 1_000_000, 120)
+        assert rvol == pytest.approx(0.6, rel=0.01)
+
+    def test_zero_avg_volume(self):
+        assert compute_rvol(100_000, 0, 30) == 0.0
+
+    def test_zero_minutes(self):
+        assert compute_rvol(100_000, 1_000_000, 0) == 0.0
+
+    def test_negative_minutes(self):
+        assert compute_rvol(100_000, 1_000_000, -5) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Breakout extension guard
+# ---------------------------------------------------------------------------
+
+class TestBreakoutExtensionGuard:
+    def _make_valid_inputs(self):
+        candles_1m = make_candles(30, base_price=50.0, step=0.10)
+        orh = compute_orh(candles_1m, n_minutes=5)
+        daily_closes = make_daily_closes(25, start=45.0, drift=0.2)
+        daily_volumes = make_daily_volumes(25, base=1_000_000)
+        current_volume = 2_500_000
+        return candles_1m, daily_closes, daily_volumes, orh, current_volume
+
+    def test_signal_fires_within_extension(self):
+        candles_1m, daily_closes, daily_volumes, orh, current_volume = (
+            self._make_valid_inputs()
+        )
+        # 0.5% above ORH — well within 3% default
+        current_price = orh * 1.005
+        result = check_breakout(
+            "AAPL", candles_1m, daily_closes, daily_volumes,
+            current_price, current_volume,
+        )
+        assert result is not None
+
+    def test_no_signal_when_too_extended(self):
+        candles_1m, daily_closes, daily_volumes, orh, current_volume = (
+            self._make_valid_inputs()
+        )
+        # 5% above ORH — beyond 3% default
+        current_price = orh * 1.05
+        result = check_breakout(
+            "AAPL", candles_1m, daily_closes, daily_volumes,
+            current_price, current_volume,
+        )
+        assert result is None
+
+    def test_config_overrides_max_extension(self):
+        candles_1m, daily_closes, daily_volumes, orh, current_volume = (
+            self._make_valid_inputs()
+        )
+        current_price = orh * 1.05  # 5% above ORH
+        # Raise limit to 6% — should now fire
+        config = {"signals": {"breakout_max_extension_pct": 6.0}}
+        result = check_breakout(
+            "AAPL", candles_1m, daily_closes, daily_volumes,
+            current_price, current_volume, config=config,
+        )
+        assert result is not None
+
+    def test_extension_pct_in_notes(self):
+        candles_1m, daily_closes, daily_volumes, orh, current_volume = (
+            self._make_valid_inputs()
+        )
+        current_price = orh * 1.01
+        result = check_breakout(
+            "AAPL", candles_1m, daily_closes, daily_volumes,
+            current_price, current_volume,
+        )
+        assert result is not None
+        assert "ORH" in result.notes
+        assert "RVOL" in result.notes
+
+
+# ---------------------------------------------------------------------------
+# EP extension guard
+# ---------------------------------------------------------------------------
+
+class TestEPExtensionGuard:
+    def _make_valid_inputs(self):
+        candles_1m = make_candles(30, base_price=115.0, step=0.15)
+        orh = compute_orh(candles_1m, n_minutes=5)
+        daily_volumes = make_daily_volumes(25, base=500_000)
+        current_volume = 2_000_000
+        gap_pct = 15.0
+        return candles_1m, daily_volumes, orh, current_volume, gap_pct
+
+    def test_signal_fires_within_extension(self):
+        candles_1m, daily_volumes, orh, current_volume, gap_pct = (
+            self._make_valid_inputs()
+        )
+        # 0.4% above ORH — within 5% EP default
+        current_price = orh + 0.50
+        result = check_episodic_pivot(
+            "NVDA", candles_1m, daily_volumes,
+            current_price, current_volume, gap_pct,
+        )
+        assert result is not None
+
+    def test_no_signal_when_too_extended(self):
+        candles_1m, daily_volumes, orh, current_volume, gap_pct = (
+            self._make_valid_inputs()
+        )
+        # 8% above ORH — beyond 5% EP default
+        current_price = orh * 1.08
+        result = check_episodic_pivot(
+            "NVDA", candles_1m, daily_volumes,
+            current_price, current_volume, gap_pct,
+        )
+        assert result is None
+
+    def test_config_overrides_max_extension(self):
+        candles_1m, daily_volumes, orh, current_volume, gap_pct = (
+            self._make_valid_inputs()
+        )
+        current_price = orh * 1.08  # 8% above ORH
+        # Raise EP limit to 10%
+        config = {"signals": {"ep_max_extension_pct": 10.0}}
+        result = check_episodic_pivot(
+            "NVDA", candles_1m, daily_volumes,
+            current_price, current_volume, gap_pct, config=config,
+        )
+        assert result is not None
+
+    def test_ep_rvol_in_notes(self):
+        candles_1m, daily_volumes, orh, current_volume, gap_pct = (
+            self._make_valid_inputs()
+        )
+        current_price = orh + 0.50
+        result = check_episodic_pivot(
+            "NVDA", candles_1m, daily_volumes,
+            current_price, current_volume, gap_pct,
+        )
+        assert result is not None
+        assert "RVOL" in result.notes
+
+
+# ---------------------------------------------------------------------------
+# RVOL integration with signals
+# ---------------------------------------------------------------------------
+
+class TestBreakoutRvolIntegration:
+    def test_high_rvol_early_morning_fires(self):
+        """At 5 min after open with strong volume, signal should fire."""
+        candles_1m = make_candles(10, base_price=50.0, step=0.10)
+        orh = compute_orh(candles_1m, n_minutes=5)
+        daily_closes = make_daily_closes(25, start=45.0, drift=0.2)
+        daily_volumes = make_daily_volumes(25, base=1_000_000)
+
+        # 200k volume in 5 min → RVOL = 200k / (1M * 0.065) ≈ 3.08x > 1.5x
+        result = check_breakout(
+            "AAPL", candles_1m, daily_closes, daily_volumes,
+            current_price=orh + 0.20,
+            current_volume=200_000,
+            minutes_since_open=5,
+        )
+        assert result is not None
+        assert result.volume_ratio > 1.5
+
+    def test_low_rvol_early_morning_rejects(self):
+        """At 5 min after open with normal volume, signal should not fire."""
+        candles_1m = make_candles(10, base_price=50.0, step=0.10)
+        orh = compute_orh(candles_1m, n_minutes=5)
+        daily_closes = make_daily_closes(25, start=45.0, drift=0.2)
+        daily_volumes = make_daily_volumes(25, base=1_000_000)
+
+        # 50k volume in 5 min → RVOL = 50k / (1M * 0.065) ≈ 0.77x < 1.5x
+        result = check_breakout(
+            "AAPL", candles_1m, daily_closes, daily_volumes,
+            current_price=orh + 0.20,
+            current_volume=50_000,
+            minutes_since_open=5,
+        )
+        assert result is None
+
+
+class TestEPRvolIntegration:
+    def test_high_rvol_early_morning_fires(self):
+        candles_1m = make_candles(10, base_price=115.0, step=0.15)
+        orh = compute_orh(candles_1m, n_minutes=5)
+        daily_volumes = make_daily_volumes(25, base=500_000)
+
+        # 300k in 5 min → RVOL = 300k / (500k * 0.065) ≈ 9.2x > 2.0x
+        result = check_episodic_pivot(
+            "NVDA", candles_1m, daily_volumes,
+            current_price=orh + 0.50,
+            current_volume=300_000,
+            gap_pct=15.0,
+            minutes_since_open=5,
+        )
+        assert result is not None
+
+    def test_low_rvol_rejects(self):
+        candles_1m = make_candles(10, base_price=115.0, step=0.15)
+        orh = compute_orh(candles_1m, n_minutes=5)
+        daily_volumes = make_daily_volumes(25, base=500_000)
+
+        # 20k in 5 min → RVOL = 20k / (500k * 0.065) ≈ 0.62x < 2.0x
+        result = check_episodic_pivot(
+            "NVDA", candles_1m, daily_volumes,
+            current_price=orh + 0.50,
+            current_volume=20_000,
+            gap_pct=15.0,
+            minutes_since_open=5,
+        )
+        assert result is None

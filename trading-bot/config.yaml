@@ -9,7 +9,7 @@ alpaca:
 risk:
   risk_per_trade_pct: 1.0      # % of portfolio risked per trade
   max_positions: 4             # max concurrent open positions
-  max_position_pct: 10.0       # max single position as % of portfolio notional
+  max_position_pct: 15.0       # max single position as % of portfolio notional
   daily_loss_limit_pct: 3.0    # halt day if daily loss exceeds this %
   weekly_loss_limit_pct: 5.0   # halt week if weekly loss exceeds this %
 
@@ -27,8 +27,10 @@ signals:
   parabolic_min_gain_pct_largecap: 50.0    # large-cap (price > $50): min gain %
   parabolic_min_gain_pct_smallcap: 200.0   # small-cap (price < $20): min gain %
   parabolic_min_days: 3                    # min consecutive up days for parabolic
-  breakout_volume_multiplier: 1.5          # volume / 20d avg threshold for breakout
-  ep_volume_multiplier: 2.0               # volume / 20d avg threshold for EP
+  breakout_volume_multiplier: 1.5          # RVOL threshold for breakout (time-of-day normalized)
+  ep_volume_multiplier: 2.0               # RVOL threshold for EP (time-of-day normalized)
+  breakout_max_extension_pct: 3.0         # max % above ORH before skipping (anti-chase)
+  ep_max_extension_pct: 5.0              # max % above ORH for EP (gap stocks run more)
   orh_minutes: 5                           # opening range duration in minutes
   atr_period: 14                           # ATR calculation period
   consolidation_atr_ratio: 0.85            # ATR contraction ratio threshold

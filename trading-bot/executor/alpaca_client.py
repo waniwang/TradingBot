@@ -12,9 +12,11 @@ API docs:         https://docs.alpaca.markets
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
@@ -89,6 +91,7 @@ class AlpacaClient:
         self._watchdog_stop: "threading.Event | None" = None
 
         self._stream_callbacks: list[Callable] = []
+        self._callback_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="bar-cb")
 
     # ------------------------------------------------------------------
     # Connection
@@ -398,8 +401,9 @@ class AlpacaClient:
                 "close": float(bar.close),
                 "volume": int(bar.volume),
             }
+            loop = asyncio.get_event_loop()
             for cb in self._stream_callbacks:
-                cb(data)
+                loop.run_in_executor(self._callback_executor, cb, data)
 
         self._stream.subscribe_bars(_bar_handler, *tickers)
         self._stream_thread = threading.Thread(target=self._stream.run, daemon=True)
