@@ -188,6 +188,7 @@ def run_nightly_scan(
     config: dict,
     client,
     db_engine,
+    progress_cb=None,
 ) -> dict[str, Any]:
     """
     Orchestrate the nightly breakout watchlist update.
@@ -200,22 +201,44 @@ def run_nightly_scan(
 
     Returns summary dict: {new, updated, failed, ready, watching, aged_out}.
     """
-    # 1. Universe + momentum rank
+    # 1. Universe → liquidity filter → momentum rank
+    _progress = progress_cb or (lambda task="", detail="": None)
     try:
-        tickers_universe = client.get_tradable_universe(max_tickers=1500)
-        top_momentum = rank_by_momentum(tickers_universe, config, client, top_n=100)
+        _progress("Fetching universe")
+        all_tickers = client.get_tradable_universe()
+        universe_cfg = config.get("universe", {})
+
+        def _liquidity_progress(processed, total):
+            _progress("Filtering by liquidity", f"{processed} / {total} snapshots")
+
+        _progress("Filtering by liquidity (snapshots)")
+        filtered_tickers = client.filter_universe_by_liquidity(
+            all_tickers,
+            min_price=universe_cfg.get("min_price", 5.0),
+            min_volume=universe_cfg.get("min_volume", 500_000),
+            batch_size=universe_cfg.get("snapshot_batch_size", 200),
+            progress_cb=_liquidity_progress,
+        )
+        _progress("Ranking by momentum (yfinance)", f"{len(filtered_tickers)} tickers")
+        top_momentum = rank_by_momentum(filtered_tickers, config, client, top_n=100)
     except Exception as e:
         logger.error("Nightly scan: momentum rank failed: %s", e)
+        _progress()  # clear
         return {"error": str(e)}
+
+    universe_raw = len(all_tickers)
+    universe_filtered = len(filtered_tickers)
 
     momentum_tickers = [t["ticker"] for t in top_momentum]
     rs_by_ticker = {t["ticker"]: t.get("rs_composite", 0.0) for t in top_momentum}
 
     # 2. Fetch daily bars and analyze consolidation
+    _progress("Analyzing consolidation", f"{len(momentum_tickers)} tickers")
     try:
         bars_by_symbol = client.get_daily_bars_batch(momentum_tickers, days=90)
     except Exception as e:
         logger.error("Nightly scan: daily bars fetch failed: %s", e)
+        _progress()  # clear
         return {"error": str(e)}
 
     analyses = {}
@@ -236,10 +259,16 @@ def run_nightly_scan(
     # 4. Age out stale entries
     aged = _age_out_stale(db_engine)
     summary["aged_out"] = aged
+    summary["universe_raw"] = universe_raw
+    summary["universe_filtered"] = universe_filtered
+
+    _progress()  # clear progress
 
     logger.info(
-        "Nightly watchlist scan complete: new=%d updated=%d failed=%d "
+        "Nightly watchlist scan complete: universe=%d→%d new=%d updated=%d failed=%d "
         "ready=%d watching=%d aged_out=%d",
+        universe_raw,
+        universe_filtered,
         summary.get("new", 0),
         summary.get("updated", 0),
         summary.get("failed", 0),

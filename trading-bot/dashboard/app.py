@@ -182,14 +182,17 @@ def get_live_price(ticker: str) -> float | None:
 # ---------------------------------------------------------------------------
 
 PHASE_LABELS = {
-    "idle":          ("💤 Idle",          "—"),
-    "scanning":      ("🔍 Scanning",       "Running pre-market scan"),
-    "watchlist_ready": ("📋 Watchlist Ready", "Waiting for market open"),
-    "observing":     ("👁 Observing",      "Monitoring watchlist for signals"),
-    "trading":       ("⚡ Trading",        "Signal detected — managing order"),
-    "end_of_day":    ("🌙 End of Day",     "Running EOD tasks"),
-    "unknown":       ("❓ Unknown",        "Status file not found — is the bot running?"),
-    "error":         ("❌ Error",          "Could not read status file"),
+    "idle":            ("💤 Idle",            "Market closed"),
+    "nightly_scan":    ("🔍 Nightly Scan",    "Building breakout watchlist"),
+    "premarket_scan":  ("🔍 Pre-market Scan", "Finding EP gappers & promoting breakouts"),
+    "watchlist_ready": ("📋 Watchlist Ready",  "Waiting for market open"),
+    "observing":       ("👁 Observing",       "Monitoring watchlist for signals"),
+    "trading":         ("⚡ Trading",         "Signal detected — managing order"),
+    "end_of_day":      ("🌙 End of Day",      "Running EOD tasks"),
+    "unknown":         ("❓ Unknown",         "Status file not found — is the bot running?"),
+    "error":           ("❌ Error",           "Could not read status file"),
+    # Legacy — keep for backward compat with old bot_status.json
+    "scanning":        ("🔍 Scanning",        "Running scan"),
 }
 
 JOB_LABELS = {
@@ -272,14 +275,12 @@ def main():
         st.markdown("""
 | Time | Job | Description |
 |------|-----|-------------|
-| 5:00 PM | Nightly Scan | Analyze ~100 momentum stocks for consolidation patterns (breakout pipeline) |
+| 5:00 PM | Nightly Scan | Filter ~8K stocks by liquidity → rank by momentum → analyze top ~100 for consolidation (breakout pipeline) |
 | 6:00 AM | Premarket Scan | Find EP gappers, promote breakout candidates, prefetch daily bars |
 | 9:25 AM | Subscribe | Connect to Alpaca real-time 1m bars for all watchlist tickers |
 | 9:30 AM | Market Open | Stream-driven: evaluate signals on every 1m candle |
 | Every 5m | Reconcile | Poll broker for filled GTC stops, detect unprotected positions |
 | 3:55 PM | EOD Tasks | Trailing MA exits, daily P&L summary, reset halt flags |
-
-**Watchlist stages:** watching → ready → active → triggered/expired/failed
 """)
 
     # -----------------------------------------------------------------------
@@ -308,11 +309,17 @@ def main():
     c1.metric("Bot Status", running_badge,
               help="Green if heartbeat received within 2 minutes. The bot writes a heartbeat every 30 seconds.")
     c2.metric("Current Phase", phase_label, phase_desc,
-              help="idle=market closed | scanning=premarket scan running | watchlist_ready=candidates loaded | observing=monitoring for signals | end_of_day=running EOD tasks")
+              help="idle=market closed | nightly_scan=building breakout watchlist (5 PM) | premarket_scan=finding EP gappers (6 AM) | watchlist_ready=candidates loaded | observing=monitoring for signals | end_of_day=running EOD tasks")
     c3.metric("Next Job", next_job, next_time,
               help="The next scheduled job. Jobs run automatically via APScheduler in ET timezone.")
     c4.metric("In", countdown,
               help="Countdown to the next scheduled job.")
+
+    # Scan progress (shown during active scans)
+    progress = status.get("progress")
+    if progress and progress.get("task"):
+        detail = f" — {progress['detail']}" if progress.get("detail") else ""
+        st.caption(f"Scan progress: {progress['task']}{detail}")
 
     st.divider()
 
@@ -430,7 +437,7 @@ def main():
         st.markdown("""
 | Column | Meaning |
 |--------|---------|
-| Stage | ACTIVE = tradeable today. WATCHING = consolidating, not ready yet |
+| Stage | Lifecycle: watching → ready → active → triggered/expired/failed. ACTIVE = tradeable today, WATCHING = consolidating, not ready yet |
 | Gap % | Premarket gap from prior close (EP only, need ≥10%) |
 | Pre-Mkt Vol | Premarket relative volume vs 20-day average |
 | Consol Days | Days in consolidation range (breakout: 10-40 days ideal) |
@@ -443,6 +450,11 @@ def main():
         active_rows = (
             session.query(Watchlist)
             .filter_by(stage="active")
+            .all()
+        )
+        ready_rows = (
+            session.query(Watchlist)
+            .filter_by(stage="ready")
             .all()
         )
         watching_rows = (
@@ -489,10 +501,31 @@ def main():
             r["Quality"] = "—"
         display_rows.append(r)
 
-    # Watching candidates (breakout pipeline, not yet ready)
+    # Ready candidates (breakout: all criteria met, will promote to active on next trading day)
     active_tickers = {row.ticker for row in active_rows}
-    for row in watching_rows:
+    for row in ready_rows:
         if row.ticker in active_tickers:
+            continue
+        meta = row.meta
+        atr = meta.get("atr_ratio")
+        rs = meta.get("rs_composite")
+        display_rows.append({
+            "Ticker": row.ticker,
+            "Setup": "Breakout",
+            "Stage": "READY",
+            "Gap %": "—",
+            "Pre-Mkt Vol": "—",
+            "Consol Days": meta.get("consolidation_days", "—"),
+            "ATR Ratio": f"{atr:.3f}" if atr else "—",
+            "RS Score": f"{rs:.1f}" if rs else "—",
+            "Quality": _quality_from_meta(meta),
+            "_sort": 0.5,
+        })
+
+    # Watching candidates (breakout pipeline, not yet ready)
+    shown_tickers = active_tickers | {row.ticker for row in ready_rows}
+    for row in watching_rows:
+        if row.ticker in shown_tickers:
             continue
         meta = row.meta
         atr = meta.get("atr_ratio")
@@ -514,14 +547,16 @@ def main():
         st.info("No candidates yet — premarket scan runs at 6:00 AM ET, nightly scan at 5:00 PM ET.")
     else:
         n_active = sum(1 for r in display_rows if r["_sort"] == 0)
+        n_ready = sum(1 for r in display_rows if r["_sort"] == 0.5)
         n_watching = sum(1 for r in display_rows if r["_sort"] == 1)
-        wm1, wm2 = st.columns(2)
+        wm1, wm2, wm3 = st.columns(3)
         wm1.metric("Active", n_active)
-        wm2.metric("Watching", n_watching)
+        wm2.metric("Ready", n_ready)
+        wm3.metric("Watching", n_watching)
 
         mdf = pd.DataFrame(display_rows).drop(columns=["_sort"])
 
-        STAGE_COLORS = {"ACTIVE": "#00c853", "WATCHING": "#ffd600"}
+        STAGE_COLORS = {"ACTIVE": "#00c853", "READY": "#2196f3", "WATCHING": "#ffd600"}
 
         def _style_stage(val):
             color = STAGE_COLORS.get(val, "")

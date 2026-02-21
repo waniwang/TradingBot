@@ -9,7 +9,9 @@ Deploy the trading bot code to the Linode server.
 
 ## Steps
 
-1. First, run `cd /Users/hanlin/Developer/Trading/trading-bot && ./bot.sh deploy` to deploy
+1. **CRITICAL: You MUST cd first.** Run `cd /Users/hanlin/Developer/Trading/trading-bot && ./bot.sh deploy`
+   - `bot.sh` uses `rsync ./` (current directory), so it MUST run from inside `trading-bot/`
+   - Running from the repo root will sync the wrong directory and the deploy will silently fail
    - This rsyncs code (excludes .venv, .db, .log, .env), runs DB migrations, and restarts both services
    - It will warn if market is currently open (9:30-4:00 PM ET) and ask for confirmation
 2. After deploy completes, run `./bot.sh status` to verify both services are active and heartbeat is fresh

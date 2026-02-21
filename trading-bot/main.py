@@ -239,7 +239,7 @@ def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=Non
     if not force and not is_trading_day(client):
         logger.info("Pre-market scan skipped — not a trading day")
         return
-    _set_phase("scanning")
+    _set_phase("premarket_scan")
     logger.info("=== PRE-MARKET SCAN START ===")
     if notify:
         notify("PRE-MARKET SCAN STARTED")
@@ -259,6 +259,7 @@ def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=Non
 
     # 2. EP gappers — persist to DB as active
     if "episodic_pivot" in enabled:
+        _set_progress("Scanning EP gappers")
         try:
             ep_candidates = get_premarket_gappers(config, client)
             logger.info("EP candidates: %d", len(ep_candidates))
@@ -269,6 +270,7 @@ def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=Non
 
     # 3. Breakout: promote ready -> active for today
     if "breakout" in enabled:
+        _set_progress("Promoting breakout candidates")
         try:
             promoted = promote_ready_to_active(today, db_engine)
             logger.info("Breakout candidates promoted to active: %d", promoted)
@@ -298,8 +300,10 @@ def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=Non
     # 6. Pre-fetch daily bars for all watchlist tickers (yfinance batch)
     # This populates caches so on_bar callbacks don't need per-ticker REST calls
     if _watchlist:
+        _set_progress("Prefetching daily bars", f"{len(_watchlist)} tickers")
         _prefetch_daily_bars(client, [c["ticker"] for c in _watchlist])
 
+    _set_progress()  # clear progress
     # Send Telegram notifications
     if notify:
         notify(_format_watchlist_notification(_watchlist))
@@ -838,6 +842,17 @@ def job_eod_tasks(
     notify(summary)
     logger.info(summary)
 
+    # Clean up yfinance cache (SQLite DBs in ~/.cache/py-yfinance/)
+    import shutil
+    yf_cache_dir = Path.home() / ".cache" / "py-yfinance"
+    if yf_cache_dir.exists():
+        try:
+            shutil.rmtree(yf_cache_dir)
+            yf_cache_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("Cleaned yfinance cache: %s", yf_cache_dir)
+        except Exception as e:
+            logger.warning("Failed to clean yfinance cache: %s", e)
+
     # Reset daily halt for next day
     tracker.set_daily_halt(False)
     # Reset weekly halt on Friday EOD (new week starts Monday)
@@ -849,30 +864,38 @@ def job_eod_tasks(
     _set_phase("idle")
 
 
-def job_nightly_watchlist_scan(config: dict, client: AlpacaClient, db_engine, notify):
+def job_nightly_watchlist_scan(config: dict, client: AlpacaClient, db_engine, notify, force: bool = False):
     """5:00 PM ET — run heavy breakout watchlist scan and persist to DB."""
-    if not is_trading_day(client):
+    if not force and not is_trading_day(client):
         logger.info("Nightly watchlist scan skipped — not a trading day")
         return
+    _set_phase("nightly_scan")
     logger.info("=== NIGHTLY WATCHLIST SCAN START ===")
     if notify:
         notify("NIGHTLY WATCHLIST SCAN STARTED")
 
     try:
-        summary = run_nightly_scan(config, client, db_engine)
+        summary = run_nightly_scan(config, client, db_engine, progress_cb=_set_progress)
     except Exception as e:
         logger.error("Nightly watchlist scan failed: %s", e)
         if notify:
             notify(f"NIGHTLY WATCHLIST SCAN FAILED: {e}")
+        _set_phase("idle")
+        _set_progress()
         return
 
     if "error" in summary:
         if notify:
             notify(f"NIGHTLY WATCHLIST SCAN ERROR: {summary['error']}")
+        _set_phase("idle")
+        _set_progress()
         return
 
+    universe_raw = summary.get('universe_raw', '?')
+    universe_filtered = summary.get('universe_filtered', '?')
     msg = (
         f"NIGHTLY WATCHLIST SCAN DONE\n"
+        f"Universe: {universe_raw} → {universe_filtered} (liquidity filter)\n"
         f"Ready: {summary.get('ready', 0)} | Watching: {summary.get('watching', 0)}\n"
         f"New: {summary.get('new', 0)} | Updated: {summary.get('updated', 0)}\n"
         f"Failed: {summary.get('failed', 0)} | Aged out: {summary.get('aged_out', 0)}"
@@ -880,6 +903,8 @@ def job_nightly_watchlist_scan(config: dict, client: AlpacaClient, db_engine, no
     logger.info(msg)
     if notify:
         notify(msg)
+    _set_phase("idle")
+    _set_progress()  # clear progress
 
 
 # ---------------------------------------------------------------------------
@@ -936,12 +961,22 @@ def _compute_current_weekly_pnl(db_engine) -> float:
 # ---------------------------------------------------------------------------
 
 _current_phase = "idle"
+_current_progress: dict = {}  # {"task": "...", "detail": "..."}
 _scheduler_ref = None
 
 
 def _set_phase(phase: str):
     global _current_phase
     _current_phase = phase
+
+
+def _set_progress(task: str = "", detail: str = ""):
+    """Update the current scan progress (shown on dashboard)."""
+    global _current_progress
+    if task:
+        _current_progress = {"task": task, "detail": detail}
+    else:
+        _current_progress = {}
 
 
 TRIGGER_FILE = Path("trigger_scan")
@@ -976,6 +1011,7 @@ def _check_trigger():
         t = threading.Thread(
             target=job_nightly_watchlist_scan,
             args=[args["config"], args["client"], args["db_engine"], args["notify"]],
+            kwargs={"force": True},
             daemon=True,
         )
         t.start()
@@ -1007,6 +1043,8 @@ def _write_status():
         "next_job": next_job_name,
         "next_job_time": next_job_time,
     }
+    if _current_progress:
+        status["progress"] = _current_progress
     try:
         fd, tmp_path = tempfile.mkstemp(dir=".", suffix=".tmp")
         with os.fdopen(fd, "w") as f:

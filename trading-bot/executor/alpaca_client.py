@@ -600,11 +600,12 @@ class AlpacaClient:
             logger.error("get_snapshots failed: %s", e)
             return {}
 
-    def get_tradable_universe(self, max_tickers: int = 1500) -> list[str]:
+    def get_tradable_universe(self) -> list[str]:
         """
-        Get a broad list of tradable US equity symbols from Alpaca.
+        Get ALL tradable US equity symbols from Alpaca.
 
         Filters: active, tradable, NYSE/NASDAQ, alpha-only symbols <= 5 chars.
+        Returns ~8K+ symbols (no limit).
         """
         if not ALPACA_AVAILABLE:
             return []
@@ -622,13 +623,73 @@ class AlpacaClient:
                     and a.symbol.isalpha()
                 ):
                     tickers.append(a.symbol)
-                    if len(tickers) >= max_tickers:
-                        break
             logger.info("Tradable universe: %d tickers", len(tickers))
             return tickers
         except Exception as e:
             logger.error("get_tradable_universe failed: %s", e)
             return []
+
+    def filter_universe_by_liquidity(
+        self,
+        tickers: list[str],
+        min_price: float = 5.0,
+        min_volume: int = 100_000,
+        batch_size: int = 200,
+        progress_cb=None,
+    ) -> list[str]:
+        """
+        Filter tickers by price and volume using Alpaca snapshots.
+
+        Args:
+            tickers: full ticker list from get_tradable_universe()
+            min_price: minimum latest price
+            min_volume: minimum daily volume
+            batch_size: tickers per snapshot API call
+            progress_cb: optional callback(processed, total) for progress reporting
+
+        Returns:
+            Qualifying tickers sorted by volume descending.
+            Falls back to unfiltered input if all snapshot calls fail.
+        """
+        if not tickers:
+            return []
+
+        qualified = []  # list of (symbol, volume) tuples
+        total = len(tickers)
+        processed = 0
+        any_success = False
+
+        for i in range(0, total, batch_size):
+            batch = tickers[i : i + batch_size]
+            try:
+                snapshots = self.get_snapshots(batch)
+                any_success = True
+                for sym, snap in snapshots.items():
+                    price = snap.get("latest_price", 0)
+                    volume = snap.get("daily_volume", 0)
+                    if price >= min_price and volume >= min_volume:
+                        qualified.append((sym, volume))
+            except Exception as e:
+                logger.warning("filter_universe_by_liquidity batch %d failed: %s", i, e)
+
+            processed += len(batch)
+            if progress_cb:
+                progress_cb(processed, total)
+
+        if not any_success:
+            logger.warning(
+                "All snapshot batches failed — returning unfiltered universe (%d tickers)", total
+            )
+            return tickers
+
+        # Sort by volume descending
+        qualified.sort(key=lambda x: x[1], reverse=True)
+        result = [sym for sym, _ in qualified]
+        logger.info(
+            "Liquidity filter: %d → %d tickers (min_price=%.1f, min_volume=%d)",
+            total, len(result), min_price, min_volume,
+        )
+        return result
 
     def get_daily_bars_batch(
         self, tickers: list[str], days: int = 130, batch_size: int = 500
