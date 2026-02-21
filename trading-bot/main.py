@@ -892,10 +892,10 @@ def job_nightly_watchlist_scan(config: dict, client: AlpacaClient, db_engine, no
         return
 
     universe_raw = summary.get('universe_raw', '?')
-    universe_filtered = summary.get('universe_filtered', '?')
+    momentum_top = summary.get('momentum_top', '?')
     msg = (
         f"NIGHTLY WATCHLIST SCAN DONE\n"
-        f"Universe: {universe_raw} → {universe_filtered} (liquidity filter)\n"
+        f"Universe: {universe_raw} → {momentum_top} (momentum top)\n"
         f"Ready: {summary.get('ready', 0)} | Watching: {summary.get('watching', 0)}\n"
         f"New: {summary.get('new', 0)} | Updated: {summary.get('updated', 0)}\n"
         f"Failed: {summary.get('failed', 0)} | Aged out: {summary.get('aged_out', 0)}"

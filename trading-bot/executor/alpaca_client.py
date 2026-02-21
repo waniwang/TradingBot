@@ -692,7 +692,8 @@ class AlpacaClient:
         return result
 
     def get_daily_bars_batch(
-        self, tickers: list[str], days: int = 130, batch_size: int = 500
+        self, tickers: list[str], days: int = 130, batch_size: int = 500,
+        progress_cb=None,
     ) -> dict[str, pd.DataFrame]:
         """
         Fetch daily OHLCV bars for multiple symbols using yfinance.
@@ -762,6 +763,9 @@ class AlpacaClient:
                             continue
             except Exception as e:
                 logger.warning("get_daily_bars_batch failed for batch %d: %s", i, e)
+
+            if progress_cb:
+                progress_cb(min(i + batch_size, len(tickers)), len(tickers))
 
         logger.info("Fetched daily bars for %d/%d tickers", len(result), len(tickers))
         return result

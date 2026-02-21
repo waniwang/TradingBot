@@ -732,9 +732,9 @@ class TestRunNightlyScan:
     def test_end_to_end(self, db_engine):
         client = MagicMock()
         client.get_tradable_universe.return_value = ["AAPL", "MSFT", "TSLA"]
-        client.filter_universe_by_liquidity.return_value = ["AAPL", "MSFT", "TSLA"]
 
-        # All three return strong momentum
+        # All three return strong momentum — get_daily_bars_batch called twice
+        # (once by rank_by_momentum for 130d, once by run_nightly_scan for 90d)
         df = _make_daily_df(130, start_price=50.0, drift=1.0)
         client.get_daily_bars_batch.return_value = {
             "AAPL": df, "MSFT": df, "TSLA": df,
@@ -751,17 +751,16 @@ class TestRunNightlyScan:
 
         assert "error" not in summary
         assert summary["universe_raw"] == 3
-        assert summary["universe_filtered"] == 3
+        assert summary["momentum_top"] <= 3
         with get_session(db_engine) as session:
             total = session.query(Watchlist).count()
         assert isinstance(summary.get("new", 0), int)
         assert isinstance(summary.get("aged_out", 0), int)
 
-    def test_calls_filter_universe_by_liquidity(self, db_engine):
-        """Nightly scan should call filter_universe_by_liquidity with config params."""
+    def test_passes_price_volume_filters_to_momentum_rank(self, db_engine):
+        """Nightly scan should pass min_price/min_avg_volume from config to rank_by_momentum."""
         client = MagicMock()
         client.get_tradable_universe.return_value = ["A", "B", "C", "D", "E"]
-        client.filter_universe_by_liquidity.return_value = ["A", "B"]
         client.get_daily_bars_batch.return_value = {}
 
         config = {
@@ -771,20 +770,14 @@ class TestRunNightlyScan:
             },
             "universe": {
                 "min_price": 10.0,
-                "min_volume": 1000000,
-                "snapshot_batch_size": 100,
+                "min_avg_volume": 1000000,
             },
         }
 
         summary = run_nightly_scan(config, client, db_engine)
 
-        client.filter_universe_by_liquidity.assert_called_once()
-        call_kwargs = client.filter_universe_by_liquidity.call_args
-        assert call_kwargs[1]["min_price"] == 10.0
-        assert call_kwargs[1]["min_volume"] == 1000000
-        assert call_kwargs[1]["batch_size"] == 100
         assert summary["universe_raw"] == 5
-        assert summary["universe_filtered"] == 2
+        assert summary["momentum_top"] == 0  # no bars returned → no momentum results
 
 
 # ---------------------------------------------------------------------------

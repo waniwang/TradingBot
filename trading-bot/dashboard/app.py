@@ -275,7 +275,7 @@ def main():
         st.markdown("""
 | Time | Job | Description |
 |------|-----|-------------|
-| 5:00 PM | Nightly Scan | Filter ~8K stocks by liquidity → rank by momentum → analyze top ~100 for consolidation (breakout pipeline) |
+| 5:00 PM | Nightly Scan | Rank ~8K stocks by momentum (yfinance, filters by price/volume) → analyze top 100 for consolidation (breakout pipeline) |
 | 6:00 AM | Premarket Scan | Find EP gappers, promote breakout candidates, prefetch daily bars |
 | 9:25 AM | Subscribe | Connect to Alpaca real-time 1m bars for all watchlist tickers |
 | 9:30 AM | Market Open | Stream-driven: evaluate signals on every 1m candle |

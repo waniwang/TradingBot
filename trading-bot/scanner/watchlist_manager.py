@@ -201,33 +201,29 @@ def run_nightly_scan(
 
     Returns summary dict: {new, updated, failed, ready, watching, aged_out}.
     """
-    # 1. Universe → liquidity filter → momentum rank
+    # 1. Universe → momentum rank (with price/volume filtering from yfinance data)
     _progress = progress_cb or (lambda task="", detail="": None)
     try:
         _progress("Fetching universe")
         all_tickers = client.get_tradable_universe()
         universe_cfg = config.get("universe", {})
 
-        def _liquidity_progress(processed, total):
-            _progress("Filtering by liquidity", f"{processed} / {total} snapshots")
+        def _dl_progress(processed, total):
+            _progress("Downloading daily bars (yfinance)", f"{processed} / {total} tickers")
 
-        _progress("Filtering by liquidity (snapshots)")
-        filtered_tickers = client.filter_universe_by_liquidity(
-            all_tickers,
+        _progress("Downloading daily bars (yfinance)", f"0 / {len(all_tickers)} tickers")
+        top_momentum = rank_by_momentum(
+            all_tickers, config, client, top_n=100,
             min_price=universe_cfg.get("min_price", 5.0),
-            min_volume=universe_cfg.get("min_volume", 500_000),
-            batch_size=universe_cfg.get("snapshot_batch_size", 200),
-            progress_cb=_liquidity_progress,
+            min_avg_volume=universe_cfg.get("min_avg_volume", 100_000),
+            progress_cb=_dl_progress,
         )
-        _progress("Ranking by momentum (yfinance)", f"{len(filtered_tickers)} tickers")
-        top_momentum = rank_by_momentum(filtered_tickers, config, client, top_n=100)
     except Exception as e:
         logger.error("Nightly scan: momentum rank failed: %s", e)
         _progress()  # clear
         return {"error": str(e)}
 
     universe_raw = len(all_tickers)
-    universe_filtered = len(filtered_tickers)
 
     momentum_tickers = [t["ticker"] for t in top_momentum]
     rs_by_ticker = {t["ticker"]: t.get("rs_composite", 0.0) for t in top_momentum}
@@ -260,15 +256,15 @@ def run_nightly_scan(
     aged = _age_out_stale(db_engine)
     summary["aged_out"] = aged
     summary["universe_raw"] = universe_raw
-    summary["universe_filtered"] = universe_filtered
+    summary["momentum_top"] = len(top_momentum)
 
     _progress()  # clear progress
 
     logger.info(
-        "Nightly watchlist scan complete: universe=%d→%d new=%d updated=%d failed=%d "
+        "Nightly watchlist scan complete: universe=%d momentum_top=%d new=%d updated=%d failed=%d "
         "ready=%d watching=%d aged_out=%d",
         universe_raw,
-        universe_filtered,
+        len(top_momentum),
         summary.get("new", 0),
         summary.get("updated", 0),
         summary.get("failed", 0),

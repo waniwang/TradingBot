@@ -49,8 +49,7 @@ telegram:
 
 universe:
   min_price: 5.0
-  min_volume: 100000
-  snapshot_batch_size: 200
+  min_avg_volume: 100000
 
 database:
   url: sqlite:///trading_bot.db
