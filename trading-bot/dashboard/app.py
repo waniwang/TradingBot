@@ -268,6 +268,20 @@ def main():
     env_badge = "🟡 PAPER" if status.get("environment", "paper") == "paper" else "🔴 LIVE"
     st.markdown(f"## 📈 Trading Bot &nbsp;&nbsp; `{env_badge}`")
 
+    with st.expander("ℹ️ Daily Pipeline"):
+        st.markdown("""
+| Time | Job | Description |
+|------|-----|-------------|
+| 5:00 PM | Nightly Scan | Analyze ~100 momentum stocks for consolidation patterns (breakout pipeline) |
+| 6:00 AM | Premarket Scan | Find EP gappers, promote breakout candidates, prefetch daily bars |
+| 9:25 AM | Subscribe | Connect to Alpaca real-time 1m bars for all watchlist tickers |
+| 9:30 AM | Market Open | Stream-driven: evaluate signals on every 1m candle |
+| Every 5m | Reconcile | Poll broker for filled GTC stops, detect unprotected positions |
+| 3:55 PM | EOD Tasks | Trailing MA exits, daily P&L summary, reset halt flags |
+
+**Watchlist stages:** watching → ready → active → triggered/expired/failed
+""")
+
     # -----------------------------------------------------------------------
     # Status bar
     # -----------------------------------------------------------------------
@@ -291,10 +305,14 @@ def main():
     countdown  = fmt_countdown(status.get("next_job_time"))
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Bot Status", running_badge)
-    c2.metric("Current Phase", phase_label, phase_desc)
-    c3.metric("Next Job", next_job, next_time)
-    c4.metric("In", countdown)
+    c1.metric("Bot Status", running_badge,
+              help="Green if heartbeat received within 2 minutes. The bot writes a heartbeat every 30 seconds.")
+    c2.metric("Current Phase", phase_label, phase_desc,
+              help="idle=market closed | scanning=premarket scan running | watchlist_ready=candidates loaded | observing=monitoring for signals | end_of_day=running EOD tasks")
+    c3.metric("Next Job", next_job, next_time,
+              help="The next scheduled job. Jobs run automatically via APScheduler in ET timezone.")
+    c4.metric("In", countdown,
+              help="Countdown to the next scheduled job.")
 
     st.divider()
 
@@ -322,16 +340,21 @@ def main():
     daily_pnl_pct = total_daily_pnl / portfolio_value * 100 if portfolio_value else 0
 
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Portfolio Value", f"${portfolio_value:,.2f}")
-    m2.metric("Cash", f"${cash:,.2f}")
+    m1.metric("Portfolio Value", f"${portfolio_value:,.2f}",
+              help="Total account equity from Alpaca (cash + positions market value).")
+    m2.metric("Cash", f"${cash:,.2f}",
+              help="Available cash in the account. Decreases when positions are opened.")
     m3.metric(
         "Daily P&L",
         f"${total_daily_pnl:+,.2f}",
         f"{daily_pnl_pct:+.2f}%",
         delta_color="normal",
+        help="Today's realized (closed trades) + unrealized (open positions) profit/loss.",
     )
-    m4.metric("Open Positions", len(open_positions), f"max {get_config()['risk']['max_positions']}")
-    m5.metric("Trades Today", len(closed_today))
+    m4.metric("Open Positions", len(open_positions), f"max {get_config()['risk']['max_positions']}",
+              help="Current open trades. Max is set by risk.max_positions in config.yaml.")
+    m5.metric("Trades Today", len(closed_today),
+              help="Number of positions closed today (stop hits, partial exits, MA close exits).")
 
     st.divider()
 
@@ -339,6 +362,16 @@ def main():
     # Open Positions
     # -----------------------------------------------------------------------
     st.subheader("Open Positions")
+    with st.expander("ℹ️ Column Guide"):
+        st.markdown("""
+| Column | Meaning |
+|--------|---------|
+| Shares | Remaining shares (after any partial exit) |
+| Stop | Current stop-loss level (may trail upward over time) |
+| Gain % | Unrealized gain from entry price |
+| Partial | ✓ = 40% partial exit already taken (stop moved to break-even) |
+| Days | Trading days held since entry |
+""")
     if not open_positions:
         st.info("No open positions.")
     else:
@@ -393,6 +426,18 @@ def main():
     # Watchlist (unified — reads from DB)
     # -----------------------------------------------------------------------
     st.subheader("Watchlist")
+    with st.expander("ℹ️ Column Guide"):
+        st.markdown("""
+| Column | Meaning |
+|--------|---------|
+| Stage | ACTIVE = tradeable today. WATCHING = consolidating, not ready yet |
+| Gap % | Premarket gap from prior close (EP only, need ≥10%) |
+| Pre-Mkt Vol | Premarket relative volume vs 20-day average |
+| Consol Days | Days in consolidation range (breakout: 10-40 days ideal) |
+| ATR Ratio | Recent ATR / older ATR. Below 0.85 = range tightening (bullish) |
+| RS Score | Relative strength composite (50% 1m + 30% 3m + 20% 6m performance). Higher = stronger stock |
+| Quality | Breakout quality flags: Higher Lows (rising support), Vol Dry (declining volume = less supply), Near 10d/20d MA (price surfing the moving averages) |
+""")
 
     with get_session(engine) as session:
         active_rows = (
@@ -504,10 +549,14 @@ def main():
         total_trades = int(pnl_df["Trades"].sum())
         total_wins   = int(pnl_df["W"].sum())
         win_rate     = total_wins / total_trades * 100 if total_trades > 0 else 0
-        sc1.metric("Total P&L", f"${pnl_df['Daily P&L'].sum():+,.2f}")
-        sc2.metric("Win Rate",  f"{win_rate:.0f}%")
-        sc3.metric("Total Trades", total_trades)
-        sc4.metric("Best Day",  f"${pnl_df['Daily P&L'].max():+,.2f}")
+        sc1.metric("Total P&L", f"${pnl_df['Daily P&L'].sum():+,.2f}",
+                   help="Sum of daily P&L over the last 30 days.")
+        sc2.metric("Win Rate",  f"{win_rate:.0f}%",
+                   help="Percentage of winning trades (realized P&L > 0).")
+        sc3.metric("Total Trades", total_trades,
+                   help="Total number of closed positions in the last 30 days.")
+        sc4.metric("Best Day",  f"${pnl_df['Daily P&L'].max():+,.2f}",
+                   help="Highest single-day P&L in the last 30 days.")
 
     st.divider()
 
@@ -515,6 +564,15 @@ def main():
     # Today's signals
     # -----------------------------------------------------------------------
     st.subheader("Signals Today")
+    with st.expander("ℹ️ Column Guide"):
+        st.markdown("""
+| Column | Meaning |
+|--------|---------|
+| Entry | Limit price for the entry order |
+| Stop | Initial stop-loss price (LOD capped by ATR) |
+| Gap % | Gap from prior close (EP signals only) |
+| Acted | ✓ = order was placed. Blank = signal logged but not acted on (risk limits, duplicate, etc.) |
+""")
     signals = load_signals_today(engine)
     if not signals:
         st.info("No signals fired today.")
@@ -536,6 +594,17 @@ def main():
     # Trade history
     # -----------------------------------------------------------------------
     st.subheader("Trade History")
+    with st.expander("ℹ️ Exit Reasons"):
+        st.markdown("""
+| Reason | What Happened |
+|--------|---------------|
+| stop hit | Price hit stop-loss (LOD or trailed stop) |
+| trailing ma close | Daily close below 10-day MA (checked at 3:55 PM, not intraday) |
+| parabolic target | Short covered at 10d or 20d MA profit target |
+| partial exit | 40% of position sold at +15% gain after 3+ days |
+| manual | Manually closed via dashboard flatten button |
+| eod close | Position closed at end of day |
+""")
     hist_df = load_closed_history(engine)
     if hist_df.empty:
         st.info("No closed trades yet.")
