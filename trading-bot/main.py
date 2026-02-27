@@ -1299,7 +1299,7 @@ def main():
     # Reconcile broker positions every 5 min during market hours only
     scheduler.add_job(
         job_reconcile_positions,
-        CronTrigger(hour="9-15", minute="*/5", timezone=ET),
+        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5", timezone=ET),
         args=[client, db_engine, notify],
         id="reconcile_positions",
         replace_existing=True,
