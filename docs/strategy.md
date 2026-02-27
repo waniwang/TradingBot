@@ -34,7 +34,7 @@ A stock that had a big move (weeks to months), consolidated in a tight range, an
 ### Setup conditions
 - Price is "surfing" **both the 10-day AND 20-day moving averages** (within 3% tolerance)
 - Higher lows during the consolidation
-- ATR (Average True Range) contracting — range getting tighter (ATR ratio < 0.85)
+- ATR (Average True Range) contracting — range getting tighter (ATR ratio < 0.95)
 - Volume drying up during consolidation (bullish)
 
 ### Entry

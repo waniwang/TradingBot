@@ -42,10 +42,10 @@ def detect_higher_lows(closes: pd.Series, window: int) -> bool:
     return slope > 0
 
 
-def detect_atr_contraction(atr_series: pd.Series, window: int) -> tuple[bool, float]:
+def detect_atr_contraction(atr_series: pd.Series, window: int, threshold: float = 0.95) -> tuple[bool, float]:
     """
     Return (contracting, ratio) where ratio = recent_atr / older_atr.
-    A ratio < 1.0 means ATR is contracting (tighter range — bullish for breakout).
+    A ratio < threshold means ATR is contracting (tighter range — bullish for breakout).
     """
     if len(atr_series.dropna()) < window:
         return False, 1.0
@@ -56,7 +56,7 @@ def detect_atr_contraction(atr_series: pd.Series, window: int) -> tuple[bool, fl
     ratio = recent / older
     if pd.isna(ratio):
         return False, 1.0
-    return ratio < 0.85, round(float(ratio), 3)
+    return ratio < threshold, round(float(ratio), 3)
 
 
 def check_near_ma(df: pd.DataFrame, ma_period: int = 20, tolerance_pct: float = 3.0) -> bool:
@@ -144,15 +144,19 @@ def analyze_consolidation(
             high_after_low = prior_section.loc[low_idx:, "high"].max()
             low_val = prior_section["low"].loc[low_idx]
             move_pct = (high_after_low - low_val) / low_val * 100 if low_val > 0 else 0
-            result["has_prior_move"] = bool(move_pct >= 30)
-            if move_pct < 30:
+            prior_move_min = sig_cfg.get("consolidation_prior_move_pct", 30.0)
+            result["has_prior_move"] = bool(move_pct >= prior_move_min)
+            if move_pct < prior_move_min:
                 result["reason"] = "no_prior_move"
                 return result
     else:
         result["has_prior_move"] = True  # insufficient data to check — pass through
 
+    atr_threshold = sig_cfg.get("consolidation_atr_ratio", 0.95)
+    ma_tolerance = sig_cfg.get("consolidation_ma_tolerance_pct", 3.0)
+
     atr = compute_atr(df)
-    contracting, atr_ratio = detect_atr_contraction(atr, window=consolidation_days)
+    contracting, atr_ratio = detect_atr_contraction(atr, window=consolidation_days, threshold=atr_threshold)
     result["atr_contracting"] = bool(contracting)
     result["atr_ratio"] = float(atr_ratio)
 
@@ -160,8 +164,8 @@ def analyze_consolidation(
     result["higher_lows"] = bool(higher_lows)
 
     # A4: Check both 10d and 20d MA (stock should surf both)
-    near_10d = check_near_ma(df, ma_period=10)
-    near_20d = check_near_ma(df, ma_period=20)
+    near_10d = check_near_ma(df, ma_period=10, tolerance_pct=ma_tolerance)
+    near_20d = check_near_ma(df, ma_period=20, tolerance_pct=ma_tolerance)
     result["near_10d_ma"] = bool(near_10d)
     result["near_20d_ma"] = bool(near_20d)
 

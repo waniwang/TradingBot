@@ -20,22 +20,31 @@ strategies:
     # - parabolic_short                      # disabled — negative expectancy in backtests
 
 signals:
-  ep_min_gap_pct: 10.0                     # min gap % to qualify as Episodic Pivot
-  breakout_consolidation_days_min: 10      # min days for valid consolidation
-  breakout_consolidation_days_max: 40      # max days for valid consolidation
-  parabolic_min_gain_pct: 50.0             # legacy — used if per-cap keys not set
-  parabolic_min_gain_pct_largecap: 50.0    # large-cap (price > $50): min gain %
-  parabolic_min_gain_pct_smallcap: 200.0   # small-cap (price < $20): min gain %
-  parabolic_min_days: 3                    # min consecutive up days for parabolic
-  breakout_volume_multiplier: 1.5          # RVOL threshold for breakout (time-of-day normalized)
-  ep_volume_multiplier: 2.0               # RVOL threshold for EP (time-of-day normalized)
-  breakout_max_extension_pct: 3.0         # max % above ORH before skipping (anti-chase)
-  ep_max_extension_pct: 5.0              # max % above ORH for EP (gap stocks run more)
+  # --- Shared ---
   orh_minutes: 5                           # opening range duration in minutes
-  atr_period: 14                           # ATR calculation period
-  consolidation_atr_ratio: 0.85            # ATR contraction ratio threshold
-  consolidation_ma_tolerance_pct: 3.0      # % tolerance for near-MA check
-  consolidation_prior_move_pct: 30.0       # min prior move % for breakout setup
+  atr_period: 14                           # ATR lookback period for all ATR calculations
+
+  # --- Episodic Pivot (EP) ---
+  ep_min_gap_pct: 10.0                     # min overnight gap % to qualify (e.g. earnings catalyst)
+  ep_volume_multiplier: 2.0               # min RVOL vs 20d avg (time-of-day normalized)
+  ep_max_extension_pct: 5.0              # max % above ORH before skipping (anti-chase guard)
+
+  # --- Breakout ---
+  # Consolidation detection (nightly scan)
+  breakout_consolidation_days_min: 10      # min trading days in consolidation range
+  breakout_consolidation_days_max: 40      # max trading days in consolidation range
+  consolidation_atr_ratio: 0.95            # ATR contraction threshold — recent/older ATR must be below this (lower = stricter, 1.0 = any contraction)
+  consolidation_ma_tolerance_pct: 3.0      # max % distance from 10d/20d MA to count as "near"
+  consolidation_prior_move_pct: 30.0       # min % advance (low→high) in ~2 months before consolidation
+  # Entry signal
+  breakout_volume_multiplier: 1.5          # min RVOL vs 20d avg (time-of-day normalized)
+  breakout_max_extension_pct: 3.0         # max % above ORH before skipping (anti-chase guard)
+
+  # --- Parabolic Short (disabled) ---
+  parabolic_min_gain_pct: 50.0             # legacy fallback — used if per-cap keys not set
+  parabolic_min_gain_pct_largecap: 50.0    # large-cap (price > $50): min gain % to qualify
+  parabolic_min_gain_pct_smallcap: 200.0   # small-cap (price < $20): min gain % to qualify
+  parabolic_min_days: 3                    # min consecutive up days
 
 exits:
   partial_exit_after_days: 3              # sell partial after this many days in trade
