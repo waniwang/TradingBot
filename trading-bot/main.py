@@ -113,7 +113,7 @@ def _clear_daily_caches():
     logger.info("Daily bar caches cleared")
 
 
-def _prefetch_daily_bars(client, tickers: list[str]):
+def _prefetch_daily_bars(client, tickers: list[str], notify=None):
     """
     Pre-fetch daily bars for watchlist tickers using yfinance batch download.
 
@@ -136,8 +136,15 @@ def _prefetch_daily_bars(client, tickers: list[str]):
                 _daily_highs_cache[ticker] = [b["high"] for b in bars_list]
                 _daily_lows_cache[ticker] = [b["low"] for b in bars_list]
         logger.info("Pre-fetched daily bars for %d/%d tickers", len(bars_by_symbol), len(tickers))
+        if len(bars_by_symbol) == 0 and len(tickers) > 0:
+            msg = f"WARNING: Daily bars returned 0/{len(tickers)} tickers — signals may lack ATR/RVOL data"
+            logger.warning(msg)
+            if notify:
+                notify(msg)
     except Exception as e:
         logger.error("Daily bars pre-fetch failed: %s", e)
+        if notify:
+            notify(f"WARNING: Daily bars pre-fetch failed for {len(tickers)} tickers: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +308,7 @@ def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=Non
     # This populates caches so on_bar callbacks don't need per-ticker REST calls
     if _watchlist:
         _set_progress("Prefetching daily bars", f"{len(_watchlist)} tickers")
-        _prefetch_daily_bars(client, [c["ticker"] for c in _watchlist])
+        _prefetch_daily_bars(client, [c["ticker"] for c in _watchlist], notify=notify)
 
     _set_progress()  # clear progress
     # Send Telegram notifications
@@ -328,55 +335,63 @@ def job_subscribe_watchlist(
 
     def on_bar(bar: dict):
         """Called by AlpacaClient stream for every 1m bar update."""
-        ticker = bar["ticker"]
-        current_price = bar["close"]
+        try:
+            ticker = bar["ticker"]
+            current_price = bar["close"]
 
-        # Fetch ALL of today's 1m candles (up to 390 for a full day)
-        candles_1m = client.get_candles_1m(ticker, count=390)
-        with _cache_lock:
-            daily_bars = _daily_bars_cache.get(ticker)
-        if not daily_bars:
-            daily_bars = client.get_daily_bars(ticker, days=130)
-        daily_closes = [b["close"] for b in daily_bars]
-        daily_volumes = [b["volume"] for b in daily_bars]
-        daily_highs = [b["high"] for b in daily_bars]
-        daily_lows = [b["low"] for b in daily_bars]
-        with _cache_lock:
-            _daily_bars_cache[ticker] = daily_bars
-            _daily_closes_cache[ticker] = daily_closes
-            _daily_volumes_cache[ticker] = daily_volumes
-            _daily_highs_cache[ticker] = daily_highs
-            _daily_lows_cache[ticker] = daily_lows
+            # Fetch ALL of today's 1m candles (up to 390 for a full day)
+            candles_1m = client.get_candles_1m(ticker, count=390)
+            with _cache_lock:
+                daily_bars = _daily_bars_cache.get(ticker)
+            if not daily_bars:
+                daily_bars = client.get_daily_bars(ticker, days=130)
+            daily_closes = [b["close"] for b in daily_bars]
+            daily_volumes = [b["volume"] for b in daily_bars]
+            daily_highs = [b["high"] for b in daily_bars]
+            daily_lows = [b["low"] for b in daily_bars]
+            with _cache_lock:
+                _daily_bars_cache[ticker] = daily_bars
+                _daily_closes_cache[ticker] = daily_closes
+                _daily_volumes_cache[ticker] = daily_volumes
+                _daily_highs_cache[ticker] = daily_highs
+                _daily_lows_cache[ticker] = daily_lows
 
-        # Cumulative volume from all of today's 1m candles
-        today_volume = sum(c["volume"] for c in candles_1m)
+            # Cumulative volume from all of today's 1m candles
+            today_volume = sum(c["volume"] for c in candles_1m)
 
-        # Compute minutes since market open (9:30 ET)
-        from zoneinfo import ZoneInfo
-        et_now = datetime.now(ZoneInfo("America/New_York"))
-        market_open = et_now.replace(hour=9, minute=30, second=0, microsecond=0)
-        minutes_since_open = max(1, int((et_now - market_open).total_seconds() / 60))
+            # Compute minutes since market open (9:30 ET)
+            from zoneinfo import ZoneInfo
+            et_now = datetime.now(ZoneInfo("America/New_York"))
+            market_open = et_now.replace(hour=9, minute=30, second=0, microsecond=0)
+            minutes_since_open = max(1, int((et_now - market_open).total_seconds() / 60))
 
-        process_ticker_update(
-            ticker=ticker,
-            config=config,
-            client=client,
-            tracker=tracker,
-            risk=risk,
-            db_engine=db_engine,
-            notify=notify,
-            candles_1m=candles_1m,
-            daily_closes=daily_closes,
-            daily_volumes=daily_volumes,
-            daily_highs=daily_highs,
-            daily_lows=daily_lows,
-            current_price=current_price,
-            current_volume=today_volume,
-            minutes_since_open=minutes_since_open,
-        )
+            process_ticker_update(
+                ticker=ticker,
+                config=config,
+                client=client,
+                tracker=tracker,
+                risk=risk,
+                db_engine=db_engine,
+                notify=notify,
+                candles_1m=candles_1m,
+                daily_closes=daily_closes,
+                daily_volumes=daily_volumes,
+                daily_highs=daily_highs,
+                daily_lows=daily_lows,
+                current_price=current_price,
+                current_volume=today_volume,
+                minutes_since_open=minutes_since_open,
+            )
+        except Exception as e:
+            logger.error("on_bar error for %s: %s", bar.get("ticker", "?"), e, exc_info=True)
+            notify(f"ERROR in on_bar for {bar.get('ticker', '?')}: {e}")
 
-    client.subscribe_quotes(tickers, callback=on_bar)
-    _set_phase("observing")
+    try:
+        client.subscribe_quotes(tickers, callback=on_bar)
+        _set_phase("observing")
+    except Exception as e:
+        logger.error("STREAM SUBSCRIPTION FAILED: %s", e, exc_info=True)
+        notify(f"CRITICAL: Stream subscription failed — NO SIGNALS WILL FIRE today.\n{e}")
 
 
 def job_intraday_monitor(
@@ -842,17 +857,6 @@ def job_eod_tasks(
     notify(summary)
     logger.info(summary)
 
-    # Clean up yfinance cache (SQLite DBs in ~/.cache/py-yfinance/)
-    import shutil
-    yf_cache_dir = Path.home() / ".cache" / "py-yfinance"
-    if yf_cache_dir.exists():
-        try:
-            shutil.rmtree(yf_cache_dir)
-            yf_cache_dir.mkdir(parents=True, exist_ok=True)
-            logger.info("Cleaned yfinance cache: %s", yf_cache_dir)
-        except Exception as e:
-            logger.warning("Failed to clean yfinance cache: %s", e)
-
     # Reset daily halt for next day
     tracker.set_daily_halt(False)
     # Reset weekly halt on Friday EOD (new week starts Monday)
@@ -903,6 +907,11 @@ def job_nightly_watchlist_scan(config: dict, client: AlpacaClient, db_engine, no
     logger.info(msg)
     if notify:
         notify(msg)
+        # Alert if momentum scan returned 0 candidates from a large universe
+        mt = summary.get('momentum_top', 0)
+        ur = summary.get('universe_raw', 0)
+        if isinstance(mt, int) and isinstance(ur, int) and mt == 0 and ur > 100:
+            notify(f"WARNING: Nightly scan found 0 momentum candidates from {ur} tickers — possible data fetch issue")
     _set_phase("idle")
     _set_progress()  # clear progress
 

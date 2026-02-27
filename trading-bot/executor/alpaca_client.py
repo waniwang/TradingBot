@@ -47,6 +47,7 @@ try:
     )
     from alpaca.data.timeframe import TimeFrame
     from alpaca.data.live import StockDataStream
+    from alpaca.data.enums import DataFeed
     ALPACA_AVAILABLE = True
 except ImportError:
     ALPACA_AVAILABLE = False
@@ -388,7 +389,7 @@ class AlpacaClient:
         self._stream = StockDataStream(
             api_key=self._api_key,
             secret_key=self._secret_key,
-            feed="iex",
+            feed=DataFeed.IEX,
         )
 
         async def _bar_handler(bar):
@@ -465,7 +466,7 @@ class AlpacaClient:
         if not ALPACA_AVAILABLE:
             return {"ticker": ticker, "last_price": 0.0, "volume": 0}
 
-        req = StockLatestBarRequest(symbol_or_symbols=ticker, feed="iex")
+        req = StockLatestBarRequest(symbol_or_symbols=ticker, feed=DataFeed.IEX)
         bars = self._data.get_stock_latest_bar(req)
         b = bars[ticker]
         return {
@@ -495,7 +496,7 @@ class AlpacaClient:
             timeframe=TimeFrame.Minute,
             start=start,
             end=end,
-            feed="iex",
+            feed=DataFeed.IEX,
             limit=count,
         )
         bars = self._data.get_stock_bars(req)
@@ -527,7 +528,7 @@ class AlpacaClient:
             timeframe=TimeFrame.Day,
             start=start,
             end=end,
-            feed="iex",
+            feed=DataFeed.IEX,
             limit=days,
         )
         bars = self._data.get_stock_bars(req)
@@ -580,7 +581,7 @@ class AlpacaClient:
             return {}
 
         try:
-            req = StockSnapshotRequest(symbol_or_symbols=tickers, feed="iex")
+            req = StockSnapshotRequest(symbol_or_symbols=tickers, feed=DataFeed.IEX)
             snapshots = self._data.get_stock_snapshot(req)
             result = {}
             for sym, snap in snapshots.items():
@@ -762,7 +763,7 @@ class AlpacaClient:
                         except (KeyError, TypeError):
                             continue
             except Exception as e:
-                logger.warning("get_daily_bars_batch failed for batch %d: %s", i, e)
+                logger.error("get_daily_bars_batch failed for batch %d: %s", i, e, exc_info=True)
 
             if progress_cb:
                 progress_cb(min(i + batch_size, len(tickers)), len(tickers))
