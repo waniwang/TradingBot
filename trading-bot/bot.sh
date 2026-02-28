@@ -181,7 +181,13 @@ if [[ "$target" == "local" ]]; then
     stop)    local_stop ;;
     restart) local_stop; sleep 1; local_start ;;
     logs)    local_logs ;;
-    *) echo "Usage: $0 local {status|start|stop|restart|logs}"; exit 1 ;;
+    verify)
+      echo "==> Running daily verification..."
+      cd "$BOT_DIR"
+      source .env 2>/dev/null || true
+      .venv/bin/python verify_day.py ${@:3}
+      ;;
+    *) echo "Usage: $0 local {status|start|stop|restart|logs|verify}"; exit 1 ;;
   esac
 else
   case "$cmd" in
@@ -260,8 +266,12 @@ print('yes' if in_hours else 'no')
       echo ""
       echo "Done. Dashboard: http://172.235.216.175:8501"
       ;;
+    verify)
+      echo "==> Running daily verification on server..."
+      $SSH "cd $REMOTE_DIR && source .env 2>/dev/null; .venv/bin/python verify_day.py ${@:2}"
+      ;;
     *)
-      echo "Usage: $0 [local|server] {status|start|stop|restart|logs|scan}"
+      echo "Usage: $0 [local|server] {status|start|stop|restart|logs|scan|verify}"
       echo "       $0 deploy"
       exit 1
       ;;

@@ -13,7 +13,8 @@ Automated momentum trading bot inspired by Kristjan Kullamagi's 3 setups: **Brea
 | Tests | `trading-bot/tests/` — 155 tests |
 | Backtest | `trading-bot/backtest/` + `trading-bot/run_backtest.py` |
 | Dashboard | `trading-bot/dashboard/app.py` (Streamlit) |
-| Operations | `trading-bot/bot.sh` — start/stop/deploy/logs/status |
+| Verification | `trading-bot/verify_day.py` — daily execution verification |
+| Operations | `trading-bot/bot.sh` — start/stop/deploy/logs/status/verify |
 | Server | Linode at `root@172.235.216.175`, code at `/opt/trading-bot` |
 | Dashboard URL | Server: `http://172.235.216.175:8501` / Local: `http://localhost:8501` |
 
@@ -70,13 +71,30 @@ Scanners (premarket)          Signals (market open)         Monitor (intraday + 
 ./bot.sh logs                # tail server logs
 ./bot.sh deploy              # rsync code → migrate DB → restart (warns during market hours)
 ./bot.sh scan                # trigger manual scan
+./bot.sh verify              # run daily verification (last trading day)
+./bot.sh verify 2026-02-27   # verify specific date
 
 # Local (for development)
 ./bot.sh local status
 ./bot.sh local start         # start as background processes with PID files
 ./bot.sh local stop
 ./bot.sh local logs
+./bot.sh local verify        # run daily verification locally
 ```
+
+## Daily Verification
+
+When the user asks to "verify yesterday's results" or "check yesterday's trading":
+
+1. **Run the script**: `cd trading-bot && .venv/bin/python verify_day.py` (or specific date)
+2. **Review automated checks**: Any FAIL items are immediate action items
+3. **Follow the playbook**: Read `docs/daily-verification.md` for the full review process
+4. **Key judgment checks** (beyond what the script automates):
+   - Scanner quality: Do the watchlist candidates make sense? Check for missed obvious movers
+   - Signal quality: Were entries at correct technical levels? Any chasing?
+   - Exit quality: Were stops correct per strategy? Any premature exits?
+   - Market context: What did SPY/QQQ do? Trending or choppy day?
+5. **Summarize**: Working as expected, or issues found? List any code/parameter changes needed
 
 ## Current Status
 
@@ -99,3 +117,4 @@ Scanners (premarket)          Signals (market open)         Monitor (intraday + 
 | `docs/operations.md` | bot.sh commands for local and server |
 | `docs/risks-and-mitigations.md` | Known risks and how they're handled |
 | `docs/implementation-plan.md` | Phase-by-phase build plan with checklists |
+| `docs/daily-verification.md` | Daily verification playbook for AI-assisted review |
