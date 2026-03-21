@@ -73,9 +73,10 @@ AI-assisted review process for the trading bot's daily execution. Use this playb
   - Was this the right call? Did the stock recover the next day? (check the next day's price)
   - Is the MA period (10d) appropriate for the current market regime?
 
-- **Partial exits** (`partial_exit`):
+- **Partial exits**:
   - Was the +15% gain threshold met?
   - Was 40% of the position sold as intended?
+  - Was stop moved to break-even after partial?
 
 - **Positions that should NOT have been exited**: Any premature exits?
 - **Positions that SHOULD have been exited but weren't**: Any open positions with clear breakdown signals that the monitor missed?
@@ -124,16 +125,53 @@ Summarize findings in three categories:
 
 ---
 
+## Diagnostic: Where Trades Get Blocked
+
+If the bot is not generating trades, check these areas in order of likelihood:
+
+1. **Consolidation scanner too strict (BO)** — Requiring all 6 conditions (prior move + ATR contraction + higher lows + near 10d MA + near 20d MA + duration) simultaneously leaves very few candidates. Most real consolidations fail 1-2 of these.
+
+2. **RVOL thresholds (both setups)** — 2.0x for EP and 1.5x for BO, normalized to time-of-day. Early in the day, this can be noisy. A stock might have 1.4x RVOL at 9:36 and 2.1x by 9:40 but by then it's past the extension guard.
+
+3. **Extension guards (both setups)** — 3% for BO and 5% for EP above ORH. If the ORH from the first 5 minutes is tight (low-range open), a strong move can blow past the extension guard before the bot checks.
+
+4. **10% gap minimum (EP)** — Many quality EP setups gap 5-8%. A stock that gaps 7% on a great earnings beat with huge volume gets filtered out.
+
+5. **Max 4 positions** — If 4 positions are open and none have exited yet, all new signals are blocked.
+
+6. **Prior-rally filter (EP)** — Removes stocks already up 50% in 6 months. This filters out the strongest leaders that Qullamaggie often trades.
+
+---
+
+## Parameter Tuning Reference
+
+All parameters below are configurable in `config.yaml` under the `signals:` section — no code changes needed.
+
+| Parameter | Current | More permissive option | Effect |
+|-----------|---------|----------------------|--------|
+| `ep_min_gap_pct` | 10% | 7% | Admits more EP candidates |
+| `ep_volume_multiplier` | 2.0x | 1.5x | Easier to trigger EP entries |
+| `breakout_volume_multiplier` | 1.5x | 1.2x | More breakout entries fire |
+| `breakout_max_extension_pct` | 3% | 5% | Wider window to catch breakouts |
+| `consolidation_prior_move_pct` | 30% | 20% | Admits lower-beta stocks |
+| `consolidation_atr_ratio` | 0.95 | 1.0 | Accepts any ATR contraction |
+| `consolidation_ma_tolerance_pct` | 3% | 5% | Looser MA proximity check |
+| Prior 6-month rally filter (EP) | 50% | 80% or remove | Admits strong leaders |
+
+---
+
 ## Reference: Exit Reasons
 
 | Exit Reason | Description | What to Check |
 |-------------|-------------|---------------|
 | `stop_hit` | Stop-loss order triggered | Was stop level correct? Slippage acceptable? |
+| `trailing_stop` | Trailing stop tightened and hit | Was the tightened level appropriate? |
 | `trailing_ma_close` | Daily close below trailing MA | Did stock actually close < SMA? Was it the right call? |
 | `parabolic_target` | Profit target hit (10d/20d MA) | Was target level correct? |
-| `partial_exit` | Took partial profits (+15%) | Was threshold met? Fraction correct? |
 | `manual` | Manual intervention | Why was manual exit needed? |
 | `daily_loss_limit` | Daily loss limit triggered | Were the losses legitimate or from bad stops? |
+
+---
 
 ## Reference: Automated Check Numbers
 

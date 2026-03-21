@@ -80,7 +80,7 @@
 - [x] Entry approximations: breakout (5-day high), EP (gap + ORH proxy), parabolic (reversal)
 - [x] All 3 setups simulated with proper exits (stops, trailing MA close, parabolic targets)
 
-**Target metrics** (see [verification.md](verification.md) for latest results):
+**Target metrics** (see [backtesting.md](backtesting.md) for latest results):
 
 | Metric | Target |
 |---|---|
@@ -107,13 +107,13 @@
 
 ---
 
-## Phase 7 — Streamlit Dashboard & Telegram (Pending)
+## Phase 7 — Streamlit Dashboard & Telegram (Complete)
 
 **Goal**: Real-time visibility into bot activity.
 
 - [x] `dashboard/app.py`: live positions table (entry, stop, current P&L, days held)
 - [x] Daily P&L chart, signal log, portfolio exposure gauge
-- [ ] Telegram: send alert on entry fill, stop hit, partial exit, EOD summary
+- [x] Telegram: send alert on bot started, scan start/finish, entry fill, stop fill, trading halted, EOD summary, errors
 - [x] Manual override: button in dashboard to flatten a position
 
 **Exit criteria**: Dashboard shows live data; Telegram delivers alerts within 30 seconds of events.

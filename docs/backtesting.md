@@ -1,4 +1,4 @@
-# Verification Plan
+# Backtesting & Test Plan
 
 ---
 
@@ -6,15 +6,15 @@
 
 Run all tests: `cd trading-bot && .venv/bin/pytest tests/ -v`
 
-Current test count: **155 tests** across 5 test files, all passing.
+Current test count: **240 tests** across 7 test files, all passing.
 
 ### Signal tests (`tests/test_signals.py`)
 
 | Test area | What's tested |
 |---|---|
-| Breakout entry | ORH break + volume + above 10d/20d MA |
+| Breakout entry | ORH break + volume + above 20d MA + extension guard |
 | Breakout stop | LOD-based stop, ATR cap at 1x ATR(14) |
-| EP entry | ORH break + gap >= 10% + volume > 2x |
+| EP entry | ORH break + gap >= 10% + volume > 2x + extension guard |
 | EP stop | LOD-based stop, ATR cap at 1.5x ATR(14) |
 | Parabolic entry | ORB low break + VWAP failure |
 | ORH computation | Correct float from 5m window |
@@ -36,7 +36,7 @@ Current test count: **155 tests** across 5 test files, all passing.
 
 | Test area | What's tested |
 |---|---|
-| Position sizing | R-based formula, 10% notional cap, rounding down |
+| Position sizing | R-based formula, 15% notional cap, rounding down |
 | Exposure checks | Max positions, notional limits |
 | Loss limits | Daily and weekly loss halt logic |
 
@@ -60,6 +60,20 @@ Current test count: **155 tests** across 5 test files, all passing.
 |---|---|
 | Scheduler | Job registration, trading day checks |
 | Signal evaluation | Adapter wiring, config passing |
+
+### Watchlist manager tests (`tests/test_watchlist_manager.py`)
+
+| Test area | What's tested |
+|---|---|
+| Persistence | Watchlist entries saved to and loaded from DB |
+| Lifecycle | Stage transitions: watching → ready → active → triggered/expired |
+| Promotion | Ready candidates promoted to active on scan day |
+
+### Alpaca liquidity filter tests (`tests/test_alpaca_liquidity_filter.py`)
+
+| Test area | What's tested |
+|---|---|
+| Liquidity filters | Volume and price filters applied correctly |
 
 ---
 
@@ -235,7 +249,7 @@ Run `environment: paper` for 3-4 weeks. Verify each item:
 - [ ] Stop moves to break-even after partial exit
 
 ### Trailing Stop
-- [ ] Trailing MA close check runs at 4:00 PM ET
+- [ ] Trailing MA close check runs at 3:55 PM ET
 - [ ] Exit fires on daily close below 10d MA (not on intraday touch)
 - [ ] Position closes correctly when close < 10d MA
 

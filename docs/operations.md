@@ -11,6 +11,9 @@ All commands run from the `trading-bot/` directory.
 ./bot.sh restart         # restart both
 ./bot.sh logs            # live log stream (Ctrl+C to exit)
 ./bot.sh deploy          # push local code changes and restart
+./bot.sh scan            # trigger manual premarket scan
+./bot.sh verify          # run daily verification (last trading day)
+./bot.sh verify 2026-03-20   # verify specific date
 ```
 
 Dashboard: http://172.235.216.175:8501
@@ -23,6 +26,7 @@ Dashboard: http://172.235.216.175:8501
 ./bot.sh local stop      # stop both
 ./bot.sh local restart   # restart both
 ./bot.sh local logs      # live log stream (Ctrl+C to exit)
+./bot.sh local verify    # run daily verification locally
 ```
 
 Dashboard: http://localhost:8501
@@ -52,3 +56,60 @@ Dashboard: http://localhost:8501
 ```bash
 ./bot.sh logs
 ```
+
+**Trigger a manual scan (outside scheduled hours):**
+```bash
+./bot.sh scan
+```
+This creates a `trigger_scan` file that the heartbeat loop detects. The premarket scan runs in a background thread with `force=True` (bypasses trading-day check).
+
+**Run daily verification:**
+```bash
+./bot.sh verify              # verifies last trading day
+./bot.sh verify 2026-03-20   # verifies specific date
+./bot.sh local verify        # run locally
+```
+
+---
+
+## Scheduled Jobs
+
+The bot runs 7 scheduled jobs (all times Eastern):
+
+| Time | Job | Description |
+|------|-----|-------------|
+| 5:00 PM (prior day) | Nightly watchlist scan | Heavy breakout scan: momentum rank 1,500 stocks via yfinance, consolidation analysis |
+| 6:00 AM | Premarket scan | Alpaca screener for EP gappers, promote breakout candidates, pre-fetch daily bars |
+| 9:25 AM | Subscribe watchlist | Connect to Alpaca real-time data stream for all watchlist tickers |
+| 9:30 AM | Intraday monitor | Log confirmation that the stream is active |
+| 3:55 PM | EOD tasks | Trailing stop updates, MA-close exits, daily P&L, Telegram summary |
+| Every 5 min (9-15h Mon-Fri) | Reconcile positions | Poll broker for GTC stop fills, detect unprotected positions |
+| Every 30s | Heartbeat | Write bot_status.json (phase, next job, progress) for dashboard |
+
+---
+
+## Troubleshooting
+
+**Bot shows "idle" phase during market hours:**
+- Check logs for errors: `./bot.sh logs`
+- Verify the watchlist was populated: look for "PRE-MARKET SCAN DONE: N candidates" in logs
+- If watchlist is empty, no stream subscription happens and no signals fire
+
+**No trades executing:**
+- Check `docs/daily-verification.md` → "Diagnostic: Where Trades Get Blocked"
+- Common causes: strict consolidation scanner, high RVOL thresholds, tight extension guards
+- Run `./bot.sh verify` to see automated check results
+
+**Dashboard not updating:**
+- Check heartbeat: `bot_status.json` should update every 30 seconds
+- If stale, the bot process may have crashed: `./bot.sh status`
+
+**Telegram alerts not arriving:**
+- Verify `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set correctly
+- Check logs for "Telegram send failed" warnings
+- Test with @BotFather: send `/start` to your bot
+
+**Unprotected position alert on startup:**
+- The bot detected an open position with no broker stop order
+- This can happen if the bot crashed between placing an entry and placing the stop
+- Manually place a stop order at the price shown in the alert

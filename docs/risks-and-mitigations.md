@@ -18,7 +18,7 @@
 
 | Risk | Mitigation |
 |---|---|
-| **Parabolic short requires locate access** | Alpaca supports shorting on margin accounts; verify margin enabled before live |
+| **Parabolic short requires locate access** | Strategy disabled — negative expectancy in 6-year backtest (Sharpe -0.39 OOS). If re-enabled, verify Alpaca margin account |
 | **Overfitting in backtest** | Walk-forward validation; hold out 2024 data as out-of-sample test |
 | **Gap risk on open positions overnight** | Defined risk per trade (1%); max 4 positions; diversification limits damage |
 | **Low liquidity names — order never fills** | Minimum ADV (average daily volume) filter in scanners: >= 500k shares/day |
@@ -35,7 +35,7 @@
 | **VPS goes down during market hours** | Process supervisor (systemd/supervisord); alert on restart; flat positions on startup |
 | **Config accidentally changed to `live` early** | Confirm prompt before executing orders when `environment: live`; separate live config file |
 | **API keys exposed in code** | Store in environment variables or `.env` file; never commit to git; use `.gitignore` |
-| **Telegram bot sends to wrong chat** | Verify `chat_id` matches personal account; test with `/start` before live use |
+| **Telegram bot sends to wrong chat** | Verify `chat_id` matches personal account; Telegram is implemented and sends all event types — test with `/start` before live use |
 
 ---
 
@@ -43,7 +43,7 @@
 
 1. **EP catalyst detection**: The bot detects gap-ups automatically but cannot read news/earnings reports to classify the *type* of catalyst. Manual review is still needed to confirm the catalyst is genuinely surprising.
 
-2. **Short selling**: Parabolic shorts require an Alpaca margin account. Verify margin is enabled before running parabolic short strategy live.
+2. **Short selling**: Parabolic short strategy is currently disabled due to negative backtest results. If re-enabled, requires an Alpaca margin account with short-locate access.
 
 3. **Level 2 / order flow**: The current design does not use Level 2 data for entries. Adding this later could improve timing.
 

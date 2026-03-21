@@ -7,10 +7,10 @@ Automated momentum trading bot inspired by Kristjan Kullamagi's 3 setups: **Brea
 | What | Where |
 |------|-------|
 | Bot code | `trading-bot/` |
-| Documentation | `docs/` (9 detailed docs — read these for deep context) |
+| Documentation | `docs/` (7 docs — read these for deep context) |
 | Entry point | `trading-bot/main.py` — APScheduler orchestrator |
 | Config | `trading-bot/config.yaml` (env vars override: `ALPACA_API_KEY`, etc.) |
-| Tests | `trading-bot/tests/` — 155 tests |
+| Tests | `trading-bot/tests/` — 240 tests across 7 files |
 | Backtest | `trading-bot/backtest/` + `trading-bot/run_backtest.py` |
 | Dashboard | `trading-bot/dashboard/app.py` (Streamlit) |
 | Verification | `trading-bot/verify_day.py` — daily execution verification |
@@ -30,12 +30,12 @@ Scanners (premarket)          Signals (market open)         Monitor (intraday + 
     Watchlist ──────────────→ Risk Manager ──────────────→ Alpaca Executor
                               (1% risk/trade,               (limit entries,
                                max 4 positions,              GTC stop orders)
-                               10% max position)
+                               15% max position)
 ```
 
 **Data sources:** Alpaca screener/snapshots for scanning, yfinance for daily bars (Alpaca free tier IEX covers ~2% of stocks), Alpaca 1m candles for intraday signals.
 
-**Scheduler (ET timezone):** 6:00 AM premarket scan → 9:25 AM finalize watchlist → 9:30 AM intraday monitor → 4:00 PM EOD tasks.
+**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 9:25 AM finalize watchlist → 9:30 AM intraday monitor → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
 
 **Database:** SQLAlchemy ORM, SQLite for dev/paper, PostgreSQL for live. All DB ops use `get_session(engine)` context manager.
 
@@ -47,7 +47,7 @@ Scanners (premarket)          Signals (market open)         Monitor (intraday + 
 | `risk/manager.py` | `calculate_position_size()`, `check_exposure()`, `check_daily_loss()`, `check_weekly_loss()` |
 | `executor/alpaca_client.py` | `place_limit_order()`, `place_stop_order()`, `close_position()`, `get_candles_1m()`, `run_screener()`, `get_snapshots()` |
 | `monitor/position_tracker.py` | Stop checks, partial exits, trailing MA close (daily close not intraday), parabolic profit targets |
-| `db/models.py` | `Signal`, `Order`, `Position`, `DailyPnl` — exit reasons: `stop_hit`, `partial_exit`, `trailing_ma_close`, `parabolic_target`, `manual`, `eod_close` |
+| `db/models.py` | `Signal`, `Order`, `Position`, `Watchlist`, `DailyPnl` — exit reasons: `stop_hit`, `trailing_stop`, `trailing_ma_close`, `parabolic_target`, `manual`, `daily_loss_limit` |
 | `backtest/runner.py` | `BacktestConfig`, `BacktestRunner.run()` — daily bar-by-bar simulation |
 | `backtest/metrics.py` | `compute_metrics()` — win_rate, Sharpe, max_drawdown, CAGR, calmar, profit_factor |
 
@@ -101,20 +101,18 @@ When the user asks to "verify yesterday's results" or "check yesterday's trading
 - Phases 1-5 complete: foundation, scanners, signals, risk/execution, backtesting
 - Backtest results: EP is best strategy (Sharpe 1.08 OOS), tuned combined Sharpe 1.29 OOS, parabolic short unprofitable (disabled)
 - **Phase 6 (paper trading)**: next up
-- **Phase 7 (Telegram notifications)**: pending
+- **Phase 7 (Dashboard & Telegram)**: complete
 - See `docs/implementation-plan.md` for full phase checklist
 
 ## Documentation Index
 
 | Doc | Contents |
 |-----|----------|
-| `docs/strategy.md` | The 3 setups: entry/exit rules, stop logic, opening range definitions |
-| `docs/architecture.md` | Tech stack, data flow diagram, scheduler jobs, design decisions |
-| `docs/risk-management.md` | Position sizing formula, stop levels by setup, partial exits, loss halts |
+| `README.md` | Strategy, risk rules, exit rules, bot flow, backtest results, getting started |
+| `docs/architecture.md` | Tech stack, data flow, project structure, module reference, design decisions |
 | `docs/config-reference.md` | Full config.yaml schema with all parameters |
-| `docs/file-structure.md` | Every module and function documented |
-| `docs/verification.md` | Test plan, backtest procedures, paper trading checklist |
-| `docs/operations.md` | bot.sh commands for local and server |
+| `docs/operations.md` | Bot operations: start/stop/deploy/verify/scan commands, troubleshooting |
+| `docs/backtesting.md` | Test plan, backtest procedures, results, paper trading checklist |
+| `docs/daily-verification.md` | Daily verification playbook, diagnostics, parameter tuning reference |
 | `docs/risks-and-mitigations.md` | Known risks and how they're handled |
 | `docs/implementation-plan.md` | Phase-by-phase build plan with checklists |
-| `docs/daily-verification.md` | Daily verification playbook for AI-assisted review |
