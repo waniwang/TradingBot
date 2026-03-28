@@ -333,13 +333,20 @@ class PositionTracker:
     def run_eod_tasks(self, daily_closes_map: dict[str, list[float]]):
         """
         Called at ~3:55 PM ET.
+        - Checks max hold period exits (EP earnings swing: 50 days).
         - Checks for MA-close exits (daily close below trailing MA).
         - Updates trailing stops for remaining open positions.
         """
         with get_session(self.engine) as session:
             positions = session.query(Position).filter_by(is_open=True).all()
 
-            # First: check if today's close is below the trailing MA
+            # First: check max hold period (EP earnings swing positions)
+            self._check_max_hold_exits(session, positions, daily_closes_map)
+
+            # Refresh — some may have been closed
+            positions = session.query(Position).filter_by(is_open=True).all()
+
+            # Second: check if today's close is below the trailing MA
             # (only for positions that have already done a partial exit)
             self._check_ma_close_exits(session, positions, daily_closes_map)
 
@@ -350,6 +357,21 @@ class PositionTracker:
                 if not closes:
                     continue
                 self._update_trailing_stop(session, pos, closes)
+
+    def _check_max_hold_exits(self, session, positions, daily_closes_map):
+        """Exit positions that have exceeded their max hold period (e.g., EP earnings 50 days)."""
+        max_hold_days = int(self.config.get("signals", {}).get("ep_earnings_max_hold_days", 50))
+
+        for pos in positions:
+            if pos.days_held < max_hold_days:
+                continue
+            closes = daily_closes_map.get(pos.ticker)
+            current_price = closes[-1] if closes else pos.entry_price
+            logger.info(
+                "Max hold exit %s: %d days held >= %d max",
+                pos.ticker, pos.days_held, max_hold_days,
+            )
+            self._close_position(session, pos, current_price, reason="max_hold_period")
 
     def _check_ma_close_exits(self, session, positions, daily_closes_map):
         """Exit positions where today's close is below the trailing MA."""

@@ -5,7 +5,9 @@ APScheduler orchestrates all jobs:
   6:00 AM ET  — pre-market scan (Alpaca screener + snapshots)
   9:25 AM ET  — finalize watchlist, subscribe Alpaca real-time
   9:30 AM ET  — start intraday signal monitor
-  3:55 PM ET  — EOD tasks: trailing stop updates, P&L summary, Telegram
+  3:00 PM ET  — EP earnings scan + strategy A/B evaluation
+  3:50 PM ET  — EP earnings entry execution (limit orders near close)
+  3:55 PM ET  — EOD tasks: trailing stop updates, max hold exits, P&L summary
 """
 
 from __future__ import annotations
@@ -35,6 +37,8 @@ from scanner.gapper import get_premarket_gappers
 from scanner.momentum_rank import rank_by_momentum
 from scanner.consolidation import scan_breakout_candidates
 from scanner.parabolic import scan_parabolic_candidates
+from scanner.ep_earnings import scan_ep_earnings
+from signals.ep_earnings_strategy import evaluate_ep_earnings_strategies
 from scanner.watchlist_manager import (
     run_nightly_scan,
     get_ready_candidates,
@@ -83,6 +87,7 @@ def load_config(path: str = "config.yaml") -> dict:
 # ---------------------------------------------------------------------------
 
 _watchlist: list[dict] = []          # [{ticker, setup_type, gap_pct, ...}]
+_ep_earnings_entries: list[dict] = []  # strategy-tagged entries for 3:50 PM execution
 _db_engine = None                    # set in main(), used by _write_status
 _daily_bars_cache: dict[str, list[dict]] = {}
 _daily_closes_cache: dict[str, list[float]] = {}
@@ -801,6 +806,246 @@ def _execute_entry(ticker, signal, shares, client, db_engine, notify):
     t.start()
 
 
+def job_eod_ep_earnings_scan(
+    config: dict,
+    client: AlpacaClient,
+    db_engine,
+    notify=None,
+):
+    """
+    3:00 PM ET — EOD scan for EP earnings gap-up candidates.
+
+    Phase 1: Spikeet universe filters (scanner)
+    Phase 2: Strategy A + B evaluation (entry filters)
+    Phase 3: Persist qualifying entries for 3:50 PM execution
+    """
+    global _watchlist, _ep_earnings_entries
+    if not is_trading_day(client):
+        logger.info("EOD EP earnings scan skipped — not a trading day")
+        return
+    _set_phase("eod_ep_scan")
+    logger.info("=== EOD EP EARNINGS SCAN START ===")
+    if notify:
+        notify("EOD EP EARNINGS SCAN STARTED")
+
+    today = datetime.now(ET).date()
+    enabled = config.get("strategies", {}).get("enabled", [])
+
+    if "episodic_pivot" not in enabled:
+        logger.info("EP strategy disabled — skipping EOD EP earnings scan")
+        _set_phase("idle")
+        _set_progress()
+        return
+
+    try:
+        # Phase 1: Scanner (Spikeet universe filters)
+        _set_progress("Scanning EP earnings candidates")
+        candidates = scan_ep_earnings(config, client)
+        logger.info("EOD EP earnings scanner: %d candidates", len(candidates))
+
+        if not candidates:
+            if notify:
+                notify("EP EARNINGS SCAN: 0 candidates found")
+            _set_phase("idle")
+            _set_progress()
+            return
+
+        # Phase 2: Fetch daily bars for strategy evaluation
+        _set_progress("Fetching daily bars for strategy evaluation")
+        tickers = [c["ticker"] for c in candidates]
+        daily_bars = client.get_daily_bars_batch(tickers, days=300)
+        logger.info("Fetched daily bars for %d/%d tickers", len(daily_bars), len(tickers))
+
+        # Phase 3: Evaluate Strategy A + B filters
+        _set_progress("Evaluating Strategy A + B filters")
+        entries = evaluate_ep_earnings_strategies(candidates, daily_bars, config)
+        logger.info("Strategy evaluation: %d entries from %d candidates", len(entries), len(candidates))
+
+        if entries:
+            # Persist scanner candidates to watchlist
+            persist_candidates(candidates, "episodic_pivot", "active", today, db_engine)
+
+            # Store strategy entries for 3:50 PM execution job
+            _ep_earnings_entries = entries
+
+            # Persist each strategy entry with metadata
+            for entry in entries:
+                _persist_ep_strategy_entry(entry, today, db_engine)
+
+            _watchlist = get_active_watchlist(db_engine)[:20]
+
+            if notify:
+                lines = [f"EP EARNINGS: {len(entries)} strategy entries from {len(candidates)} candidates"]
+                a_count = sum(1 for e in entries if e["ep_strategy"] == "A")
+                b_count = sum(1 for e in entries if e["ep_strategy"] == "B")
+                lines.append(f"  Strategy A: {a_count} | Strategy B: {b_count}")
+                for e in entries:
+                    lines.append(
+                        f"  {e['ticker']} ({e['ep_strategy']}): gap {e['gap_pct']:.1f}%, "
+                        f"entry ${e['entry_price']:.2f}, stop ${e['stop_price']:.2f}"
+                    )
+                notify("\n".join(lines))
+        else:
+            if notify:
+                lines = [f"EP EARNINGS: {len(candidates)} candidates, 0 passed strategy filters"]
+                for c in candidates:
+                    lines.append(f"  {c['ticker']}: gap {c['gap_pct']:.1f}% (filtered out)")
+                notify("\n".join(lines))
+
+    except Exception as e:
+        logger.error("EOD EP earnings scan failed: %s", e)
+        if notify:
+            notify(f"EOD EP EARNINGS SCAN FAILED: {e}")
+
+    _set_phase("idle")
+    _set_progress()
+
+
+def _persist_ep_strategy_entry(entry: dict, scan_date, db_engine):
+    """Persist an EP earnings strategy entry to the watchlist with strategy metadata."""
+    from db.models import Watchlist
+    import json as _json
+
+    meta = {
+        "ep_strategy": entry["ep_strategy"],
+        "gap_pct": entry["gap_pct"],
+        "entry_price": entry["entry_price"],
+        "stop_price": entry["stop_price"],
+        "stop_loss_pct": entry["stop_loss_pct"],
+        "max_hold_days": entry["max_hold_days"],
+        "chg_open_pct": entry["chg_open_pct"],
+        "close_in_range": entry["close_in_range"],
+        "downside_from_open": entry["downside_from_open"],
+        "prev_10d_change_pct": entry["prev_10d_change_pct"],
+        "atr_pct": entry["atr_pct"],
+        "open_price": entry["open_price"],
+        "prev_close": entry["prev_close"],
+        "market_cap": entry.get("market_cap", 0),
+        "rvol": entry.get("rvol", 0),
+    }
+
+    with get_session(db_engine) as session:
+        wl = Watchlist(
+            ticker=entry["ticker"],
+            setup_type="episodic_pivot",
+            stage="ready",  # ready for execution at 3:50 PM
+            scan_date=scan_date,
+            metadata_json=_json.dumps(meta),
+            notes=f"EP Earnings Strategy {entry['ep_strategy']}",
+        )
+        session.add(wl)
+        session.commit()
+
+
+def job_ep_earnings_execute(
+    config: dict,
+    client: AlpacaClient,
+    risk: "RiskManager",
+    db_engine,
+    notify=None,
+):
+    """
+    3:50 PM ET — Execute entries for EP earnings strategies.
+
+    Reads strategy-tagged entries prepared by the 3:00 PM scan,
+    runs risk checks, and places limit orders with -7% GTC stops.
+    If a stock passes both A and B, enters ONE position and tags both strategies.
+    """
+    global _ep_earnings_entries
+    from signals.base import SignalResult
+
+    if not is_trading_day(client):
+        return
+
+    entries = _ep_earnings_entries
+    if not entries:
+        logger.info("EP earnings execute: no entries to execute")
+        return
+
+    _set_phase("ep_earnings_execute")
+    logger.info("=== EP EARNINGS EXECUTE: %d entries ===", len(entries))
+
+    # Group by ticker: if same stock passes both A and B, enter once
+    from collections import defaultdict
+    by_ticker = defaultdict(list)
+    for entry in entries:
+        by_ticker[entry["ticker"]].append(entry)
+
+    executed = 0
+    for ticker, ticker_entries in by_ticker.items():
+        strategies = [e["ep_strategy"] for e in ticker_entries]
+        entry = ticker_entries[0]  # use first entry's prices (identical for A and B)
+        strategy_label = "+".join(sorted(set(strategies)))
+
+        # Check if we already have an open position for this ticker
+        with get_session(db_engine) as session:
+            from db.models import Position
+            existing = session.query(Position).filter_by(
+                ticker=ticker, is_open=True
+            ).first()
+            if existing:
+                logger.info("EP earnings: %s already has open position, skipping", ticker)
+                continue
+
+        # Risk manager checks
+        with get_session(db_engine) as session:
+            from db.models import Position, DailyPnl
+            open_count = session.query(Position).filter_by(is_open=True).count()
+
+        try:
+            portfolio_value = client.get_account_equity()
+        except Exception:
+            portfolio_value = 100_000  # fallback for paper
+
+        daily_pnl = 0.0  # simplified for EOD entry
+        weekly_pnl = 0.0
+        can_enter, reason = risk.can_enter(open_count, daily_pnl, weekly_pnl, portfolio_value)
+        if not can_enter:
+            logger.info("EP earnings: %s blocked by risk manager: %s", ticker, reason)
+            if notify:
+                notify(f"EP EARNINGS BLOCKED: {ticker} ({strategy_label}) - {reason}")
+            continue
+
+        # Calculate position size
+        shares = risk.calculate_position_size(
+            portfolio_value, entry["entry_price"], entry["stop_price"]
+        )
+        if shares <= 0:
+            logger.info("EP earnings: %s position size = 0, skipping", ticker)
+            continue
+
+        # Create SignalResult for the existing execution flow
+        signal = SignalResult(
+            ticker=ticker,
+            setup_type="episodic_pivot",
+            side="long",
+            entry_price=entry["entry_price"],
+            stop_price=entry["stop_price"],
+            gap_pct=entry["gap_pct"],
+            volume_ratio=entry.get("rvol"),
+            notes=f"EP Earnings Strategy {strategy_label} | "
+                  f"CHG-OPEN={entry['chg_open_pct']:.1f}% CIR={entry['close_in_range']:.0f} "
+                  f"P10D={entry['prev_10d_change_pct']:.1f}% ATR={entry['atr_pct']:.1f}%",
+        )
+
+        # Use existing execution flow (places order, waits for fill, sets stop)
+        logger.info(
+            "EP earnings entry: %s (%s) %d shares @ $%.2f stop $%.2f",
+            ticker, strategy_label, shares, signal.entry_price, signal.stop_price,
+        )
+        _execute_entry(ticker, signal, shares, client, db_engine, notify)
+        executed += 1
+
+    # Clear entries after execution
+    _ep_earnings_entries = []
+
+    if notify:
+        notify(f"EP EARNINGS EXECUTE: {executed}/{len(by_ticker)} tickers entered")
+
+    _set_phase("idle")
+    _set_progress()
+
+
 def job_eod_tasks(
     config: dict,
     client: AlpacaClient,
@@ -1295,6 +1540,20 @@ def main():
         CronTrigger(hour=9, minute=30, timezone=ET),
         args=[config, client, tracker, risk, db_engine, notify],
         id="intraday_monitor",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_eod_ep_earnings_scan,
+        CronTrigger(hour=15, minute=0, timezone=ET),
+        args=[config, client, db_engine, notify],
+        id="eod_ep_earnings_scan",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_ep_earnings_execute,
+        CronTrigger(hour=15, minute=50, timezone=ET),
+        args=[config, client, risk, db_engine, notify],
+        id="ep_earnings_execute",
         replace_existing=True,
     )
     scheduler.add_job(

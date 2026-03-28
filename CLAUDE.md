@@ -35,7 +35,7 @@ Scanners (premarket)          Signals (market open)         Monitor (intraday + 
 
 **Data sources:** Alpaca screener/snapshots for scanning, yfinance for daily bars (Alpaca free tier IEX covers ~2% of stocks), Alpaca 1m candles for intraday signals.
 
-**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 9:25 AM finalize watchlist → 9:30 AM intraday monitor → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
+**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 9:25 AM finalize watchlist → 9:30 AM intraday monitor → 3:00 PM EP earnings scan + strategy eval → 3:50 PM EP earnings execute → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
 
 **Database:** SQLAlchemy ORM, SQLite for dev/paper, PostgreSQL for live. All DB ops use `get_session(engine)` context manager.
 
@@ -46,8 +46,10 @@ Scanners (premarket)          Signals (market open)         Monitor (intraday + 
 | `signals/base.py` | `compute_orh()`, `compute_orb_low()`, `compute_vwap()`, `compute_sma()`, `compute_atr_from_list()`, `SignalResult` |
 | `risk/manager.py` | `calculate_position_size()`, `check_exposure()`, `check_daily_loss()`, `check_weekly_loss()` |
 | `executor/alpaca_client.py` | `place_limit_order()`, `place_stop_order()`, `close_position()`, `get_candles_1m()`, `run_screener()`, `get_snapshots()` |
-| `monitor/position_tracker.py` | Stop checks, partial exits, trailing MA close (daily close not intraday), parabolic profit targets |
-| `db/models.py` | `Signal`, `Order`, `Position`, `Watchlist`, `DailyPnl` — exit reasons: `stop_hit`, `trailing_stop`, `trailing_ma_close`, `parabolic_target`, `manual`, `daily_loss_limit` |
+| `scanner/ep_earnings.py` | `scan_ep_earnings()` — Spikeet universe filters: gap >8%, prev close >$3, mcap >$800M, open > prev high, open > 200d SMA, RVOL >1 |
+| `signals/ep_earnings_strategy.py` | `evaluate_ep_earnings_strategies()`, `evaluate_strategy_a()`, `evaluate_strategy_b()`, `compute_features()` — Strategy A+B entry filters |
+| `monitor/position_tracker.py` | Stop checks, partial exits, trailing MA close (daily close not intraday), parabolic profit targets, max hold period exit (50d for EP earnings) |
+| `db/models.py` | `Signal`, `Order`, `Position`, `Watchlist`, `DailyPnl` — exit reasons: `stop_hit`, `trailing_stop`, `trailing_ma_close`, `parabolic_target`, `max_hold_period`, `manual`, `daily_loss_limit` |
 | `backtest/runner.py` | `BacktestConfig`, `BacktestRunner.run()` — daily bar-by-bar simulation |
 | `backtest/metrics.py` | `compute_metrics()` — win_rate, Sharpe, max_drawdown, CAGR, calmar, profit_factor |
 
@@ -103,6 +105,60 @@ When the user asks to "verify yesterday's results" or "check yesterday's trading
 - **Phase 6 (paper trading)**: next up
 - **Phase 7 (Dashboard & Telegram)**: complete
 - See `docs/implementation-plan.md` for full phase checklist
+
+## EP Swing Strategy Research (2026-03-25)
+
+Separate from the main trading bot, an Earnings EP swing trading strategy was researched and backtested using historical gap data.
+
+### Data
+- `2025 EP Selection Earnings (1).xlsx` — 259 earnings gap trades (source data, read-only)
+- `2025 EP Selection NEWS (1).xlsx` — 945 news gap trades (analyzed but not the focus)
+- `ep-swing-research-context.md` — research context doc
+
+### Key Files
+| File | What |
+|------|------|
+| `ep_backtest.py` | **Backtester** — edit the RULES dict at top, run with `python3 ep_backtest.py`. Auto-saves results to `backtest runs/` |
+| `earnings_ep_swing_rules.md` | Full strategy rules doc: entry filters, stop, take profit, kill zones, YAML config |
+| `ep_analysis.py` | Deep analysis script (single-factor, multi-factor combos, correlations) |
+| `ep_swing_analysis_results.xlsx` | Analysis output (8 sheets: single-factor, combos, correlations, algo rules) |
+| `backtest runs/` | Saved backtest results (one .txt per run: trade table + rules + stats) |
+
+### Column Definitions (Entry Features)
+- **CHG-OPEN%** = `(Close - Open) / Open * 100` — intraday move on gap day. Positive = closed above open.
+- **close_in_range** = `(Close - Low) / (High - Low) * 100` — where stock closed in day's range. 100 = at high, 0 = at low.
+- **downside_from_open** = `(Open - Low) / Open * 100` — max dip below open on gap day.
+- **atr_pct** = `10D ATR / Close * 100` — volatility as % of price.
+- **Prev 10D change%** — price change in 10 days before gap (provided in data).
+
+### Strategy A (Tight Filters, n=45): 69% WR, +9.18% avg, PF 5.68
+1. CHG-OPEN% > 0 (positive intraday)
+2. close_in_range >= 50 (closed in top half of range)
+3. downside_from_open < 3% (didn't dip much)
+4. Prev 10D change% between -30% and -10% (sold off before earnings)
+5. Stop: -7% | Hold: 50D
+
+### Strategy B (Relaxed, n=79): 61% WR, +11.75% avg, PF 5.62
+1. CHG-OPEN% > 0
+2. close_in_range >= 50
+3. ATR% between 2-5%
+4. Prev 10D change% < -10%
+5. Stop: -7% | Hold: 50D
+
+### Kill Zones (Avoid)
+- Prev 10D > 0% (ran up into earnings): 31% WR, -7.4% mean
+- CHG-OPEN% < 0 AND close_in_range < 50: 40% WR
+
+### Backtester Usage
+```bash
+cd /Users/sharonk/Documents/TradingBot
+# Edit RULES dict in ep_backtest.py, then:
+python3 ep_backtest.py
+# Output: trade table + stats printed to console, auto-saved to "backtest runs/"
+```
+
+### Entry Timing
+All filters require the gap day to complete. Entry = Close on gap day (~3:50 PM ET). Forward returns measured from gap day Close.
 
 ## Documentation Index
 

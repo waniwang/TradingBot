@@ -29,6 +29,27 @@ signals:
   ep_volume_multiplier: 2.0               # min RVOL vs 20d avg (time-of-day normalized)
   ep_max_extension_pct: 5.0              # max % above ORH before skipping (anti-chase guard)
 
+  # --- EP Earnings (EOD scanner, runs at 3:00 PM ET) ---
+  ep_earnings_min_gap_pct: 8.0                    # gap% = (Open - prevClose) / prevClose * 100
+  ep_earnings_min_price: 3.0                      # prev close > $3
+  ep_earnings_min_market_cap: 800_000_000         # $800M minimum market cap
+  ep_earnings_require_earnings: true              # require earnings on gap day
+  ep_earnings_require_open_above_prev_high: true  # today's open > yesterday's high
+  ep_earnings_require_above_200d_sma: true        # today's open > 200-day SMA
+  ep_earnings_min_rvol: 1.0                       # today's vol / 14d avg daily vol >= 1.0
+  ep_earnings_stop_loss_pct: 7.0                  # stop loss at -7% from entry
+  ep_earnings_max_hold_days: 50                   # exit after 50 calendar days max
+  # Strategy A (tight filters)
+  ep_earnings_a_min_close_in_range: 50.0          # close in top half of day's range
+  ep_earnings_a_max_downside_from_open: 3.0       # max dip below open on gap day
+  ep_earnings_a_prev_10d_min: -30.0               # prev 10D change% floor
+  ep_earnings_a_prev_10d_max: -10.0               # prev 10D change% ceiling
+  # Strategy B (relaxed filters)
+  ep_earnings_b_min_close_in_range: 50.0          # close in top half of day's range
+  ep_earnings_b_atr_pct_min: 2.0                  # ATR% floor
+  ep_earnings_b_atr_pct_max: 5.0                  # ATR% ceiling
+  ep_earnings_b_prev_10d_max: -10.0               # prev 10D change% must be below this
+
   # --- Breakout ---
   # Consolidation detection (nightly scan)
   breakout_consolidation_days_min: 10      # min trading days in consolidation range

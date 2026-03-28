@@ -130,6 +130,7 @@ class Position(Base):
             "trailing_stop",
             "trailing_ma_close",
             "parabolic_target",
+            "max_hold_period",
             "manual",
             "daily_loss_limit",
             name="exit_reason_enum",

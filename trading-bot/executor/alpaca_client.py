@@ -589,10 +589,18 @@ class AlpacaClient:
                     prev_close = float(snap.previous_daily_bar.close) if snap.previous_daily_bar else 0
                     latest_price = float(snap.latest_trade.price) if snap.latest_trade else 0
                     daily_volume = int(snap.daily_bar.volume) if snap.daily_bar else 0
+                    prev_high = float(snap.previous_daily_bar.high) if snap.previous_daily_bar else 0
+                    today_open = float(snap.daily_bar.open) if snap.daily_bar else 0
+                    today_high = float(snap.daily_bar.high) if snap.daily_bar else 0
+                    today_low = float(snap.daily_bar.low) if snap.daily_bar else 0
                     result[sym] = {
                         "prev_close": prev_close,
+                        "prev_high": prev_high,
                         "latest_price": latest_price,
                         "daily_volume": daily_volume,
+                        "open": today_open,
+                        "today_high": today_high,
+                        "today_low": today_low,
                     }
                 except (AttributeError, TypeError):
                     continue
