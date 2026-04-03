@@ -1,6 +1,6 @@
 # Qullamaggie Trading Bot
 
-Automated momentum trading bot inspired by Kristjan Kullamagi's setups: **Breakout** (long), **Episodic Pivot** (long), **EP Earnings** (swing), **EP News** (swing), and **Parabolic Short**. Trades US equities via Alpaca. Runs on a Linode VPS with a Streamlit dashboard.
+Automated momentum trading bot inspired by Kristjan Kullamagi's setups: **Breakout** (long), **Episodic Pivot** (long), **EP Earnings** (swing), **EP News** (swing), and **Parabolic Short**. Trades US equities via Alpaca. Runs on a Linode VPS with a Next.js dashboard.
 
 ## Quick Reference
 
@@ -14,12 +14,15 @@ Automated momentum trading bot inspired by Kristjan Kullamagi's setups: **Breako
 | Config | `trading-bot/config.yaml` (env vars override: `ALPACA_API_KEY`, etc.) |
 | Tests | `trading-bot/tests/` — 338 tests across 9 files |
 | Backtest | `trading-bot/backtest/` + `trading-bot/run_backtest.py` |
-| Dashboard | `trading-bot/dashboard/app.py` (Streamlit) |
+| Dashboard (FE) | `dashboard/` — Next.js + Tailwind + shadcn/ui (deploys to Vercel) |
+| Dashboard API | `trading-bot/api/` — FastAPI (runs on Linode alongside bot) |
+| Legacy dashboard | `trading-bot/dashboard_legacy/app.py` (Streamlit, deprecated) |
 | Verification | `trading-bot/verify_day.py` — daily execution verification |
 | Operations | `trading-bot/bot.sh` — start/stop/deploy/logs/status/verify |
 | CI/CD | `.github/workflows/deploy.yml` — auto-deploy on push to main |
 | Server | Linode at `root@172.235.216.175`, code at `/opt/trading-bot` |
-| Dashboard URL | Server: `http://172.235.216.175:8501` / Local: `http://localhost:8501` |
+| Dashboard URL | Vercel (TBD) / Local: `http://localhost:3000` |
+| API URL | Server: `http://172.235.216.175:8000/api` / Local: `http://localhost:8000/api` |
 
 ## Architecture
 
@@ -136,8 +139,28 @@ When the user asks to "verify yesterday's results" or "check yesterday's trading
 - Backtest results: EP is best strategy (Sharpe 1.08 OOS), tuned combined Sharpe 1.29 OOS, parabolic short unprofitable (disabled)
 - GitHub Actions CI/CD auto-deploy pipeline active
 - **Phase 6 (paper trading)**: next up
-- **Phase 7 (Dashboard & Telegram)**: complete
+- **Phase 7 (Dashboard & Telegram)**: complete — dashboard rebuilt as Next.js + FastAPI (Streamlit deprecated)
 - See `docs/implementation-plan.md` for full phase checklist
+
+## Dashboard Architecture
+
+```
+dashboard/          → Next.js frontend (Vercel)
+trading-bot/api/    → FastAPI backend (Linode, port 8000)
+```
+
+**Frontend** (`dashboard/`): Next.js 16, TypeScript, Tailwind v4, shadcn/ui, Recharts. Dark theme. Manual refresh. Pages: Overview, Positions, Watchlist, Performance, History.
+
+**API** (`trading-bot/api/`): Read-only FastAPI endpoints. Shares DB models with bot. Auth via `X-API-Key` header. Endpoints: `/api/status`, `/api/portfolio`, `/api/positions`, `/api/positions/closed`, `/api/watchlist`, `/api/signals/today`, `/api/performance/pnl`, `/api/performance/summary`.
+
+**Dev workflow:**
+```bash
+# Terminal 1: API
+cd trading-bot && .venv/bin/uvicorn api.main:app --reload --port 8000
+
+# Terminal 2: Frontend
+cd dashboard && npm run dev
+```
 
 ## EP Swing Strategy (Integrated)
 
