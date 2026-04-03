@@ -33,8 +33,8 @@ MAX_EXTENSION_PCT = 3.0  # max % above ORH to prevent chasing
 def check_breakout(
     ticker: str,
     candles_1m: list[dict],          # today's intraday 1m candles (so far)
-    daily_closes: list[float],        # recent daily close prices (oldest → newest)
-    daily_volumes: list[int],         # recent daily volumes (oldest → newest)
+    daily_closes: list[float],        # recent daily close prices (oldest -> newest)
+    daily_volumes: list[int],         # recent daily volumes (oldest -> newest)
     current_price: float,
     current_volume: int,
     config: dict | None = None,
@@ -52,20 +52,28 @@ def check_breakout(
         daily_volumes: list of recent daily volumes (at least 20 needed)
         current_price: latest trade price
         current_volume: total volume so far today
-        config: optional app config (for overriding defaults)
-        daily_lows: recent daily low prices (unused, kept for backward compat)
-        daily_highs: recent daily high prices (used for ATR cap calculation)
+        config: strategy config dict (strategies.breakout section)
+        daily_lows: recent daily low prices (used for ATR cap)
+        daily_highs: recent daily high prices (used for ATR cap)
         minutes_since_open: minutes elapsed since 9:30 ET (for RVOL);
             falls back to len(candles_1m) if not provided
 
     Returns:
         SignalResult if all conditions met, else None
     """
-    # Read configurable thresholds (fall back to module-level constants)
-    sig_cfg = config.get("signals", {}) if config else {}
-    vol_mult = float(sig_cfg.get("breakout_volume_multiplier", VOLUME_MULTIPLIER))
-    orh_min = int(sig_cfg.get("orh_minutes", ORH_MINUTES))
-    max_ext = float(sig_cfg.get("breakout_max_extension_pct", MAX_EXTENSION_PCT))
+    cfg = config or {}
+    # Support both flat config and nested {"signals": {"breakout_volume_multiplier": ...}}
+    if "signals" in cfg and isinstance(cfg.get("signals"), dict):
+        _sig = cfg["signals"]
+        cfg = {
+            "volume_multiplier": _sig.get("breakout_volume_multiplier", VOLUME_MULTIPLIER),
+            "orh_minutes": _sig.get("orh_minutes", ORH_MINUTES),
+            "max_extension_pct": _sig.get("breakout_max_extension_pct", MAX_EXTENSION_PCT),
+            "stop_atr_mult": _sig.get("breakout_stop_atr_mult", 1.0),
+        }
+    vol_mult = float(cfg.get("volume_multiplier", VOLUME_MULTIPLIER))
+    orh_min = int(cfg.get("orh_minutes", ORH_MINUTES))
+    max_ext = float(cfg.get("max_extension_pct", MAX_EXTENSION_PCT))
 
     # Input validation — reject NaN/None/invalid prices
     if current_price is None or not isinstance(current_price, (int, float)) or math.isnan(current_price) or current_price <= 0:
@@ -117,10 +125,11 @@ def check_breakout(
     stop_price = min(c["low"] for c in candles_1m)
 
     # Cap stop width at 1x ATR (never risk more than 1 ATR per share)
+    stop_atr_mult = float(cfg.get("stop_atr_mult", 1.0))
     if daily_highs and daily_lows and daily_closes and len(daily_closes) >= 15:
         atr = compute_atr_from_list(daily_highs, daily_lows, daily_closes)
-        if atr is not None and (current_price - stop_price) > atr:
-            stop_price = current_price - atr
+        if atr is not None and (current_price - stop_price) > stop_atr_mult * atr:
+            stop_price = current_price - stop_atr_mult * atr
 
     signal = SignalResult(
         ticker=ticker,

@@ -118,49 +118,60 @@ def promote_ready_to_active(scan_date: date, db_engine) -> int:
     return count
 
 
-def expire_stale_active(today: date, db_engine) -> int:
+def expire_stale_active(today: date, db_engine, plugins=None) -> int:
     """
-    Expire yesterday's entries:
-    - EP/parabolic active entries from before today -> expired
-    - Breakout active entries from before today -> demoted back to ready
+    Expire yesterday's entries using plugin.watchlist_persist_days:
+    - persist_days == 1 (single-day): set stage='expired'
+    - persist_days == 0 (multi-day): set stage='ready' (demote for re-promotion)
 
+    Falls back to legacy behavior if no plugins dict provided.
     Returns count of affected entries.
     """
     now = datetime.utcnow()
     count = 0
 
-    with get_session(db_engine) as session:
-        # EP/parabolic single-day: expire if not triggered today
-        stale_oneday = (
-            session.query(Watchlist)
-            .filter(
-                Watchlist.setup_type.in_(["episodic_pivot", "parabolic_short"]),
-                Watchlist.stage == "active",
-                Watchlist.scan_date < today,
-            )
-            .all()
-        )
-        for row in stale_oneday:
-            row.stage = "expired"
-            row.stage_changed_at = now
-            row.updated_at = now
-            count += 1
+    if plugins:
+        single_day = [name for name, p in plugins.items() if p.watchlist_persist_days == 1]
+        multi_day = [name for name, p in plugins.items() if p.watchlist_persist_days == 0]
+    else:
+        # Legacy fallback (for tests and backward compat)
+        single_day = ["episodic_pivot", "parabolic_short"]
+        multi_day = ["breakout"]
 
-        # Breakout: demote active back to ready (they can be re-promoted tomorrow)
-        stale_breakout = (
-            session.query(Watchlist)
-            .filter(
-                Watchlist.setup_type == "breakout",
-                Watchlist.stage == "active",
-                Watchlist.scan_date < today,
+    with get_session(db_engine) as session:
+        # Single-day strategies: expire if not triggered today
+        if single_day:
+            stale_oneday = (
+                session.query(Watchlist)
+                .filter(
+                    Watchlist.setup_type.in_(single_day),
+                    Watchlist.stage == "active",
+                    Watchlist.scan_date < today,
+                )
+                .all()
             )
-            .all()
-        )
-        for row in stale_breakout:
-            row.stage = "ready"
-            row.stage_changed_at = now
-            row.updated_at = now
-            count += 1
+            for row in stale_oneday:
+                row.stage = "expired"
+                row.stage_changed_at = now
+                row.updated_at = now
+                count += 1
+
+        # Multi-day strategies: demote active back to ready
+        if multi_day:
+            stale_multiday = (
+                session.query(Watchlist)
+                .filter(
+                    Watchlist.setup_type.in_(multi_day),
+                    Watchlist.stage == "active",
+                    Watchlist.scan_date < today,
+                )
+                .all()
+            )
+            for row in stale_multiday:
+                row.stage = "ready"
+                row.stage_changed_at = now
+                row.updated_at = now
+                count += 1
 
         session.commit()
 

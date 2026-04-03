@@ -33,10 +33,7 @@ class Signal(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ticker: Mapped[str] = mapped_column(String(10), nullable=False)
-    setup_type: Mapped[str] = mapped_column(
-        Enum("breakout", "episodic_pivot", "parabolic_short", name="setup_type_enum"),
-        nullable=False,
-    )
+    setup_type: Mapped[str] = mapped_column(String(50), nullable=False)
     entry_price: Mapped[float] = mapped_column(Float, nullable=False)
     stop_price: Mapped[float] = mapped_column(Float, nullable=False)
     gap_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -100,10 +97,7 @@ class Position(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ticker: Mapped[str] = mapped_column(String(10), nullable=False)
-    setup_type: Mapped[str] = mapped_column(
-        Enum("breakout", "episodic_pivot", "parabolic_short", name="position_setup_enum"),
-        nullable=False,
-    )
+    setup_type: Mapped[str] = mapped_column(String(50), nullable=False)
     side: Mapped[str] = mapped_column(
         Enum("long", "short", name="position_side_enum"), nullable=False
     )
@@ -124,19 +118,7 @@ class Position(Base):
     partial_exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    exit_reason: Mapped[str | None] = mapped_column(
-        Enum(
-            "stop_hit",
-            "trailing_stop",
-            "trailing_ma_close",
-            "parabolic_target",
-            "max_hold_period",
-            "manual",
-            "daily_loss_limit",
-            name="exit_reason_enum",
-        ),
-        nullable=True,
-    )
+    exit_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_open: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -174,10 +156,7 @@ class Watchlist(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ticker: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
-    setup_type: Mapped[str] = mapped_column(
-        Enum("breakout", "episodic_pivot", "parabolic_short", name="watchlist_setup_type_enum"),
-        nullable=False,
-    )
+    setup_type: Mapped[str] = mapped_column(String(50), nullable=False)
     stage: Mapped[str] = mapped_column(
         Enum("watching", "ready", "active", "triggered", "expired", "failed",
              name="watchlist_unified_stage_enum"),

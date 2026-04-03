@@ -10,9 +10,9 @@ from signals.base import (
     compute_orh, compute_orb_low, compute_vwap, compute_sma,
     compute_atr_from_list, compute_rvol, _cumulative_volume_fraction,
 )
-from signals.breakout import check_breakout
-from signals.episodic_pivot import check_episodic_pivot
-from signals.parabolic_short import check_parabolic_short
+from strategies.breakout.signal import check_breakout
+from strategies.episodic_pivot.signal import check_episodic_pivot
+from strategies.parabolic_short.signal import check_parabolic_short
 
 
 # ---------------------------------------------------------------------------

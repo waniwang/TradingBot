@@ -84,17 +84,18 @@ class BacktestRunner:
     """
     Daily-bar backtest engine.
 
-    Simulates breakout, episodic pivot, and parabolic short strategies
-    using end-of-day data with entry approximations.
+    Simulates trading strategies bar-by-bar using daily OHLCV data.
+    Delegates entry/exit logic to strategy plugins when available.
     """
 
-    def __init__(self, config: BacktestConfig | None = None):
+    def __init__(self, config: BacktestConfig | None = None, plugins: dict | None = None):
         self.config = config or BacktestConfig()
         self.portfolio_value: float = self.config.initial_capital
         self.cash: float = self.config.initial_capital
         self.positions: list[BacktestPosition] = []
         self.trades: list[Trade] = []
         self.daily_equity: list[float] = []
+        self._plugins = plugins or {}  # {name: StrategyPlugin}
 
     def run(
         self,
@@ -211,20 +212,27 @@ class BacktestRunner:
                 to_close.append((pos, fill_price, "stop_hit"))
                 continue
 
-            # Parabolic target check (short/long MA)
-            if pos.setup_type == "parabolic_short" and pos.side == "short":
-                ma_short = self.config.parabolic_target_ma_short
-                ma_long = self.config.parabolic_target_ma_long
-                closes = self._get_recent_closes(pos.ticker, date, ticker_data, prior_dates, ma_long)
-                if len(closes) >= ma_short:
-                    ma_s = compute_sma(closes, ma_short)
-                    if ma_s is not None and close <= ma_s and not pos.partial_exit_done:
-                        self._do_partial_exit(pos, close, date)
-                        continue
-                    if len(closes) >= ma_long:
-                        ma_l = compute_sma(closes, ma_long)
-                        if ma_l is not None and close <= ma_l and pos.partial_exit_done:
-                            to_close.append((pos, close, "parabolic_target"))
+            # Strategy-specific exit hook (replaces hardcoded parabolic branch)
+            plugin = self._plugins.get(pos.setup_type)
+            if plugin is not None:
+                closes_for_exit = self._get_recent_closes(
+                    pos.ticker, date, ticker_data, prior_dates,
+                    max(self.config.parabolic_target_ma_long, self.config.trailing_ma_period),
+                )
+                history_for_exit = {"closes": closes_for_exit}
+                exit_result = plugin.backtest_exit(pos, date, row, history_for_exit, self.config)
+                if exit_result is not None:
+                    exit_price, reason = exit_result
+                    to_close.append((pos, exit_price, reason))
+                    continue
+                # Parabolic short partial exit at short MA (handled inline since
+                # backtest_exit returns None to let shared logic handle partial)
+                if pos.setup_type == "parabolic_short" and pos.side == "short" and not pos.partial_exit_done:
+                    ma_short = self.config.parabolic_target_ma_short
+                    if len(closes_for_exit) >= ma_short:
+                        ma_s = compute_sma(closes_for_exit, ma_short)
+                        if ma_s is not None and close <= ma_s:
+                            self._do_partial_exit(pos, close, date)
                             continue
 
             # Trailing MA close exit (only after partial exit done)
@@ -298,29 +306,54 @@ class BacktestRunner:
             volumes = self._get_recent_values(ticker, date, ticker_data, prior_dates, 20, "volume")
             avg_vol = float(np.mean(volumes)) if volumes else 0
 
-            # -- Breakout --
-            if "breakout" in setups and self._check_breakout_entry(
-                ticker, date, today_high, today_low, today_close, today_volume,
-                closes, highs, lows, volumes, avg_vol, prior_dates, ticker_data,
-            ):
-                continue
-
-            # -- Episodic Pivot --
-            if "episodic_pivot" in setups and len(closes) >= 2:
-                prev_close = closes[-2] if len(closes) >= 2 else closes[-1]
-                gap_pct = (today_open - prev_close) / prev_close * 100 if prev_close > 0 else 0
-                if self._check_ep_entry(
-                    ticker, date, gap_pct, today_open, today_high, today_low,
-                    today_volume, closes, highs, lows, avg_vol,
-                ):
-                    continue
-
-            # -- Parabolic Short --
-            if "parabolic_short" in setups:
-                self._check_parabolic_entry(
-                    ticker, date, today_open, today_high, today_low, today_close,
-                    today_volume, closes, highs, lows, avg_vol,
-                )
+            # Check each enabled strategy via plugin dispatch
+            history = {
+                "closes": closes,
+                "highs": highs,
+                "lows": lows,
+                "volumes": volumes,
+                "avg_vol": avg_vol,
+            }
+            entered = False
+            for setup_name in setups:
+                if len(self.positions) >= cfg.max_positions:
+                    break
+                plugin = self._plugins.get(setup_name)
+                if plugin is not None:
+                    result = plugin.backtest_entry(ticker, date, row, history, cfg)
+                    if result is not None:
+                        shares = self._size_position(result.entry_price, result.stop_price)
+                        if shares > 0:
+                            self._open_position(
+                                ticker, setup_name, result.side, date,
+                                result.entry_price, result.stop_price, shares,
+                            )
+                            entered = True
+                            break
+                else:
+                    # Fallback: use legacy methods for strategies without plugins
+                    if setup_name == "breakout" and self._check_breakout_entry(
+                        ticker, date, today_high, today_low, today_close, today_volume,
+                        closes, highs, lows, volumes, avg_vol, prior_dates, ticker_data,
+                    ):
+                        entered = True
+                        break
+                    elif setup_name == "episodic_pivot" and len(closes) >= 2:
+                        prev_close = closes[-2] if len(closes) >= 2 else closes[-1]
+                        gap_pct = (today_open - prev_close) / prev_close * 100 if prev_close > 0 else 0
+                        if self._check_ep_entry(
+                            ticker, date, gap_pct, today_open, today_high, today_low,
+                            today_volume, closes, highs, lows, avg_vol,
+                        ):
+                            entered = True
+                            break
+                    elif setup_name == "parabolic_short":
+                        if self._check_parabolic_entry(
+                            ticker, date, today_open, today_high, today_low, today_close,
+                            today_volume, closes, highs, lows, avg_vol,
+                        ):
+                            entered = True
+                            break
 
     def _check_breakout_entry(
         self, ticker, date, today_high, today_low, today_close, today_volume,

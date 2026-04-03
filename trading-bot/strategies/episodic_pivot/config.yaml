@@ -1,0 +1,7 @@
+# Episodic Pivot strategy configuration
+min_gap_pct: 10.0                  # min overnight gap % to qualify
+volume_multiplier: 2.0             # min RVOL vs 20d avg (time-of-day normalized)
+max_extension_pct: 5.0             # max % above ORH before skipping (anti-chase guard)
+prior_rally_max_pct: 50.0          # reject if stock already up this % in 6 months
+entry_range_fraction: 0.30         # backtest: entry at open + fraction*(high-open)
+stop_atr_mult: 1.5                 # ATR multiplier cap on stop width

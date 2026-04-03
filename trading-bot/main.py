@@ -29,29 +29,21 @@ import yaml
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from core.loader import load_strategies, get_registry, get_plugin
+from core.scheduler import register_strategy_jobs
+from core import data_cache
 from db.models import init_db, get_session
 from executor.alpaca_client import AlpacaClient
 from monitor.position_tracker import PositionTracker
 from risk.manager import RiskManager
-from scanner.gapper import get_premarket_gappers
-from scanner.momentum_rank import rank_by_momentum
-from scanner.consolidation import scan_breakout_candidates
-from scanner.parabolic import scan_parabolic_candidates
-from scanner.ep_earnings import scan_ep_earnings
-from scanner.ep_news import scan_ep_news
-from signals.ep_earnings_strategy import evaluate_ep_earnings_strategies
-from signals.ep_news_strategy import evaluate_ep_news_strategies
 from scanner.watchlist_manager import (
-    run_nightly_scan,
-    get_ready_candidates,
     mark_triggered,
     get_pipeline_counts,
     persist_candidates,
-    promote_ready_to_active,
     expire_stale_active,
     get_active_watchlist,
+    run_nightly_scan,
 )
-from signals import evaluate_signal
 from signals.base import compute_sma
 
 logging.basicConfig(
@@ -81,6 +73,20 @@ def load_config(path: str = "config.yaml") -> dict:
         cfg["telegram"]["bot_token"] = os.environ["TELEGRAM_BOT_TOKEN"]
     if os.environ.get("TELEGRAM_CHAT_ID"):
         cfg["telegram"]["chat_id"] = os.environ["TELEGRAM_CHAT_ID"]
+
+    # Merge per-strategy config.yaml files into cfg["strategies"]
+    strategies_dir = Path(__file__).parent / "strategies"
+    cfg.setdefault("strategies", {})
+    if strategies_dir.is_dir():
+        for d in sorted(strategies_dir.iterdir()):
+            if d.is_dir() and (d / "config.yaml").exists():
+                try:
+                    with open(d / "config.yaml") as sf:
+                        strategy_cfg = yaml.safe_load(sf) or {}
+                    cfg["strategies"].setdefault(d.name, {}).update(strategy_cfg)
+                except Exception as e:
+                    logger.warning("Failed to load strategy config %s: %s", d / "config.yaml", e)
+
     return cfg
 
 
@@ -92,12 +98,13 @@ _watchlist: list[dict] = []          # [{ticker, setup_type, gap_pct, ...}]
 _ep_earnings_entries: list[dict] = []  # strategy-tagged entries for 3:50 PM execution
 _ep_news_entries: list[dict] = []  # EP news strategy entries for 3:50 PM execution
 _db_engine = None                    # set in main(), used by _write_status
-_daily_bars_cache: dict[str, list[dict]] = {}
-_daily_closes_cache: dict[str, list[float]] = {}
-_daily_volumes_cache: dict[str, list[int]] = {}
-_daily_highs_cache: dict[str, list[float]] = {}
-_daily_lows_cache: dict[str, list[float]] = {}
-_cache_lock = threading.Lock()       # guards all caches above
+# Daily bar caches now live in core.data_cache (shared module)
+_daily_bars_cache = data_cache.daily_bars_cache
+_daily_closes_cache = data_cache.daily_closes_cache
+_daily_volumes_cache = data_cache.daily_volumes_cache
+_daily_highs_cache = data_cache.daily_highs_cache
+_daily_lows_cache = data_cache.daily_lows_cache
+_cache_lock = data_cache.cache_lock
 _entry_locks: dict[str, threading.Lock] = {}
 _entry_locks_meta = threading.Lock()  # guards _entry_locks dict itself
 
@@ -112,47 +119,12 @@ def _get_entry_lock(ticker: str) -> threading.Lock:
 
 def _clear_daily_caches():
     """Clear all daily bar caches. Called at start of each trading day."""
-    with _cache_lock:
-        _daily_bars_cache.clear()
-        _daily_closes_cache.clear()
-        _daily_volumes_cache.clear()
-        _daily_highs_cache.clear()
-        _daily_lows_cache.clear()
-    logger.info("Daily bar caches cleared")
+    data_cache.clear_daily_caches()
 
 
 def _prefetch_daily_bars(client, tickers: list[str], notify=None):
-    """
-    Pre-fetch daily bars for watchlist tickers using yfinance batch download.
-
-    Populates _daily_bars_cache so on_bar callbacks use cached data instead of
-    making per-ticker REST calls to Alpaca (which are slow on IEX).
-    """
-    if not tickers:
-        return
-    logger.info("Pre-fetching daily bars for %d watchlist tickers...", len(tickers))
-    try:
-        bars_by_symbol = client.get_daily_bars_batch(tickers, days=130)
-        with _cache_lock:
-            for ticker, df in bars_by_symbol.items():
-                if df is None or df.empty:
-                    continue
-                bars_list = df.to_dict("records")
-                _daily_bars_cache[ticker] = bars_list
-                _daily_closes_cache[ticker] = [b["close"] for b in bars_list]
-                _daily_volumes_cache[ticker] = [int(b["volume"]) for b in bars_list]
-                _daily_highs_cache[ticker] = [b["high"] for b in bars_list]
-                _daily_lows_cache[ticker] = [b["low"] for b in bars_list]
-        logger.info("Pre-fetched daily bars for %d/%d tickers", len(bars_by_symbol), len(tickers))
-        if len(bars_by_symbol) == 0 and len(tickers) > 0:
-            msg = f"WARNING: Daily bars returned 0/{len(tickers)} tickers — signals may lack ATR/RVOL data"
-            logger.warning(msg)
-            if notify:
-                notify(msg)
-    except Exception as e:
-        logger.error("Daily bars pre-fetch failed: %s", e)
-        if notify:
-            notify(f"WARNING: Daily bars pre-fetch failed for {len(tickers)} tickers: {e}")
+    """Pre-fetch daily bars via shared data_cache module."""
+    data_cache.prefetch_daily_bars(client, tickers, notify=notify)
 
 
 # ---------------------------------------------------------------------------
@@ -227,11 +199,12 @@ def _format_watchlist_notification(watchlist: list[dict]) -> str:
         setup = c.get("setup_type", "unknown")
         by_setup.setdefault(setup, []).append(c)
 
-    setup_labels = {
-        "episodic_pivot": "EP",
-        "breakout": "Breakout",
-        "parabolic_short": "Parabolic Short",
-    }
+    registry = get_registry()
+    setup_labels = {name: p.display_name for name, p in registry.items()}
+    # Fallback for any setup_type not in registry
+    setup_labels.setdefault("episodic_pivot", "EP")
+    setup_labels.setdefault("breakout", "Breakout")
+    setup_labels.setdefault("parabolic_short", "Parabolic Short")
 
     for setup, items in by_setup.items():
         label = setup_labels.get(setup, setup)
@@ -264,46 +237,26 @@ def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=Non
 
     today = datetime.now(ET).date()
     errors = []
-    enabled = config.get("strategies", {}).get("enabled", ["episodic_pivot", "breakout", "parabolic_short"])
+    plugins = get_registry()
 
-    # 1. Expire/demote yesterday's stale entries
+    # 1. Expire/demote yesterday's stale entries (uses plugin.watchlist_persist_days)
     try:
-        expire_stale_active(today, db_engine)
+        expire_stale_active(today, db_engine, plugins=plugins)
     except Exception as e:
         logger.error("Failed to expire stale active entries: %s", e)
 
-    # 2. EP gappers — persist to DB as active
-    if "episodic_pivot" in enabled:
-        _set_progress("Scanning EP gappers")
+    # 2. Run premarket scan for each enabled strategy
+    for plugin in plugins.values():
+        _set_progress(f"Scanning {plugin.display_name}")
         try:
-            ep_candidates = get_premarket_gappers(config, client)
-            logger.info("EP candidates: %d", len(ep_candidates))
-            persist_candidates(ep_candidates, "episodic_pivot", "active", today, db_engine)
+            candidates = plugin.premarket_scan(config, client, db_engine, notify)
+            count = len(candidates) if isinstance(candidates, list) else 0
+            if isinstance(candidates, list) and candidates:
+                persist_candidates(candidates, plugin.name, "active", today, db_engine)
+            logger.info("%s premarket scan: %d candidates", plugin.display_name, count)
         except Exception as e:
-            logger.error("EP gapper scan failed: %s", e)
-            errors.append(f"EP gapper scan failed: {e}")
-
-    # 3. Breakout: promote ready -> active for today
-    if "breakout" in enabled:
-        _set_progress("Promoting breakout candidates")
-        try:
-            promoted = promote_ready_to_active(today, db_engine)
-            logger.info("Breakout candidates promoted to active: %d", promoted)
-        except Exception as e:
-            logger.error("Breakout promotion failed: %s", e)
-            errors.append(f"Breakout promotion failed: {e}")
-
-    # 4. Parabolic short candidates — persist to DB as active
-    if "parabolic_short" in enabled:
-        try:
-            parabolic_candidates = scan_parabolic_candidates(config, client)
-            logger.info("Parabolic candidates: %d", len(parabolic_candidates))
-            persist_candidates(parabolic_candidates, "parabolic_short", "active", today, db_engine)
-        except Exception as e:
-            logger.error("Parabolic scan failed: %s", e)
-            errors.append(f"Parabolic scan failed: {e}")
-    else:
-        logger.info("Parabolic short disabled in config")
+            logger.error("%s premarket scan failed: %s", plugin.display_name, e)
+            errors.append(f"{plugin.display_name} scan failed: {e}")
 
     # 5. Load unified active watchlist from DB
     _watchlist = get_active_watchlist(db_engine)[:20]
@@ -534,17 +487,17 @@ def _evaluate_and_enter(
             notify(f"Trading halted: {block_reason}")
         return
 
-    # Check if strategy is enabled
+    # Check if strategy is enabled via plugin registry
     setup = watchlist_entry["setup_type"]
-    enabled = config.get("strategies", {}).get("enabled", ["episodic_pivot", "breakout", "parabolic_short"])
-    if setup not in enabled:
-        logger.debug("Skipping %s for %s — strategy disabled", setup, ticker)
+    plugin = get_plugin(setup)
+    if plugin is None:
+        logger.debug("Skipping %s for %s — strategy not loaded", setup, ticker)
         return
 
-    # Evaluate signal via strategy registry
-    sig = evaluate_signal(
-        setup,
+    # Evaluate signal via strategy plugin
+    sig = plugin.evaluate_signal(
         ticker,
+        watchlist_entry,
         candles_1m=candles_1m,
         daily_closes=daily_closes,
         daily_volumes=daily_volumes,
@@ -552,7 +505,6 @@ def _evaluate_and_enter(
         daily_lows=daily_lows,
         current_price=current_price,
         current_volume=current_volume,
-        gap_pct=watchlist_entry.get("gap_pct", 0.0),
         config=config,
         minutes_since_open=minutes_since_open,
     )
@@ -1712,6 +1664,11 @@ def main():
 
     logger.info("Trading bot starting. Environment: %s", config["environment"])
 
+    # Load strategy plugins
+    enabled = config.get("strategies", {}).get("enabled", [])
+    plugins = load_strategies(enabled)
+    logger.info("Loaded %d strategy plugins: %s", len(plugins), list(plugins.keys()))
+
     # Database
     db_engine = init_db(config["database"]["url"])
 
@@ -1728,8 +1685,8 @@ def main():
     # Risk manager
     risk = RiskManager(config)
 
-    # Position tracker
-    tracker = PositionTracker(config, db_engine, client, notify)
+    # Position tracker (with plugin registry for strategy-specific exit hooks)
+    tracker = PositionTracker(config, db_engine, client, notify, plugins=plugins)
 
     # Restore watchlist from DB (active entries survive restarts with full data)
     global _watchlist
@@ -1766,13 +1723,9 @@ def main():
     scheduler = BackgroundScheduler(timezone=ET)
     _scheduler_ref = scheduler
 
-    scheduler.add_job(
-        job_nightly_watchlist_scan,
-        CronTrigger(hour=17, minute=0, timezone=ET),
-        args=[config, client, db_engine, notify],
-        id="nightly_watchlist_scan",
-        replace_existing=True,
-    )
+    # Register strategy-declared cron jobs (e.g. breakout nightly scan)
+    register_strategy_jobs(scheduler, plugins, config, client, db_engine, notify)
+
     scheduler.add_job(
         job_premarket_scan,
         CronTrigger(hour=6, minute=0, timezone=ET),

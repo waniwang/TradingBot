@@ -1,0 +1,9 @@
+# Parabolic Short strategy configuration
+min_gain_pct: 50.0                 # legacy fallback — used if per-cap keys not set
+min_gain_pct_largecap: 50.0        # large-cap (price > $50): min gain % to qualify
+min_gain_pct_smallcap: 200.0       # small-cap (price < $20): min gain % to qualify
+min_days: 3                        # min consecutive up days
+
+# Backtest
+target_ma_short: 10                # cover half at this MA
+target_ma_long: 20                 # cover remainder at this MA

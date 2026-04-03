@@ -1,0 +1,19 @@
+# Breakout strategy configuration
+
+# Consolidation detection (nightly scan)
+consolidation_days_min: 10         # min trading days in consolidation range
+consolidation_days_max: 40         # max trading days in consolidation range
+consolidation_atr_ratio: 0.95     # ATR contraction threshold (lower = stricter)
+consolidation_ma_tolerance_pct: 3.0  # max % distance from 10d/20d MA
+consolidation_prior_move_pct: 30.0   # min % advance before consolidation
+
+# Entry signal
+volume_multiplier: 1.5            # min RVOL vs 20d avg (time-of-day normalized)
+max_extension_pct: 3.0            # max % above ORH before skipping (anti-chase guard)
+stop_atr_mult: 1.0                # ATR multiplier cap on stop width
+
+# Backtest
+lookback: 5                       # prior N-day high for resistance level
+prior_move_pct: 30.0              # min % move before consolidation (backtest)
+atr_contraction_ratio: 0.85       # ATR contraction threshold (backtest)
+ma_tolerance_pct: 3.0             # max % distance from MAs (backtest)

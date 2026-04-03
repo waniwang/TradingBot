@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pandas as pd
 
-from scanner.gapper import get_premarket_gappers
+from strategies.episodic_pivot.scanner import get_premarket_gappers
 from scanner.momentum_rank import rank_by_momentum, compute_rs_score
 from scanner.consolidation import (
     analyze_consolidation,
@@ -20,7 +20,7 @@ from scanner.consolidation import (
     detect_atr_contraction,
     check_near_ma,
 )
-from scanner.parabolic import scan_parabolic_candidates
+from strategies.parabolic_short.scanner import scan_parabolic_candidates
 
 
 # ---------------------------------------------------------------------------

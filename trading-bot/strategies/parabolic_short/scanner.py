@@ -3,9 +3,6 @@ Parabolic short scanner.
 
 Identifies stocks that have moved up parabolically (multi-day run-up)
 and may be candidates for a short reversal trade.
-
-Reuses the same Alpaca screener (top gainers) as the gapper scanner,
-then validates candidates against daily bars for sustained parabolic moves.
 """
 
 from __future__ import annotations
@@ -24,12 +21,8 @@ def scan_parabolic_candidates(
     """
     Find stocks with multi-day parabolic moves suitable for short setups.
 
-    Uses Alpaca screener top gainers as the initial universe, then filters
-    using daily bars to confirm a sustained parabolic move (>= min_gain_pct
-    over >= min_days).
-
     Args:
-        config: full app config dict
+        config: strategy config dict (strategies.parabolic_short section)
         client: AlpacaClient instance
         max_results: cap on returned candidates
 
@@ -37,12 +30,19 @@ def scan_parabolic_candidates(
         List of dicts with keys: ticker, gain_pct, base_price,
         recent_high, parabolic_days, setup_type
     """
-    sig_cfg = config.get("signals", {})
-    min_gain_largecap = float(sig_cfg.get("parabolic_min_gain_pct_largecap", 50.0))
-    min_gain_smallcap = float(sig_cfg.get("parabolic_min_gain_pct_smallcap", 200.0))
-    min_days = int(sig_cfg.get("parabolic_min_days", 3))
+    # Support both flat config and nested {"signals": {"parabolic_min_gain_pct": ...}}
+    if "signals" in config and isinstance(config["signals"], dict):
+        _sig = config["signals"]
+        min_gain_largecap = float(_sig.get("parabolic_min_gain_pct_largecap",
+                                  _sig.get("parabolic_min_gain_pct", 50.0)))
+        min_gain_smallcap = float(_sig.get("parabolic_min_gain_pct_smallcap", 200.0))
+        min_days = int(_sig.get("parabolic_min_days", 3))
+    else:
+        min_gain_largecap = float(config.get("min_gain_pct_largecap", 50.0))
+        min_gain_smallcap = float(config.get("min_gain_pct_smallcap", 200.0))
+        min_days = int(config.get("min_days", 3))
 
-    # Step 1: Get top gainers from screener (same source as gapper.py)
+    # Step 1: Get top gainers from screener
     movers = client.get_market_movers_gainers(top=50)
     if not movers:
         logger.info("Parabolic scan: no market movers returned")
@@ -80,8 +80,8 @@ def scan_parabolic_candidates(
 
         gain_pct = (recent_high - base_price) / base_price * 100
 
-        # B1: Use price as proxy for market cap —
-        # price > $50 → large-cap threshold, price < $20 → small-cap threshold
+        # Use price as proxy for market cap —
+        # price > $50 -> large-cap threshold, price < $20 -> small-cap threshold
         latest_price = float(closes[-1])
         if latest_price > 50:
             threshold = min_gain_largecap

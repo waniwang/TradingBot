@@ -5,9 +5,6 @@ Fires when:
 1. Stock has moved up parabolically (>= 50% in 3-5 days)
 2. Current price breaks below the Opening Range Low (ORB low)
 3. Price fails to reclaim VWAP (VWAP failure confirmation)
-
-NOTE: Requires short-locate access in Moomoo margin account.
-Start with long setups first.
 """
 
 from __future__ import annotations
@@ -28,7 +25,7 @@ ORB_MINUTES = 5
 def check_parabolic_short(
     ticker: str,
     candles_1m: list[dict],          # today's intraday 1m candles (so far)
-    daily_closes: list[float],        # recent daily closes (oldest → newest)
+    daily_closes: list[float],        # recent daily closes (oldest -> newest)
     current_price: float,
     current_volume: int,
     config: dict | None = None,
@@ -40,21 +37,25 @@ def check_parabolic_short(
     Args:
         ticker: stock symbol
         candles_1m: today's 1m candles
-        daily_closes: recent daily close prices (at least parabolic_min_days + 1)
+        daily_closes: recent daily close prices (at least min_days + 1)
         current_price: latest trade price
         current_volume: total volume today
-        config: optional app config
-        daily_highs: recent daily high prices; used for more accurate parabolic gain calc
+        config: strategy config dict (strategies.parabolic_short section)
+        daily_highs: recent daily high prices
 
     Returns:
         SignalResult (side='short') if all conditions met, else None
     """
-    min_gain_pct = 50.0
-    min_days = 3
-    if config:
-        sig = config.get("signals", {})
-        min_gain_pct = float(sig.get("parabolic_min_gain_pct", 50.0))
-        min_days = int(sig.get("parabolic_min_days", 3))
+    cfg = config or {}
+    # Support both flat config and nested {"signals": {"parabolic_min_gain_pct": ...}}
+    if "signals" in cfg and isinstance(cfg.get("signals"), dict):
+        _sig = cfg["signals"]
+        cfg = {
+            "min_gain_pct": _sig.get("parabolic_min_gain_pct", 50.0),
+            "min_days": _sig.get("parabolic_min_days", 3),
+        }
+    min_gain_pct = float(cfg.get("min_gain_pct", 50.0))
+    min_days = int(cfg.get("min_days", 3))
 
     # 1. Verify the stock has moved up parabolically
     if len(daily_closes) < min_days + 1:

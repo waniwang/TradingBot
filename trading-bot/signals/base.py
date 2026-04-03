@@ -18,7 +18,7 @@ import pandas as pd
 import numpy as np
 
 
-SetupType = Literal["breakout", "episodic_pivot", "parabolic_short"]
+SetupType = str  # Any registered strategy name (was Literal, now open for plugins)
 Side = Literal["long", "short"]
 
 

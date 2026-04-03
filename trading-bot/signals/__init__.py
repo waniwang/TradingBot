@@ -1,14 +1,15 @@
 """
 Signal strategy registry.
 
+LEGACY MODULE — kept for backward compatibility with tests and other code
+that imports `evaluate_signal` from here. The live orchestrator (main.py)
+now uses strategy plugins directly via core.loader.
+
 To add a new strategy:
-1. Create signals/<name>.py with a check function returning SignalResult | None
-2. Add a wrapper below that accepts **kwargs and calls your check function
-3. Register it in STRATEGY_REGISTRY
-4. Add the setup_type to SetupType in base.py
-5. Add the setup_type to the DB enum in db/models.py (requires migration)
-6. Add a scanner entry (or manual watchlist logic) so tickers get tagged
-   with your new setup_type
+1. Create strategies/<name>/ with plugin.py, scanner.py, signal.py, backtest.py, config.yaml
+2. Implement PLUGIN satisfying the StrategyPlugin protocol
+3. Add the strategy name to strategies.enabled in config.yaml
+4. No changes needed to this file, main.py, or db/models.py
 """
 
 from __future__ import annotations
@@ -17,9 +18,9 @@ import logging
 from typing import Callable
 
 from signals.base import SignalResult
-from signals.breakout import check_breakout
-from signals.episodic_pivot import check_episodic_pivot
-from signals.parabolic_short import check_parabolic_short
+from strategies.breakout.signal import check_breakout
+from strategies.episodic_pivot.signal import check_episodic_pivot
+from strategies.parabolic_short.signal import check_parabolic_short
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ def _eval_parabolic_short(ticker: str, **ctx) -> SignalResult | None:
 
 
 # ---------------------------------------------------------------------------
-# Registry — maps setup_type string → adapter callable
+# Legacy registry — used by tests. Live path uses plugin.evaluate_signal().
 # ---------------------------------------------------------------------------
 
 StrategyFn = Callable[..., SignalResult | None]
@@ -89,7 +90,7 @@ def evaluate_signal(setup_type: str, ticker: str, **ctx) -> SignalResult | None:
     Look up *setup_type* in the registry and evaluate the strategy.
 
     All available context (candles_1m, daily_closes, daily_volumes,
-    current_price, current_volume, gap_pct, config, …) should be passed
+    current_price, current_volume, gap_pct, config, ...) should be passed
     as keyword arguments.  Each adapter picks what it needs.
 
     Returns SignalResult on a valid signal, None otherwise.

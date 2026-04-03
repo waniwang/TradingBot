@@ -24,7 +24,7 @@ def get_premarket_gappers(
     Fetch pre-market gappers via Alpaca screener + snapshots.
 
     Args:
-        config: full app config dict
+        config: strategy config dict (strategies.episodic_pivot section)
         client: AlpacaClient instance
         min_gap_pct: minimum % change premarket (defaults to config value)
         min_volume: minimum premarket volume filter
@@ -34,8 +34,18 @@ def get_premarket_gappers(
         List of dicts with keys: ticker, gap_pct, premarket_price,
         prev_close, premarket_volume, setup_type
     """
+    # Support both flat config {"min_gap_pct": 10} and nested {"signals": {"ep_min_gap_pct": 10}}
+    if "signals" in config and isinstance(config["signals"], dict):
+        _sig = config["signals"]
+        _cfg = {
+            "min_gap_pct": _sig.get("ep_min_gap_pct", config.get("min_gap_pct", 10.0)),
+            "prior_rally_max_pct": _sig.get("prior_rally_max_pct", config.get("prior_rally_max_pct", 50.0)),
+        }
+    else:
+        _cfg = config
+
     if min_gap_pct is None:
-        min_gap_pct = float(config["signals"]["ep_min_gap_pct"])
+        min_gap_pct = float(_cfg.get("min_gap_pct", 10.0))
 
     # Step 1: Get top gainers from screener
     movers = client.get_market_movers_gainers(top=50)
@@ -87,7 +97,8 @@ def get_premarket_gappers(
             "setup_type": "episodic_pivot",
         })
 
-    # A7: Filter out stocks that already rallied 50%+ in prior 6 months
+    # Filter out stocks that already rallied 50%+ in prior 6 months
+    prior_rally_max = float(_cfg.get("prior_rally_max_pct", 50.0))
     if candidates:
         tickers_to_check = [c["ticker"] for c in candidates]
         try:
@@ -108,7 +119,7 @@ def get_premarket_gappers(
             # Check 6-month performance (exclude last day which is the gap day)
             if len(closes) >= 2:
                 prior_gain = (closes[-2] - closes[0]) / closes[0] * 100
-                if prior_gain >= 50:
+                if prior_gain >= prior_rally_max:
                     logger.debug(
                         "%s: already up %.1f%% in 6m — skipping EP",
                         c["ticker"], prior_gain,

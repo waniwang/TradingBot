@@ -31,7 +31,7 @@ MAX_EXTENSION_PCT = 5.0  # EP allows wider extension than breakout (gap stocks r
 def check_episodic_pivot(
     ticker: str,
     candles_1m: list[dict],          # today's intraday 1m candles (so far)
-    daily_volumes: list[int],         # recent daily volumes (oldest → newest)
+    daily_volumes: list[int],         # recent daily volumes (oldest -> newest)
     current_price: float,
     current_volume: int,
     gap_pct: float,                   # % gap from previous close to open/premarket
@@ -51,7 +51,7 @@ def check_episodic_pivot(
         current_price: latest trade price
         current_volume: total volume so far today
         gap_pct: percentage gap from prior close (e.g. 15.0 for a 15% gap)
-        config: optional app config
+        config: strategy config dict (strategies.episodic_pivot section)
         daily_highs: recent daily high prices (used for ATR cap)
         daily_lows: recent daily low prices (used for ATR cap)
         daily_closes: recent daily close prices (used for ATR cap)
@@ -61,11 +61,21 @@ def check_episodic_pivot(
     Returns:
         SignalResult if all conditions met, else None
     """
-    sig_cfg = config.get("signals", {}) if config else {}
-    min_gap = float(sig_cfg.get("ep_min_gap_pct", 10.0))
-    vol_mult = float(sig_cfg.get("ep_volume_multiplier", VOLUME_MULTIPLIER))
-    orh_min = int(sig_cfg.get("orh_minutes", ORH_MINUTES))
-    max_ext = float(sig_cfg.get("ep_max_extension_pct", MAX_EXTENSION_PCT))
+    cfg = config or {}
+    # Support both flat config and nested {"signals": {"ep_min_gap_pct": ...}}
+    if "signals" in cfg and isinstance(cfg.get("signals"), dict):
+        _sig = cfg["signals"]
+        cfg = {
+            "min_gap_pct": _sig.get("ep_min_gap_pct", 10.0),
+            "volume_multiplier": _sig.get("ep_volume_multiplier", VOLUME_MULTIPLIER),
+            "orh_minutes": _sig.get("orh_minutes", ORH_MINUTES),
+            "max_extension_pct": _sig.get("ep_max_extension_pct", MAX_EXTENSION_PCT),
+            "stop_atr_mult": _sig.get("ep_stop_atr_mult", 1.5),
+        }
+    min_gap = float(cfg.get("min_gap_pct", 10.0))
+    vol_mult = float(cfg.get("volume_multiplier", VOLUME_MULTIPLIER))
+    orh_min = int(cfg.get("orh_minutes", ORH_MINUTES))
+    max_ext = float(cfg.get("max_extension_pct", MAX_EXTENSION_PCT))
 
     # Input validation — reject NaN/None/invalid prices
     if current_price is None or not isinstance(current_price, (int, float)) or math.isnan(current_price) or current_price <= 0:
@@ -117,10 +127,11 @@ def check_episodic_pivot(
     stop_price = lod
 
     # Cap stop width at 1.5x ATR (EP allows wider stops than breakout)
+    stop_atr_mult = float(cfg.get("stop_atr_mult", 1.5))
     if daily_highs and daily_lows and daily_closes and len(daily_closes) >= 15:
         atr = compute_atr_from_list(daily_highs, daily_lows, daily_closes)
-        if atr is not None and (current_price - stop_price) > 1.5 * atr:
-            stop_price = current_price - 1.5 * atr
+        if atr is not None and (current_price - stop_price) > stop_atr_mult * atr:
+            stop_price = current_price - stop_atr_mult * atr
 
     signal = SignalResult(
         ticker=ticker,
