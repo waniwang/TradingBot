@@ -242,25 +242,13 @@ print('yes' if in_hours else 'no')
         [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Deploy cancelled."; exit 0; }
       fi
 
-      echo "==> Syncing code to $SERVER..."
-      rsync -az \
-        --exclude='.venv' \
-        --exclude='__pycache__' \
-        --exclude='*.pyc' \
-        --exclude='*.db' \
-        --exclude='*.log' \
-        --exclude='bot_status.json' \
-        --exclude='.env' \
-        -e "ssh -o StrictHostKeyChecking=no" \
-        ./ "$SERVER:$REMOTE_DIR/"
+      echo "NOTE: Auto-deploy runs via GitHub Actions on push to main."
+      echo "      This manual deploy is a fallback."
+      echo ""
+      echo "==> Running deploy on server..."
+      $SSH "bash $REMOTE_DIR/scripts/server-deploy.sh"
 
-      echo "==> Running DB migrations..."
-      $SSH "cd $REMOTE_DIR && .venv/bin/alembic upgrade head"
-
-      echo "==> Restarting bot + dashboard..."
-      $SSH "systemctl restart trading-bot trading-dashboard"
-      sleep 4
-
+      echo ""
       echo "==> Recent logs:"
       $SSH "tail -8 $REMOTE_DIR/trading_bot.log"
       echo ""
