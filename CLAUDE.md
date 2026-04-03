@@ -1,36 +1,55 @@
 # Qullamaggie Trading Bot
 
-Automated momentum trading bot inspired by Kristjan Kullamagi's 3 setups: **Breakout** (long), **Episodic Pivot** (long), and **Parabolic Short**. Trades US equities via Alpaca. Runs on a Linode VPS with a Streamlit dashboard.
+Automated momentum trading bot inspired by Kristjan Kullamagi's setups: **Breakout** (long), **Episodic Pivot** (long), **EP Earnings** (swing), **EP News** (swing), and **Parabolic Short**. Trades US equities via Alpaca. Runs on a Linode VPS with a Streamlit dashboard.
 
 ## Quick Reference
 
 | What | Where |
 |------|-------|
 | Bot code | `trading-bot/` |
+| Strategy plugins | `trading-bot/strategies/` — breakout, ep_earnings, ep_news, episodic_pivot, parabolic_short |
+| Core framework | `trading-bot/core/` — plugin loader, scheduler, data cache |
 | Documentation | `docs/` (7 docs — read these for deep context) |
 | Entry point | `trading-bot/main.py` — APScheduler orchestrator |
 | Config | `trading-bot/config.yaml` (env vars override: `ALPACA_API_KEY`, etc.) |
-| Tests | `trading-bot/tests/` — 240 tests across 7 files |
+| Tests | `trading-bot/tests/` — 338 tests across 9 files |
 | Backtest | `trading-bot/backtest/` + `trading-bot/run_backtest.py` |
 | Dashboard | `trading-bot/dashboard/app.py` (Streamlit) |
 | Verification | `trading-bot/verify_day.py` — daily execution verification |
 | Operations | `trading-bot/bot.sh` — start/stop/deploy/logs/status/verify |
+| CI/CD | `.github/workflows/deploy.yml` — auto-deploy on push to main |
 | Server | Linode at `root@172.235.216.175`, code at `/opt/trading-bot` |
 | Dashboard URL | Server: `http://172.235.216.175:8501` / Local: `http://localhost:8501` |
 
 ## Architecture
 
+### Strategy Plugin System
+
+Each strategy is a self-contained package under `strategies/<name>/` with its own `plugin.py`, `config.yaml`, scanner, signal/strategy, and backtest modules. Plugins are discovered and loaded by `core/loader.py` and registered with the scheduler via `core/scheduler.py`.
+
 ```
-Scanners (premarket)          Signals (market open)         Monitor (intraday + EOD)
-├── gapper.py (EP)            ├── breakout.py               ├── stop checks
-├── momentum_rank.py (BO)     ├── episodic_pivot.py         ├── partial exits (40% @ +15%)
-├── consolidation.py (BO)     └── parabolic_short.py        ├── trailing MA close (10d)
-└── parabolic.py (short)                                    └── parabolic targets (10d/20d MA)
-         ↓                           ↓                              ↓
-    Watchlist ──────────────→ Risk Manager ──────────────→ Alpaca Executor
-                              (1% risk/trade,               (limit entries,
-                               max 4 positions,              GTC stop orders)
-                               15% max position)
+strategies/
+├── breakout/          — scanner_nightly.py, scanner_premarket.py, signal.py, backtest.py
+├── ep_earnings/       — scanner.py, strategy.py (Strategy A+B swing entries)
+├── ep_news/           — scanner.py, strategy.py (news gap swing entries)
+├── episodic_pivot/    — scanner.py, signal.py, backtest.py
+└── parabolic_short/   — scanner.py, signal.py, exits.py, backtest.py
+```
+
+### Data Flow
+
+```
+Strategy Scanners (premarket)     Strategy Signals (market open)    Monitor (intraday + EOD)
+├── breakout/scanner_*.py         ├── breakout/signal.py            ├── stop checks
+├── ep_earnings/scanner.py        ├── episodic_pivot/signal.py      ├── partial exits (40% @ +15%)
+├── ep_news/scanner.py            └── parabolic_short/signal.py     ├── trailing MA close (10d)
+├── episodic_pivot/scanner.py                                       └── parabolic targets (10d/20d MA)
+└── parabolic_short/scanner.py
+         ↓                               ↓                              ↓
+    Watchlist Manager ─────────→ Risk Manager ──────────────→ Alpaca Executor
+    (scanner/watchlist_manager.py)  (1% risk/trade,             (limit entries,
+                                     max 4 positions,            GTC stop orders)
+                                     15% max position)
 ```
 
 **Data sources:** Alpaca screener/snapshots for scanning, yfinance for daily bars (Alpaca free tier IEX covers ~2% of stocks), Alpaca 1m candles for intraday signals.
@@ -39,15 +58,25 @@ Scanners (premarket)          Signals (market open)         Monitor (intraday + 
 
 **Database:** SQLAlchemy ORM, SQLite for dev/paper, PostgreSQL for live. All DB ops use `get_session(engine)` context manager.
 
+## CI/CD: GitHub Actions Auto-Deploy
+
+On every push to `main`, `.github/workflows/deploy.yml` SSHs into the Linode server and runs `scripts/server-deploy.sh`, which pulls the latest code, runs DB migrations, and restarts the bot + dashboard services. Secrets (`SERVER_HOST`, `SERVER_SSH_KEY`) are stored in GitHub repo settings.
+
 ## Key Modules
 
 | Module | Key functions / classes |
 |--------|----------------------|
+| `core/loader.py` | `load_strategies()`, `get_plugin()`, `get_registry()` — plugin discovery and registry |
+| `core/scheduler.py` | `register_strategy_jobs()` — registers each plugin's scheduled jobs |
+| `core/data_cache.py` | Shared data cache for cross-strategy data reuse |
+| `scanner/watchlist_manager.py` | `persist_candidates()`, `get_active_watchlist()`, `run_nightly_scan()`, `expire_stale_active()` — DB-backed watchlist lifecycle |
 | `signals/base.py` | `compute_orh()`, `compute_orb_low()`, `compute_vwap()`, `compute_sma()`, `compute_atr_from_list()`, `SignalResult` |
 | `risk/manager.py` | `calculate_position_size()`, `check_exposure()`, `check_daily_loss()`, `check_weekly_loss()` |
 | `executor/alpaca_client.py` | `place_limit_order()`, `place_stop_order()`, `close_position()`, `get_candles_1m()`, `run_screener()`, `get_snapshots()` |
-| `scanner/ep_earnings.py` | `scan_ep_earnings()` — Spikeet universe filters: gap >8%, prev close >$3, mcap >$800M, open > prev high, open > 200d SMA, RVOL >1 |
-| `signals/ep_earnings_strategy.py` | `evaluate_ep_earnings_strategies()`, `evaluate_strategy_a()`, `evaluate_strategy_b()`, `compute_features()` — Strategy A+B entry filters |
+| `strategies/ep_earnings/scanner.py` | `scan_ep_earnings()` — universe filters: gap >8%, prev close >$3, mcap >$800M, open > prev high, open > 200d SMA, RVOL >1 |
+| `strategies/ep_earnings/strategy.py` | `evaluate_ep_earnings_strategies()`, `evaluate_strategy_a()`, `evaluate_strategy_b()`, `compute_features()` — Strategy A+B entry filters |
+| `strategies/ep_news/scanner.py` | EP news gap scanner |
+| `strategies/ep_news/strategy.py` | News gap swing strategy evaluation |
 | `monitor/position_tracker.py` | Stop checks, partial exits, trailing MA close (daily close not intraday), parabolic profit targets, max hold period exit (50d for EP earnings) |
 | `db/models.py` | `Signal`, `Order`, `Position`, `Watchlist`, `DailyPnl` — exit reasons: `stop_hit`, `trailing_stop`, `trailing_ma_close`, `parabolic_target`, `max_hold_period`, `manual`, `daily_loss_limit` |
 | `backtest/runner.py` | `BacktestConfig`, `BacktestRunner.run()` — daily bar-by-bar simulation |
@@ -60,6 +89,7 @@ Scanners (premarket)          Signals (market open)         Monitor (intraday + 
 - **Python 3.14**: numba-dependent libraries (pandas-ta, vectorbt) won't work
 - **Alpaca BarSet**: use `bars.data` dict, NOT `bars.get()` (BarSet lacks `.get`)
 - **yfinance batch**: 1500 tickers ~14 min in batches of 500
+- **Strategy plugins**: Each strategy lives in `strategies/<name>/` with `plugin.py`, `config.yaml`, scanner, signal/strategy modules
 - **Tests**: `cd trading-bot && .venv/bin/pytest tests/ -v`
 
 ## Operations (bot.sh)
@@ -101,44 +131,26 @@ When the user asks to "verify yesterday's results" or "check yesterday's trading
 ## Current Status
 
 - Phases 1-5 complete: foundation, scanners, signals, risk/execution, backtesting
+- Strategy plugin architecture refactor complete — all strategies modularized under `strategies/`
+- EP News swing strategy added
 - Backtest results: EP is best strategy (Sharpe 1.08 OOS), tuned combined Sharpe 1.29 OOS, parabolic short unprofitable (disabled)
+- GitHub Actions CI/CD auto-deploy pipeline active
 - **Phase 6 (paper trading)**: next up
 - **Phase 7 (Dashboard & Telegram)**: complete
 - See `docs/implementation-plan.md` for full phase checklist
 
-## EP Swing Strategy Research (2026-03-25)
+## EP Swing Strategy (Integrated)
 
-Separate from the main trading bot, an Earnings EP swing trading strategy was researched and backtested using historical gap data.
+EP earnings and EP news swing strategies are now integrated into the bot as strategy plugins (`strategies/ep_earnings/` and `strategies/ep_news/`).
 
-### Data
-- `2025 EP Selection Earnings (1).xlsx` — 259 earnings gap trades (source data, read-only)
-- `2025 EP Selection NEWS (1).xlsx` — 945 news gap trades (analyzed but not the focus)
-- `ep-swing-research-context.md` — research context doc
-
-### Key Files
-| File | What |
-|------|------|
-| `ep_backtest.py` | **Backtester** — edit the RULES dict at top, run with `python3 ep_backtest.py`. Auto-saves results to `backtest runs/` |
-| `earnings_ep_swing_rules.md` | Full strategy rules doc: entry filters, stop, take profit, kill zones, YAML config |
-| `ep_analysis.py` | Deep analysis script (single-factor, multi-factor combos, correlations) |
-| `ep_swing_analysis_results.xlsx` | Analysis output (8 sheets: single-factor, combos, correlations, algo rules) |
-| `backtest runs/` | Saved backtest results (one .txt per run: trade table + rules + stats) |
-
-### Column Definitions (Entry Features)
-- **CHG-OPEN%** = `(Close - Open) / Open * 100` — intraday move on gap day. Positive = closed above open.
-- **close_in_range** = `(Close - Low) / (High - Low) * 100` — where stock closed in day's range. 100 = at high, 0 = at low.
-- **downside_from_open** = `(Open - Low) / Open * 100` — max dip below open on gap day.
-- **atr_pct** = `10D ATR / Close * 100` — volatility as % of price.
-- **Prev 10D change%** — price change in 10 days before gap (provided in data).
-
-### Strategy A (Tight Filters, n=45): 69% WR, +9.18% avg, PF 5.68
+### EP Earnings Strategy A (Tight Filters): 69% WR, +9.18% avg, PF 5.68
 1. CHG-OPEN% > 0 (positive intraday)
 2. close_in_range >= 50 (closed in top half of range)
 3. downside_from_open < 3% (didn't dip much)
 4. Prev 10D change% between -30% and -10% (sold off before earnings)
 5. Stop: -7% | Hold: 50D
 
-### Strategy B (Relaxed, n=79): 61% WR, +11.75% avg, PF 5.62
+### EP Earnings Strategy B (Relaxed): 61% WR, +11.75% avg, PF 5.62
 1. CHG-OPEN% > 0
 2. close_in_range >= 50
 3. ATR% between 2-5%
@@ -148,14 +160,6 @@ Separate from the main trading bot, an Earnings EP swing trading strategy was re
 ### Kill Zones (Avoid)
 - Prev 10D > 0% (ran up into earnings): 31% WR, -7.4% mean
 - CHG-OPEN% < 0 AND close_in_range < 50: 40% WR
-
-### Backtester Usage
-```bash
-cd /Users/sharonk/Documents/TradingBot
-# Edit RULES dict in ep_backtest.py, then:
-python3 ep_backtest.py
-# Output: trade table + stats printed to console, auto-saved to "backtest runs/"
-```
 
 ### Entry Timing
 All filters require the gap day to complete. Entry = Close on gap day (~3:50 PM ET). Forward returns measured from gap day Close.
