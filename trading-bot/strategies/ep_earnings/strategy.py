@@ -242,7 +242,7 @@ def evaluate_ep_earnings_strategies(
         # Base entry dict (shared fields)
         base = {
             "ticker": ticker,
-            "setup_type": "episodic_pivot",
+            "setup_type": "ep_earnings",
             "entry_price": entry_price,
             "stop_price": stop_price,
             "stop_loss_pct": stop_loss_pct,

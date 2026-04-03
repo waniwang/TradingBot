@@ -12,8 +12,8 @@ from unittest.mock import MagicMock, patch, PropertyMock
 import numpy as np
 import pandas as pd
 
-from scanner.ep_earnings import scan_ep_earnings, _check_earnings_today, _get_ticker_info
-from signals.ep_earnings_strategy import (
+from strategies.ep_earnings.scanner import scan_ep_earnings, _check_earnings_today, _get_ticker_info
+from strategies.ep_earnings.strategy import (
     compute_features,
     evaluate_strategy_a,
     evaluate_strategy_b,
@@ -38,7 +38,7 @@ def _make_config(overrides: dict | None = None):
             "ep_earnings_min_rvol": 1.0,
         },
         "strategies": {
-            "enabled": ["episodic_pivot", "breakout"],
+            "enabled": ["ep_earnings", "breakout"],
         },
     }
     if overrides:
@@ -109,14 +109,14 @@ class TestPhaseAFilters:
         client = _make_passing_client()
         config = _make_config()
 
-        with patch("scanner.ep_earnings._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
+        with patch("strategies.ep_earnings.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
             result = scan_ep_earnings(config, client)
 
         assert len(result) == 1
         assert result[0]["ticker"] == "NVDA"
         assert result[0]["gap_pct"] == 15.0
         assert result[0]["open_price"] == 115.0
-        assert result[0]["setup_type"] == "episodic_pivot"
+        assert result[0]["setup_type"] == "ep_earnings"
 
     def test_filter_gap_below_8pct(self):
         """Stock with 5% gap is rejected (below 8% min)."""
@@ -152,7 +152,7 @@ class TestPhaseAFilters:
         )
         config = _make_config({"ep_earnings_require_open_above_prev_high": False})
 
-        with patch("scanner.ep_earnings._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
+        with patch("strategies.ep_earnings.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
             result = scan_ep_earnings(config, client)
 
         assert len(result) == 1
@@ -176,11 +176,11 @@ class TestPhaseAFilters:
         client.get_snapshots.return_value = {
             "GOOD": _make_snapshot(40.0, 42.0, 50.0, 52.0, 1_000_000),
         }
-        df = _make_daily_df(300, start_price=20.0, drift=0.07)
+        df = _make_daily_df(300, start_price=30.0, drift=0.03)
         client.get_daily_bars_batch.return_value = {"GOOD": df}
         config = _make_config()
 
-        with patch("scanner.ep_earnings._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
+        with patch("strategies.ep_earnings.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
             result = scan_ep_earnings(config, client)
 
         assert len(result) == 1
@@ -215,7 +215,7 @@ class TestPhaseBFilters:
         client.get_daily_bars_batch.return_value = {"NVDA": df}
         config = _make_config({"ep_earnings_require_above_200d_sma": False})
 
-        with patch("scanner.ep_earnings._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
+        with patch("strategies.ep_earnings.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
             result = scan_ep_earnings(config, client)
 
         assert len(result) == 1
@@ -252,7 +252,7 @@ class TestPhaseCFilters:
         client = _make_passing_client()
         config = _make_config()
 
-        with patch("scanner.ep_earnings._get_ticker_info", return_value=(500_000_000, "EQUITY")):
+        with patch("strategies.ep_earnings.scanner._get_ticker_info", return_value=(500_000_000, "EQUITY")):
             result = scan_ep_earnings(config, client)
 
         assert len(result) == 0
@@ -262,7 +262,7 @@ class TestPhaseCFilters:
         client = _make_passing_client()
         config = _make_config()
 
-        with patch("scanner.ep_earnings._get_ticker_info", return_value=(5_000_000_000, "ETF")):
+        with patch("strategies.ep_earnings.scanner._get_ticker_info", return_value=(5_000_000_000, "ETF")):
             result = scan_ep_earnings(config, client)
 
         assert len(result) == 0
@@ -272,8 +272,8 @@ class TestPhaseCFilters:
         client = _make_passing_client()
         config = _make_config({"ep_earnings_require_earnings": True})
 
-        with patch("scanner.ep_earnings._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
-            with patch("scanner.ep_earnings._check_earnings_today", return_value=False):
+        with patch("strategies.ep_earnings.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
+            with patch("strategies.ep_earnings.scanner._check_earnings_today", return_value=False):
                 result = scan_ep_earnings(config, client)
 
         assert len(result) == 0
@@ -283,7 +283,7 @@ class TestPhaseCFilters:
         client = _make_passing_client()
         config = _make_config({"ep_earnings_require_earnings": False})
 
-        with patch("scanner.ep_earnings._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
+        with patch("strategies.ep_earnings.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
             result = scan_ep_earnings(config, client)
 
         assert len(result) == 1
@@ -293,8 +293,8 @@ class TestPhaseCFilters:
         client = _make_passing_client()
         config = _make_config({"ep_earnings_require_earnings": True})
 
-        with patch("scanner.ep_earnings._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
-            with patch("scanner.ep_earnings._check_earnings_today", return_value=True):
+        with patch("strategies.ep_earnings.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
+            with patch("strategies.ep_earnings.scanner._check_earnings_today", return_value=True):
                 result = scan_ep_earnings(config, client)
 
         assert len(result) == 1
@@ -324,7 +324,7 @@ class TestOutputFormat:
         }
         config = _make_config()
 
-        with patch("scanner.ep_earnings._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
+        with patch("strategies.ep_earnings.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
             result = scan_ep_earnings(config, client)
 
         gaps = [r["gap_pct"] for r in result]
@@ -335,7 +335,7 @@ class TestOutputFormat:
         client = _make_passing_client()
         config = _make_config()
 
-        with patch("scanner.ep_earnings._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
+        with patch("strategies.ep_earnings.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
             result = scan_ep_earnings(config, client)
 
         assert len(result) == 1
@@ -353,7 +353,7 @@ class TestOutputFormat:
 # ---------------------------------------------------------------------------
 
 class TestCheckEarningsToday:
-    @patch("scanner.ep_earnings.yf")
+    @patch("strategies.ep_earnings.scanner.yf")
     def test_earnings_today(self, mock_yf):
         """Returns True when earnings date matches today."""
         today = date(2026, 3, 27)
@@ -366,7 +366,7 @@ class TestCheckEarningsToday:
 
         assert _check_earnings_today("NVDA", today) is True
 
-    @patch("scanner.ep_earnings.yf")
+    @patch("strategies.ep_earnings.scanner.yf")
     def test_earnings_yesterday(self, mock_yf):
         """Returns True when earnings date matches yesterday (after-hours)."""
         today = date(2026, 3, 27)
@@ -379,7 +379,7 @@ class TestCheckEarningsToday:
 
         assert _check_earnings_today("NVDA", today) is True
 
-    @patch("scanner.ep_earnings.yf")
+    @patch("strategies.ep_earnings.scanner.yf")
     def test_no_earnings(self, mock_yf):
         """Returns False when no earnings dates match."""
         today = date(2026, 3, 27)
@@ -392,7 +392,7 @@ class TestCheckEarningsToday:
 
         assert _check_earnings_today("NVDA", today) is False
 
-    @patch("scanner.ep_earnings.yf")
+    @patch("strategies.ep_earnings.scanner.yf")
     def test_exception_returns_false(self, mock_yf):
         """Returns False on yfinance exception."""
         mock_yf.Ticker.side_effect = Exception("network error")
@@ -400,7 +400,7 @@ class TestCheckEarningsToday:
 
 
 class TestGetTickerInfo:
-    @patch("scanner.ep_earnings.yf")
+    @patch("strategies.ep_earnings.scanner.yf")
     def test_returns_market_cap_and_type(self, mock_yf):
         mock_ticker = MagicMock()
         mock_yf.Ticker.return_value = mock_ticker
@@ -410,7 +410,7 @@ class TestGetTickerInfo:
         assert mcap == 5_000_000_000
         assert qtype == "EQUITY"
 
-    @patch("scanner.ep_earnings.yf")
+    @patch("strategies.ep_earnings.scanner.yf")
     def test_exception_returns_defaults(self, mock_yf):
         mock_yf.Ticker.side_effect = Exception("error")
 
@@ -469,7 +469,7 @@ def _make_candidate(
         "sma_200": 80.0,
         "market_cap": 5_000_000_000,
         "rvol": 2.5,
-        "setup_type": "episodic_pivot",
+        "setup_type": "ep_earnings",
     }
 
 

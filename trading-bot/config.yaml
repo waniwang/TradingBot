@@ -16,6 +16,7 @@ risk:
 strategies:
   enabled:                                   # which setups to scan & trade
     - episodic_pivot
+    - ep_earnings
     - ep_news
     - breakout
     # - parabolic_short                      # disabled — negative expectancy in backtests

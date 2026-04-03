@@ -1,0 +1,23 @@
+# EP Earnings (EOD scanner, runs at 3:00 PM ET)
+# Universal filters (both A and B)
+min_gap_pct: 8.0
+min_price: 3.0
+min_market_cap: 800_000_000
+require_earnings: true
+require_open_above_prev_high: true
+require_above_200d_sma: true
+min_rvol: 1.0
+stop_loss_pct: 7.0
+max_hold_days: 50
+
+# Strategy A (tight filters)
+a_min_close_in_range: 50.0
+a_max_downside_from_open: 3.0
+a_prev_10d_min: -30.0
+a_prev_10d_max: -10.0
+
+# Strategy B (relaxed filters)
+b_min_close_in_range: 50.0
+b_atr_pct_min: 2.0
+b_atr_pct_max: 5.0
+b_prev_10d_max: -10.0

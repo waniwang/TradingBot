@@ -31,7 +31,7 @@ from typing import Any
 
 import numpy as np
 
-from scanner.ep_earnings import _check_earnings_today, _get_ticker_info
+from strategies.ep_earnings.scanner import _check_earnings_today, _get_ticker_info
 
 logger = logging.getLogger(__name__)
 

@@ -12,8 +12,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pandas as pd
 
-from scanner.ep_news import scan_ep_news
-from signals.ep_news_strategy import (
+from strategies.ep_news.scanner import scan_ep_news
+from strategies.ep_news.strategy import (
     compute_features,
     evaluate_strategy_a,
     evaluate_strategy_b,
@@ -108,8 +108,8 @@ class TestPhaseAFilters:
         client = _make_passing_client()
         config = _make_config()
 
-        with patch("scanner.ep_news._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
-             patch("scanner.ep_news._check_earnings_today", return_value=False):
+        with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
+             patch("strategies.ep_news.scanner._check_earnings_today", return_value=False):
             result = scan_ep_news(config, client)
 
         assert len(result) == 1
@@ -188,7 +188,7 @@ class TestPhaseCFilters:
         client = _make_passing_client()
         config = _make_config()
 
-        with patch("scanner.ep_news._get_ticker_info", return_value=(500_000_000, "EQUITY")):
+        with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(500_000_000, "EQUITY")):
             result = scan_ep_news(config, client)
         assert len(result) == 0
 
@@ -197,7 +197,7 @@ class TestPhaseCFilters:
         client = _make_passing_client()
         config = _make_config()
 
-        with patch("scanner.ep_news._get_ticker_info", return_value=(5_000_000_000, "ETF")):
+        with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "ETF")):
             result = scan_ep_news(config, client)
         assert len(result) == 0
 
@@ -206,8 +206,8 @@ class TestPhaseCFilters:
         client = _make_passing_client()
         config = _make_config()
 
-        with patch("scanner.ep_news._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
-             patch("scanner.ep_news._check_earnings_today", return_value=True):
+        with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
+             patch("strategies.ep_news.scanner._check_earnings_today", return_value=True):
             result = scan_ep_news(config, client)
         assert len(result) == 0
 
@@ -216,8 +216,8 @@ class TestPhaseCFilters:
         client = _make_passing_client()
         config = _make_config()
 
-        with patch("scanner.ep_news._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
-             patch("scanner.ep_news._check_earnings_today", return_value=False):
+        with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
+             patch("strategies.ep_news.scanner._check_earnings_today", return_value=False):
             result = scan_ep_news(config, client)
         assert len(result) == 1
 
@@ -226,7 +226,7 @@ class TestPhaseCFilters:
         client = _make_passing_client()
         config = _make_config({"ep_news_exclude_earnings": False})
 
-        with patch("scanner.ep_news._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
+        with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
             result = scan_ep_news(config, client)
         assert len(result) == 1
 
@@ -255,8 +255,8 @@ class TestOutputFormat:
         }
         config = _make_config()
 
-        with patch("scanner.ep_news._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
-             patch("scanner.ep_news._check_earnings_today", return_value=False):
+        with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
+             patch("strategies.ep_news.scanner._check_earnings_today", return_value=False):
             result = scan_ep_news(config, client)
 
         gaps = [r["gap_pct"] for r in result]
@@ -267,8 +267,8 @@ class TestOutputFormat:
         client = _make_passing_client()
         config = _make_config()
 
-        with patch("scanner.ep_news._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
-             patch("scanner.ep_news._check_earnings_today", return_value=False):
+        with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
+             patch("strategies.ep_news.scanner._check_earnings_today", return_value=False):
             result = scan_ep_news(config, client)
 
         assert len(result) == 1

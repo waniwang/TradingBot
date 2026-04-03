@@ -30,6 +30,7 @@ from datetime import date, timedelta
 from typing import Any
 
 import numpy as np
+import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,7 @@ def scan_ep_earnings(
             "today_volume": daily_volume,
             "today_high": round(today_high, 2),
             "today_low": round(today_low, 2),
-            "setup_type": "episodic_pivot",
+            "setup_type": "ep_earnings",
         })
 
     if not candidates:
@@ -209,10 +210,6 @@ def scan_ep_earnings(
     # ---------------------------------------------------------------
     # Phase C: Per-ticker yfinance for market cap, security class, earnings
     # ---------------------------------------------------------------
-    from datetime import date as date_type
-
-    import yfinance as yf
-
     today = date.today()
     filtered_c = []
 
@@ -262,8 +259,6 @@ def _get_ticker_info(ticker: str) -> tuple[float, str]:
 
     Returns (0.0, "") on failure.
     """
-    import yfinance as yf
-
     try:
         info = yf.Ticker(ticker).info
         return (
@@ -281,8 +276,6 @@ def _check_earnings_today(ticker: str, today: date) -> bool:
 
     Uses yfinance earnings calendar. Returns False on failure (conservative).
     """
-    import yfinance as yf
-
     try:
         t = yf.Ticker(ticker)
         dates = t.get_earnings_dates(limit=4)

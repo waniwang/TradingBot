@@ -1,0 +1,33 @@
+# EP News (EOD scanner, runs at 3:00 PM ET)
+# Universal filters
+min_gap_pct: 8.0
+min_price: 3.0
+min_market_cap: 1_000_000_000
+exclude_earnings: true
+require_open_above_prev_high: true
+require_above_200d_sma: true
+min_rvol: 1.0
+max_hold_days: 50
+
+# Strategy A (NEWS-Tight): -7% stop
+a_stop_loss_pct: 7.0
+a_chg_open_min: 2.0
+a_chg_open_max: 10.0
+a_min_close_in_range: 50.0
+a_max_downside_from_open: 3.0
+a_prev_10d_max: -20.0
+a_atr_pct_min: 3.0
+a_atr_pct_max: 7.0
+a_max_volume_m: 3.0
+
+# Strategy B (NEWS-Relaxed): -10% stop
+b_stop_loss_pct: 10.0
+b_chg_open_min: 2.0
+b_chg_open_max: 10.0
+b_min_close_in_range: 30.0
+b_max_close_in_range: 80.0
+b_max_downside_from_open: 6.0
+b_prev_10d_max: -10.0
+b_atr_pct_min: 3.0
+b_atr_pct_max: 7.0
+b_max_volume_m: 5.0
