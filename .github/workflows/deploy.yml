@@ -15,4 +15,4 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SERVER_SSH_KEY }}
-          script: /opt/trading-bot/scripts/server-deploy.sh
+          script: /opt/trading-bot/trading-bot/scripts/server-deploy.sh

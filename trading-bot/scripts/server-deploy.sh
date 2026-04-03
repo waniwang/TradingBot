@@ -6,22 +6,23 @@
 
 set -euo pipefail
 
-DEPLOY_DIR="/opt/trading-bot"
-LOG_FILE="$DEPLOY_DIR/deploy.log"
+REPO_DIR="/opt/trading-bot"
+APP_DIR="$REPO_DIR/trading-bot"
+LOG_FILE="$APP_DIR/deploy.log"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
 
-cd "$DEPLOY_DIR"
-
 # --- 1. Pull latest code ---
+cd "$REPO_DIR"
 log "Pulling latest code from origin/main..."
 git fetch origin main
 git reset --hard origin/main
 log "Code updated to $(git rev-parse --short HEAD)"
 
 # --- 2. Run DB migrations ---
+cd "$APP_DIR"
 log "Running alembic migrations..."
 source .env 2>/dev/null || true
 .venv/bin/alembic upgrade head 2>&1 | tee -a "$LOG_FILE"

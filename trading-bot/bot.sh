@@ -246,7 +246,7 @@ print('yes' if in_hours else 'no')
       echo "      This manual deploy is a fallback."
       echo ""
       echo "==> Running deploy on server..."
-      $SSH "bash $REMOTE_DIR/scripts/server-deploy.sh"
+      $SSH "bash $REMOTE_DIR/trading-bot/scripts/server-deploy.sh"
 
       echo ""
       echo "==> Recent logs:"
