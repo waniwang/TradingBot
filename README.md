@@ -285,7 +285,8 @@ export TELEGRAM_CHAT_ID=your_chat_id    # optional
 ./bot.sh local stop      # stop both
 ```
 
-Dashboard: `http://localhost:3000` (frontend) + `http://localhost:8000/api` (API)
+Dashboard: `https://dashboard-blond-iota-80.vercel.app` (production) / `http://localhost:3000` (local dev)
+API: `http://172.235.216.175:8000/api` (production) / `http://localhost:8000/api` (local dev)
 
 ### Run tests
 

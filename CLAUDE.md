@@ -12,7 +12,7 @@ Automated momentum trading bot inspired by Kristjan Kullamagi's setups: **Breako
 | Documentation | `docs/` (7 docs — read these for deep context) |
 | Entry point | `trading-bot/main.py` — APScheduler orchestrator |
 | Config | `trading-bot/config.yaml` (env vars override: `ALPACA_API_KEY`, etc.) |
-| Tests | `trading-bot/tests/` — 338 tests across 9 files |
+| Tests | `trading-bot/tests/` — 345 tests across 9 files |
 | Backtest | `trading-bot/backtest/` + `trading-bot/run_backtest.py` |
 | Dashboard (FE) | `dashboard/` — Next.js + Tailwind + shadcn/ui (deploys to Vercel) |
 | Dashboard API | `trading-bot/api/` — FastAPI (runs on Linode alongside bot) |
@@ -21,7 +21,7 @@ Automated momentum trading bot inspired by Kristjan Kullamagi's setups: **Breako
 | Operations | `trading-bot/bot.sh` — start/stop/deploy/logs/status/verify |
 | CI/CD | `.github/workflows/deploy.yml` — auto-deploy on push to main |
 | Server | Linode at `root@172.235.216.175`, code at `/opt/trading-bot` |
-| Dashboard URL | Vercel (TBD) / Local: `http://localhost:3000` |
+| Dashboard URL | `https://dashboard-blond-iota-80.vercel.app` / Local: `http://localhost:3000` |
 | API URL | Server: `http://172.235.216.175:8000/api` / Local: `http://localhost:8000/api` |
 
 ## Architecture
@@ -57,7 +57,7 @@ Strategy Scanners (premarket)     Strategy Signals (market open)    Monitor (int
 
 **Data sources:** Alpaca screener/snapshots for scanning, yfinance for daily bars (Alpaca free tier IEX covers ~2% of stocks), Alpaca 1m candles for intraday signals.
 
-**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 9:25 AM finalize watchlist → 9:30 AM intraday monitor → 3:00 PM EP earnings scan + strategy eval → 3:50 PM EP earnings execute → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
+**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 9:25 AM finalize watchlist → 9:30 AM intraday monitor → 3:00 PM EP earnings scan + strategy eval → 3:05 PM EP news scan + strategy eval → 3:50 PM EP earnings/news execute → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
 
 **Database:** SQLAlchemy ORM, SQLite for dev/paper, PostgreSQL for live. All DB ops use `get_session(engine)` context manager.
 

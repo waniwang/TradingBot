@@ -35,8 +35,8 @@ Note: Alpaca free tier uses IEX feed (~2% of stocks). yfinance used for batch da
 - All DB ops use `get_session(engine)` context manager
 
 ### Dashboard
-- **Next.js 16** frontend (deployed to Vercel) — `dashboard/`
-- **FastAPI** backend (runs on Linode alongside bot) — `trading-bot/api/`
+- **Next.js 16** frontend — `dashboard/` → deployed to Vercel at `https://dashboard-blond-iota-80.vercel.app`
+- **FastAPI** backend — `trading-bot/api/` → runs on Linode at `http://172.235.216.175:8000/api`
 - **python-telegram-bot** — push alerts for all key events
 
 ---
