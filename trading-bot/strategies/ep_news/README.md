@@ -41,6 +41,40 @@ Same three-phase filter as EP Earnings, with differences:
 
 If both pass, Strategy A is used (tighter stop).
 
+## Backtesting
+
+Uses spreadsheet-based backtest with pre-computed gap-day features and forward return checkpoints.
+
+**Data source:** `backtest/data/2020-2025 EP Selection NEWS V2.xlsx` — 4,714 news gap candidates (2020-2025).
+
+**How to run:**
+
+```bash
+cd trading-bot
+.venv/bin/python run_ep_backtest.py --type news              # both A and B
+.venv/bin/python run_ep_backtest.py --type news --strategy A  # single strategy
+.venv/bin/python run_ep_backtest.py --type news --year 2025   # single year
+.venv/bin/python run_ep_backtest.py --type news --trades      # show trade log
+```
+
+**Methodology:**
+- Same as EP earnings backtest (see `strategies/ep_earnings/README.md`)
+- Strategy A uses -7% stop; Strategy B uses -10% stop (per `config.yaml`)
+- Known limitation: checkpoint stops miss intra-period dips (slightly optimistic)
+
+**Results (2020-2025, 4,714 candidates):**
+
+| Metric | Strategy A | Strategy B |
+|--------|-----------|-----------|
+| Trades | 48 | 137 |
+| Win Rate | 67% | 62% |
+| Avg Return | +21.26% | +17.28% |
+| Profit Factor | 10.82 | 6.17 |
+| Best Year | 2020 (75% WR) | 2020 (78% WR) |
+| Worst Year | 2021 (50% WR) | 2021 (29% WR) |
+
+Strategy A has very tight filters (48 trades over 6 years) but exceptional quality. Strategy B offers more trades with strong returns.
+
 ## Key Config (`config.yaml`)
 
 ```yaml

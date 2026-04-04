@@ -48,6 +48,49 @@ Three-phase filter:
 - Prev 10D > 0% (ran up into earnings): 31% WR, -7.4% mean
 - CHG-OPEN% < 0 AND close_in_range < 50: 40% WR
 
+## Backtesting
+
+Uses spreadsheet-based backtest with pre-computed gap-day features and forward return checkpoints.
+
+**Data source:** `backtest/data/2020-2025 EP Selection EARNINGS.xlsx` — 907 earnings gap candidates (2020-2025).
+
+**How to run:**
+
+```bash
+cd trading-bot
+.venv/bin/python run_ep_backtest.py --type earnings              # both A and B
+.venv/bin/python run_ep_backtest.py --type earnings --strategy A  # single strategy
+.venv/bin/python run_ep_backtest.py --type earnings --year 2025   # single year
+.venv/bin/python run_ep_backtest.py --type earnings --trades      # show trade log
+```
+
+**Methodology:**
+- Loads Excel file with gap-day features (OHLCV, ATR, CHG-OPEN%, Prev 10D, etc.)
+- Computes derived features (atr_pct, close_in_range, downside_from_open)
+- Applies Strategy A/B filters as vectorized pandas masks
+- Simulates exits using forward return checkpoints (1D, 10D, 20D, 50D): if any checkpoint breaches -7% stop, exits at stop; otherwise exits at 50D return
+- Known limitation: checkpoint stops miss intra-period dips (slightly optimistic)
+
+**Results (2020-2025, 907 candidates):**
+
+| Metric | Strategy A | Strategy B |
+|--------|-----------|-----------|
+| Trades | 188 | 262 |
+| Win Rate | 48% | 50% |
+| Avg Return | +5.34% | +8.19% |
+| Profit Factor | 2.64 | 3.54 |
+| Best Year | 2025 (65% WR) | 2020 (62% WR) |
+| Worst Year | 2021 (29% WR) | 2021 (30% WR) |
+
+**Results (2025 only, 267 candidates):**
+
+| Metric | Strategy A | Strategy B |
+|--------|-----------|-----------|
+| Trades | 48 | 82 |
+| Win Rate | 65% | 59% |
+| Avg Return | +8.17% | +11.07% |
+| Profit Factor | 4.59 | 5.10 |
+
 ## Key Config (`config.yaml`)
 
 ```yaml
