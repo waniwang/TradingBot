@@ -21,12 +21,16 @@ git fetch origin main
 git reset --hard origin/main
 log "Code updated to $(git rev-parse --short HEAD)"
 
-# --- 2. Run DB migrations ---
+# --- 2. Run DB migrations (skip if alembic not installed) ---
 cd "$APP_DIR"
-log "Running alembic migrations..."
 source .env 2>/dev/null || true
-.venv/bin/alembic upgrade head 2>&1 | tee -a "$LOG_FILE"
-log "Migrations complete."
+if [ -f .venv/bin/alembic ]; then
+    log "Running alembic migrations..."
+    .venv/bin/alembic upgrade head 2>&1 | tee -a "$LOG_FILE"
+    log "Migrations complete."
+else
+    log "alembic not installed, skipping migrations."
+fi
 
 # --- 3. Conditional restart ---
 bot_status=$(systemctl is-active trading-bot 2>/dev/null || echo "inactive")
