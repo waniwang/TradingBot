@@ -21,6 +21,14 @@ git fetch origin main
 git reset --hard origin/main
 log "Code updated to $(git rev-parse --short HEAD)"
 
+# --- 1b. Sync trading-bot/ contents to working root ---
+# The git repo has code under trading-bot/ but services run from /opt/trading-bot/
+log "Syncing trading-bot/ to working root..."
+rsync -a --exclude=".venv" --exclude="__pycache__" --exclude="*.db" --exclude="*.log" \
+    --exclude=".env" --exclude="bot_status.json" --exclude="trading-bot" \
+    --exclude=".git" --exclude="dashboard" --exclude="docs" --exclude=".github" \
+    trading-bot/ .
+
 # --- 2. Run DB migrations (skip if alembic not installed) ---
 cd "$APP_DIR"
 source .env 2>/dev/null || true
