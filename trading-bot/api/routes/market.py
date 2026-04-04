@@ -16,20 +16,24 @@ def get_market():
         from executor.alpaca_client import AlpacaClient
         import yaml
         from pathlib import Path
+        import os
 
         config_path = Path(__file__).parent.parent.parent / "config.yaml"
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
 
-        import os
-        api_key = os.environ.get("ALPACA_API_KEY", cfg.get("alpaca", {}).get("api_key", ""))
-        secret_key = os.environ.get("ALPACA_SECRET_KEY", cfg.get("alpaca", {}).get("secret_key", ""))
-        env = os.environ.get("ENVIRONMENT", cfg.get("environment", "paper"))
+        # Apply env var overrides (same as main.py load_config)
+        if os.environ.get("ALPACA_API_KEY"):
+            cfg.setdefault("alpaca", {})["api_key"] = os.environ["ALPACA_API_KEY"]
+        if os.environ.get("ALPACA_SECRET_KEY"):
+            cfg.setdefault("alpaca", {})["secret_key"] = os.environ["ALPACA_SECRET_KEY"]
 
+        api_key = cfg.get("alpaca", {}).get("api_key", "")
+        secret_key = cfg.get("alpaca", {}).get("secret_key", "")
         if not api_key or not secret_key:
             return {"indices": [], "error": "Alpaca credentials not configured"}
 
-        client = AlpacaClient(api_key, secret_key, paper=(env == "paper"))
+        client = AlpacaClient(cfg)
         snapshots = client.get_snapshots(["SPY", "QQQ"])
 
         indices = []
