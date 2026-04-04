@@ -87,7 +87,7 @@ On every push to `main`, `.github/workflows/deploy.yml` SSHs into the Linode ser
 
 ## Conventions
 
-- **Docs first**: Write/update markdown in `docs/` before implementing code changes
+- **Docs first**: Write/update docs before implementing code changes. After any code change, update the relevant README.md (strategy, module, or `docs/`) to keep docs in sync with code
 - **Plain pandas**: SMA/ATR use `pandas.rolling()` — no pandas-ta (incompatible with Python 3.14)
 - **Python 3.14**: numba-dependent libraries (pandas-ta, vectorbt) won't work
 - **Alpaca BarSet**: use `bars.data` dict, NOT `bars.get()` (BarSet lacks `.get`)
@@ -189,9 +189,11 @@ All filters require the gap day to complete. Entry = Close on gap day (~3:50 PM 
 
 ## Documentation Index
 
+### Main Docs
+
 | Doc | Contents |
 |-----|----------|
-| `README.md` | Strategy, risk rules, exit rules, bot flow, backtest results, getting started |
+| `README.md` | Strategy overview, risk rules, exit rules, bot flow, backtest results, getting started |
 | `docs/architecture.md` | Tech stack, data flow, project structure, module reference, design decisions |
 | `docs/config-reference.md` | Full config.yaml schema with all parameters |
 | `docs/operations.md` | Bot operations: start/stop/deploy/verify/scan commands, troubleshooting |
@@ -199,3 +201,18 @@ All filters require the gap day to complete. Entry = Close on gap day (~3:50 PM 
 | `docs/daily-verification.md` | Daily verification playbook, diagnostics, parameter tuning reference |
 | `docs/risks-and-mitigations.md` | Known risks and how they're handled |
 | `docs/implementation-plan.md` | Phase-by-phase build plan with checklists |
+
+### Strategy & Module Docs
+
+Each strategy and shared module has its own README.md with scanner filters, signal conditions, and config details.
+
+| Doc | Contents |
+|-----|----------|
+| `strategies/episodic_pivot/README.md` | EP scanner filters, ORH signal, config |
+| `strategies/ep_earnings/README.md` | Earnings gap swing: A/B rules, kill zones |
+| `strategies/ep_news/README.md` | News gap swing: A/B rules |
+| `strategies/breakout/README.md` | Two-phase scan, consolidation requirements, signal |
+| `strategies/parabolic_short/README.md` | Parabolic short reference (disabled) |
+| `core/README.md` | Plugin loader, scheduler, data cache |
+| `scanner/README.md` | Watchlist lifecycle, consolidation, momentum ranking |
+| `signals/README.md` | SignalResult, ORH/ORB, VWAP, SMA, ATR, RVOL |

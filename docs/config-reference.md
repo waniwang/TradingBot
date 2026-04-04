@@ -23,6 +23,8 @@ risk:
 strategies:
   enabled:                                   # which setups to scan & trade
     - episodic_pivot
+    - ep_earnings
+    - ep_news
     - breakout
     # - parabolic_short                      # disabled — negative expectancy in backtests
 
@@ -110,7 +112,7 @@ For live trading start, use `risk_per_trade_pct: 0.5` and `max_positions: 2`.
 ### `strategies`
 | Key | Default | Description |
 |---|---|---|
-| `enabled` | `[episodic_pivot, breakout]` | List of setup types to scan and trade. Valid values: `episodic_pivot`, `breakout`, `parabolic_short` |
+| `enabled` | `[episodic_pivot, ep_earnings, ep_news, breakout]` | List of setup types to scan and trade. Valid values: `episodic_pivot`, `ep_earnings`, `ep_news`, `breakout`, `parabolic_short` |
 
 Parabolic short is commented out by default due to negative backtest expectancy.
 
@@ -145,6 +147,36 @@ Parabolic short is commented out by default due to negative backtest expectancy.
 | `consolidation_atr_ratio` | `0.95` | ATR must contract below this ratio vs prior ATR |
 | `consolidation_ma_tolerance_pct` | `3.0` | % tolerance for "near MA" check (both 10d and 20d) |
 | `consolidation_prior_move_pct` | `30.0` | Min % move in ~2 months before consolidation |
+
+#### EP Earnings (EOD scanner, 3:00 PM ET)
+| Key | Default | Description |
+|---|---|---|
+| `ep_earnings_min_gap_pct` | `8.0` | Minimum gap % to qualify |
+| `ep_earnings_min_price` | `3.0` | Prev close must be > this |
+| `ep_earnings_min_market_cap` | `800000000` | $800M minimum market cap |
+| `ep_earnings_require_earnings` | `true` | Must have earnings on gap day |
+| `ep_earnings_require_open_above_prev_high` | `true` | Open > yesterday's high |
+| `ep_earnings_require_above_200d_sma` | `true` | Open > 200-day SMA |
+| `ep_earnings_min_rvol` | `1.0` | RVOL vs 14d avg >= this |
+| `ep_earnings_stop_loss_pct` | `7.0` | Stop loss at -7% from entry |
+| `ep_earnings_max_hold_days` | `50` | Exit after 50 days max |
+
+Strategy A (tight): `ep_earnings_a_min_close_in_range` (50), `ep_earnings_a_max_downside_from_open` (3.0), `ep_earnings_a_prev_10d_min` (-30.0), `ep_earnings_a_prev_10d_max` (-10.0).
+
+Strategy B (relaxed): `ep_earnings_b_min_close_in_range` (50), `ep_earnings_b_atr_pct_min` (2.0), `ep_earnings_b_atr_pct_max` (5.0), `ep_earnings_b_prev_10d_max` (-10.0).
+
+#### EP News (EOD scanner, 3:00 PM ET)
+| Key | Default | Description |
+|---|---|---|
+| `ep_news_min_gap_pct` | `8.0` | Minimum gap % to qualify |
+| `ep_news_min_price` | `3.0` | Prev close must be > this |
+| `ep_news_min_market_cap` | `1000000000` | $1B minimum market cap |
+| `ep_news_exclude_earnings` | `true` | Skip stocks with earnings today |
+| `ep_news_max_hold_days` | `50` | Exit after 50 days max |
+
+Strategy A (tight, -7% stop): `ep_news_a_chg_open_min/max` (2/10), `ep_news_a_min_close_in_range` (50), `ep_news_a_max_downside_from_open` (3.0), `ep_news_a_prev_10d_max` (-20.0), `ep_news_a_atr_pct_min/max` (3/7), `ep_news_a_max_volume_m` (3.0).
+
+Strategy B (relaxed, -10% stop): `ep_news_b_chg_open_min/max` (2/10), `ep_news_b_min/max_close_in_range` (30/80), `ep_news_b_max_downside_from_open` (6.0), `ep_news_b_prev_10d_max` (-10.0), `ep_news_b_atr_pct_min/max` (3/7), `ep_news_b_max_volume_m` (5.0).
 
 #### Parabolic short (disabled)
 | Key | Default | Description |

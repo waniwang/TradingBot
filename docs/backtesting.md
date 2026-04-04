@@ -6,7 +6,7 @@
 
 Run all tests: `cd trading-bot && .venv/bin/pytest tests/ -v`
 
-Current test count: **240 tests** across 7 test files, all passing.
+Current test count: **338 tests** across 9 test files, all passing.
 
 ### Signal tests (`tests/test_signals.py`)
 
@@ -74,6 +74,20 @@ Current test count: **240 tests** across 7 test files, all passing.
 | Test area | What's tested |
 |---|---|
 | Liquidity filters | Volume and price filters applied correctly |
+
+### EP earnings scanner tests (`tests/test_ep_earnings_scanner.py`)
+
+| Test area | What's tested |
+|---|---|
+| Scanner filters | Gap %, price, market cap, earnings check, RVOL, 200d SMA |
+| Strategy A/B | Tight and relaxed filter evaluation |
+
+### EP news scanner tests (`tests/test_ep_news_scanner.py`)
+
+| Test area | What's tested |
+|---|---|
+| Scanner filters | Gap %, price, market cap, earnings exclusion, RVOL |
+| Strategy A/B | Tight and relaxed filter evaluation |
 
 ---
 

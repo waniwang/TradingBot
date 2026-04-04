@@ -16,7 +16,7 @@ All commands run from the `trading-bot/` directory.
 ./bot.sh verify 2026-03-20   # verify specific date
 ```
 
-Dashboard: http://172.235.216.175:8501
+Dashboard: Vercel (frontend) + `http://172.235.216.175:8000/api` (API)
 
 ## Local (Mac — for development/testing)
 
@@ -29,7 +29,7 @@ Dashboard: http://172.235.216.175:8501
 ./bot.sh local verify    # run daily verification locally
 ```
 
-Dashboard: http://localhost:8501
+Dashboard: `http://localhost:3000` (frontend) + `http://localhost:8000/api` (API)
 
 ## Typical workflows
 
@@ -74,14 +74,16 @@ This creates a `trigger_scan` file that the heartbeat loop detects. The premarke
 
 ## Scheduled Jobs
 
-The bot runs 7 scheduled jobs (all times Eastern):
+The bot runs scheduled jobs (all times Eastern):
 
 | Time | Job | Description |
 |------|-----|-------------|
-| 5:00 PM (prior day) | Nightly watchlist scan | Heavy breakout scan: momentum rank 1,500 stocks via yfinance, consolidation analysis |
-| 6:00 AM | Premarket scan | Alpaca screener for EP gappers, promote breakout candidates, pre-fetch daily bars |
-| 9:25 AM | Subscribe watchlist | Connect to Alpaca real-time data stream for all watchlist tickers |
-| 9:30 AM | Intraday monitor | Log confirmation that the stream is active |
+| 5:00 PM (prior day) | Breakout nightly scan | Momentum rank 1,500 stocks via yfinance, consolidation analysis |
+| 6:00 AM | Premarket scan | EP gappers, promote breakout candidates, pre-fetch daily bars |
+| 9:25 AM | Finalize watchlist | Subscribe to Alpaca real-time 1m bars for all active candidates |
+| 9:30 AM | Intraday monitor | Start signal evaluation on incoming 1m bars |
+| 3:00 PM | EP swing scan | EP earnings + EP news scanners + strategy A/B evaluation |
+| 3:50 PM | EP swing execute | Place limit entries for EP earnings + EP news near close |
 | 3:55 PM | EOD tasks | Trailing stop updates, MA-close exits, daily P&L, Telegram summary |
 | Every 5 min (9-15h Mon-Fri) | Reconcile positions | Poll broker for GTC stop fills, detect unprotected positions |
 | Every 30s | Heartbeat | Write bot_status.json (phase, next job, progress) for dashboard |
@@ -103,6 +105,7 @@ The bot runs 7 scheduled jobs (all times Eastern):
 **Dashboard not updating:**
 - Check heartbeat: `bot_status.json` should update every 30 seconds
 - If stale, the bot process may have crashed: `./bot.sh status`
+- Frontend is Next.js on Vercel; API is FastAPI on Linode port 8000
 
 **Telegram alerts not arriving:**
 - Verify `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set correctly

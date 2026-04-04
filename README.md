@@ -72,11 +72,35 @@ The bot ranks the top ~1,500 stocks by momentum (RS composite: 50% 1-month, 30% 
 
 ---
 
-### Setup 3: Parabolic Short (DISABLED)
+### Setup 3: EP Earnings — Earnings Gap Swing
 
-A stock that has gone parabolic (up 50-200%+ in days) showing signs of exhaustion. Short for mean-reversion back to moving averages.
+EOD long swing on earnings gap-ups. Scans at 3 PM, enters near close at 3:50 PM. Two strategy tiers.
 
-**Status: Disabled** — negative expectancy in 6-year backtest (Sharpe -0.39 OOS). Not currently scanned or traded.
+**Scanner:** Gap >= 8%, prev close > $3, market cap > $800M, open > prev high, open > 200d SMA, RVOL > 1.0, earnings confirmed on gap day.
+
+**Strategy A (Tight):** CHG-OPEN% > 0, close in range >= 50%, downside from open < 3%, prev 10D change between -30% and -10%. Stop: -7%. Hold: max 50 days.
+
+**Strategy B (Relaxed):** CHG-OPEN% > 0, close in range >= 50%, ATR% between 2-5%, prev 10D change < -10%. Stop: -7%. Hold: max 50 days.
+
+See [strategies/ep_earnings/README.md](trading-bot/strategies/ep_earnings/README.md) for full details.
+
+---
+
+### Setup 4: EP News — News Gap Swing
+
+Same as EP Earnings but for non-earnings catalysts. Higher market cap floor ($1B vs $800M), excludes stocks with earnings on gap day.
+
+**Strategy A (Tight):** Stop -7%. **Strategy B (Relaxed):** Stop -10%.
+
+See [strategies/ep_news/README.md](trading-bot/strategies/ep_news/README.md) for full details.
+
+---
+
+### Setup 5: Parabolic Short (DISABLED)
+
+Short on overextended multi-day runners. **Disabled** — negative expectancy in 6-year backtest (Sharpe -0.39 OOS).
+
+See [strategies/parabolic_short/README.md](trading-bot/strategies/parabolic_short/README.md) for reference.
 
 ---
 
@@ -149,11 +173,17 @@ Then capped at 15% of portfolio notional: `max_shares = floor(portfolio * 15% / 
 ## Daily Bot Flow
 
 ```
-Scanners (premarket)          Signals (market open)         Monitor (intraday + EOD)
-├── gapper.py (EP)            ├── breakout.py               ├── stop checks
-├── momentum_rank.py (BO)     ├── episodic_pivot.py         ├── partial exits (40% @ +15%)
-├── consolidation.py (BO)     └── parabolic_short.py        ├── trailing MA close (10d)
-└── parabolic.py (short)                                    └── parabolic targets (10d/20d MA)
+Strategy Scanners                Strategy Signals              Monitor (intraday + EOD)
+├── breakout/scanner_nightly     ├── breakout/signal            ├── stop checks
+│   (5 PM: rank + consol.)      ├── episodic_pivot/signal      ├── partial exits (40% @ +15%)
+├── breakout/scanner_premarket   └── parabolic_short/signal     ├── trailing MA close (10d)
+│   (6 AM: promote to active)                                   └── parabolic targets (10d/20d MA)
+├── episodic_pivot/scanner       EP Swing Strategies
+│   (6 AM: premarket gappers)    ├── ep_earnings/strategy       EP Exits
+├── ep_earnings/scanner          │   (3 PM: A/B eval)           ├── -7% / -10% stop
+│   (3 PM: earnings gappers)     └── ep_news/strategy           ├── max 50-day hold
+└── ep_news/scanner                  (3 PM: A/B eval)           └── trailing MA close
+    (3 PM: news gappers)        └── execute @ 3:50 PM
          ↓                           ↓                              ↓
     Watchlist ──────────────→ Risk Manager ──────────────→ Alpaca Executor
                               (1% risk/trade,               (limit entries,
@@ -165,13 +195,15 @@ Scanners (premarket)          Signals (market open)         Monitor (intraday + 
 
 | Time | Job | What happens |
 |------|-----|--------------|
-| 5:00 PM (prior day) | Nightly watchlist scan | Heavy breakout scan: momentum rank 1,500 stocks via yfinance, consolidation analysis, persist to DB |
-| 6:00 AM | Premarket scan | Alpaca screener for EP gappers, promote breakout candidates to active, refresh watchlist |
-| 9:25 AM | Finalize watchlist | Pre-fetch 130 days of daily bars for all candidates, subscribe to Alpaca real-time data stream |
-| 9:35 AM onwards | Signal evaluation | Every 1-min candle: check entry conditions, evaluate against risk rules, place limit orders on signal |
-| Every 5 min | Reconcile positions | Poll broker for GTC stop fills, detect unprotected positions, sync DB with Alpaca state |
-| 3:55 PM | EOD tasks | Trailing stop updates, MA-close exit checks, compute daily P&L, send Telegram summary |
-| Every 30s | Heartbeat | Write bot_status.json for dashboard to read current phase and next job |
+| 5:00 PM (prior day) | Breakout nightly scan | Momentum rank 1,500 stocks via yfinance, consolidation analysis, persist to DB |
+| 6:00 AM | Premarket scan | EP gappers via Alpaca screener, promote breakout candidates, pre-fetch daily bars |
+| 9:25 AM | Finalize watchlist | Subscribe to Alpaca real-time 1m bars for all active candidates |
+| 9:35 AM onwards | Signal evaluation | Every 1-min candle: check entry conditions, evaluate against risk rules, place limit orders |
+| 3:00 PM | EP swing scan | EP earnings + EP news scanners + strategy A/B evaluation |
+| 3:50 PM | EP swing execute | Place limit entries for EP earnings + EP news near close |
+| 3:55 PM | EOD tasks | Trailing stop updates, MA-close exits, daily P&L, Telegram summary |
+| Every 5 min | Reconcile positions | Poll broker for GTC stop fills, detect unprotected positions, sync DB |
+| Every 30s | Heartbeat | Write bot_status.json for dashboard |
 
 ---
 
@@ -247,13 +279,13 @@ export TELEGRAM_CHAT_ID=your_chat_id    # optional
 ### Run locally
 
 ```bash
-./bot.sh local start     # start bot + Streamlit dashboard
+./bot.sh local start     # start bot + API server
 ./bot.sh local status    # check health
 ./bot.sh local logs      # tail logs
 ./bot.sh local stop      # stop both
 ```
 
-Dashboard: http://localhost:8501
+Dashboard: `http://localhost:3000` (frontend) + `http://localhost:8000/api` (API)
 
 ### Run tests
 
@@ -276,7 +308,7 @@ cd trading-bot && .venv/bin/pytest tests/ -v
 | `signals.breakout_volume_multiplier` | 1.5 | Min RVOL for breakout entry |
 | `signals.ep_max_extension_pct` | 5.0 | Max % above ORH before skipping (EP) |
 | `signals.breakout_max_extension_pct` | 3.0 | Max % above ORH before skipping (breakout) |
-| `strategies.enabled` | EP + breakout | Which setups to scan and trade |
+| `strategies.enabled` | EP + ep_earnings + ep_news + breakout | Which setups to scan and trade |
 
 See [docs/config-reference.md](docs/config-reference.md) for the full schema.
 
@@ -284,12 +316,27 @@ See [docs/config-reference.md](docs/config-reference.md) for the full schema.
 
 ## Documentation
 
+### Main Docs
+
 | Doc | Contents |
 |-----|----------|
-| [docs/architecture.md](docs/architecture.md) | Tech stack, data flow, project structure, module reference, design decisions |
+| [docs/architecture.md](docs/architecture.md) | Tech stack, data flow, project structure, module reference |
 | [docs/config-reference.md](docs/config-reference.md) | Full config.yaml schema with all parameters |
 | [docs/operations.md](docs/operations.md) | Bot operations: start/stop/deploy/verify/scan commands |
 | [docs/backtesting.md](docs/backtesting.md) | Test plan, backtest procedures, results, paper trading checklist |
 | [docs/daily-verification.md](docs/daily-verification.md) | Daily verification playbook for AI-assisted review |
 | [docs/risks-and-mitigations.md](docs/risks-and-mitigations.md) | Known risks and how they are handled |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | Phase-by-phase build plan with checklists |
+
+### Strategy & Module Docs
+
+| Doc | Contents |
+|-----|----------|
+| [strategies/episodic_pivot/README.md](trading-bot/strategies/episodic_pivot/README.md) | EP scanner filters, ORH signal conditions, config |
+| [strategies/ep_earnings/README.md](trading-bot/strategies/ep_earnings/README.md) | Earnings gap swing: A/B strategy rules, kill zones |
+| [strategies/ep_news/README.md](trading-bot/strategies/ep_news/README.md) | News gap swing: A/B strategy rules |
+| [strategies/breakout/README.md](trading-bot/strategies/breakout/README.md) | Two-phase scan, consolidation requirements, signal |
+| [strategies/parabolic_short/README.md](trading-bot/strategies/parabolic_short/README.md) | Parabolic short reference (disabled) |
+| [core/README.md](trading-bot/core/README.md) | Plugin loader, scheduler integration, data cache |
+| [scanner/README.md](trading-bot/scanner/README.md) | Watchlist lifecycle, consolidation detection, momentum ranking |
+| [signals/README.md](trading-bot/signals/README.md) | SignalResult, ORH/ORB, VWAP, SMA, ATR, RVOL |

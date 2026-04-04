@@ -107,14 +107,16 @@
 
 ---
 
-## Phase 7 — Streamlit Dashboard & Telegram (Complete)
+## Phase 7 — Dashboard & Telegram (Complete)
 
 **Goal**: Real-time visibility into bot activity.
 
-- [x] `dashboard/app.py`: live positions table (entry, stop, current P&L, days held)
-- [x] Daily P&L chart, signal log, portfolio exposure gauge
+- [x] Next.js 16 frontend (`dashboard/`): positions, watchlist, performance, history pages
+- [x] FastAPI backend (`trading-bot/api/`): read-only API with auth, shares DB models with bot
 - [x] Telegram: send alert on bot started, scan start/finish, entry fill, stop fill, trading halted, EOD summary, errors
-- [x] Manual override: button in dashboard to flatten a position
+- [x] Strategy plugin architecture: all strategies refactored into self-contained packages under `strategies/`
+- [x] EP Earnings + EP News swing strategies added as plugins
+- [x] GitHub Actions CI/CD auto-deploy pipeline
 
 **Exit criteria**: Dashboard shows live data; Telegram delivers alerts within 30 seconds of events.
 
