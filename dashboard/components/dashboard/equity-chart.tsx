@@ -23,6 +23,10 @@ export function EquityChart({ data }: { data: DailyPnl[] }) {
     );
   }
 
+  // Dynamic color based on final cumulative value
+  const lastCumulative = data[data.length - 1]?.cumulative ?? 0;
+  const cumColor = lastCumulative >= 0 ? "#22c55e" : "#ef4444";
+
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <Card>
@@ -34,8 +38,8 @@ export function EquityChart({ data }: { data: DailyPnl[] }) {
             <AreaChart data={data}>
               <defs>
                 <linearGradient id="cumGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                  <stop offset="5%" stopColor={cumColor} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={cumColor} stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(0 0% 20%)" />
@@ -60,7 +64,7 @@ export function EquityChart({ data }: { data: DailyPnl[] }) {
               <Area
                 type="monotone"
                 dataKey="cumulative"
-                stroke="#22c55e"
+                stroke={cumColor}
                 fill="url(#cumGrad)"
                 strokeWidth={2}
               />

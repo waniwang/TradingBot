@@ -1,4 +1,4 @@
-"""SQLAlchemy models: Signal, Order, Position, DailyPnl, Watchlist."""
+"""SQLAlchemy models: Signal, Order, Position, DailyPnl, Watchlist, JobExecution."""
 
 from __future__ import annotations
 
@@ -231,6 +231,24 @@ class BreakoutWatchlist(Base):
     @property
     def days_on_list(self) -> int:
         return (datetime.utcnow().date() - self.added_at.date()).days
+
+
+class JobExecution(Base):
+    """Tracks each scheduled job run for the pipeline timeline."""
+
+    __tablename__ = "job_executions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    job_label: Mapped[str] = mapped_column(String(100), nullable=False)
+    scheduled_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="running")
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    result_summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trade_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
 
 
 class DailyPnl(Base):

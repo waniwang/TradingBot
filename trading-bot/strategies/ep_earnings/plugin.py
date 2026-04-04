@@ -18,12 +18,12 @@ ET = pytz.timezone("America/New_York")
 
 def _scan_job(config, client, db_engine, notify):
     """3:00 PM ET — scan + evaluate EP earnings candidates."""
-    PLUGIN.job_scan(config, client, db_engine, notify)
+    return PLUGIN.job_scan(config, client, db_engine, notify)
 
 
 def _execute_job(config, client, db_engine, notify):
     """3:50 PM ET — execute staged EP earnings entries."""
-    PLUGIN.job_execute(config, client, db_engine, notify)
+    return PLUGIN.job_execute(config, client, db_engine, notify)
 
 
 class EPEarningsPlugin:
@@ -84,7 +84,7 @@ class EPEarningsPlugin:
 
         if not is_trading_day(client):
             logger.info("EP earnings scan skipped — not a trading day")
-            return
+            return "Skipped — not a trading day"
 
         logger.info("=== EOD EP EARNINGS SCAN START ===")
         if notify:
@@ -100,7 +100,7 @@ class EPEarningsPlugin:
             if not candidates:
                 if notify:
                     notify("EP EARNINGS SCAN: 0 candidates found")
-                return
+                return "0 candidates"
 
             # Phase 2: Fetch daily bars
             tickers = [c["ticker"] for c in candidates]
@@ -129,17 +129,25 @@ class EPEarningsPlugin:
                             f"entry ${e['entry_price']:.2f}, stop ${e['stop_price']:.2f}"
                         )
                     notify("\n".join(lines))
+
+                entry_tickers = ", ".join(e["ticker"] for e in entries)
+                a_count = sum(1 for e in entries if e["ep_strategy"] == "A")
+                b_count = sum(1 for e in entries if e["ep_strategy"] == "B")
+                return f"{len(entries)} entries ({a_count}A+{b_count}B): {entry_tickers}"
             else:
                 if notify:
                     lines = [f"EP EARNINGS: {len(candidates)} candidates, 0 passed strategy filters"]
                     for c in candidates:
                         lines.append(f"  {c['ticker']}: gap {c['gap_pct']:.1f}% (filtered out)")
                     notify("\n".join(lines))
+                cand_tickers = ", ".join(c["ticker"] for c in candidates)
+                return f"{len(candidates)} scanned, 0 passed: {cand_tickers}"
 
         except Exception as e:
             logger.error("EOD EP earnings scan failed: %s", e)
             if notify:
                 notify(f"EOD EP EARNINGS SCAN FAILED: {e}")
+            raise
 
     def job_execute(self, config, client, db_engine, notify):
         """3:50 PM ET — execute entries staged by the 3:00 PM scan."""
@@ -149,12 +157,12 @@ class EPEarningsPlugin:
         from db.models import Position, get_session
 
         if not is_trading_day(client):
-            return
+            return "Skipped — not a trading day"
 
         entries = self._staged_entries
         if not entries:
             logger.info("EP earnings execute: no entries to execute")
-            return
+            return "No entries staged"
 
         logger.info("=== EP EARNINGS EXECUTE: %d entries ===", len(entries))
         risk = RiskManager(config)
@@ -228,6 +236,9 @@ class EPEarningsPlugin:
 
         if notify:
             notify(f"EP EARNINGS EXECUTE: {executed}/{len(by_ticker)} tickers entered")
+
+        entered_tickers = [t for t, el in by_ticker.items() if any(True for _ in el)]
+        return f"{executed}/{len(by_ticker)} entered: {', '.join(list(by_ticker.keys()))}"
 
     def _persist_entry(self, entry: dict, scan_date, db_engine):
         """Persist an EP earnings strategy entry to the watchlist with metadata."""

@@ -81,7 +81,7 @@ On every push to `main`, `.github/workflows/deploy.yml` SSHs into the Linode ser
 | `strategies/ep_news/scanner.py` | EP news gap scanner |
 | `strategies/ep_news/strategy.py` | News gap swing strategy evaluation |
 | `monitor/position_tracker.py` | Stop checks, partial exits, trailing MA close (daily close not intraday), parabolic profit targets, max hold period exit (50d for EP earnings) |
-| `db/models.py` | `Signal`, `Order`, `Position`, `Watchlist`, `DailyPnl` — exit reasons: `stop_hit`, `trailing_stop`, `trailing_ma_close`, `parabolic_target`, `max_hold_period`, `manual`, `daily_loss_limit` |
+| `db/models.py` | `Signal`, `Order`, `Position`, `Watchlist`, `DailyPnl`, `JobExecution` — exit reasons: `stop_hit`, `trailing_stop`, `trailing_ma_close`, `parabolic_target`, `max_hold_period`, `manual`, `daily_loss_limit` |
 | `backtest/runner.py` | `BacktestConfig`, `BacktestRunner.run()` — daily bar-by-bar simulation |
 | `backtest/metrics.py` | `compute_metrics()` — win_rate, Sharpe, max_drawdown, CAGR, calmar, profit_factor |
 
@@ -149,9 +149,9 @@ dashboard/          → Next.js frontend (Vercel)
 trading-bot/api/    → FastAPI backend (Linode, port 8000)
 ```
 
-**Frontend** (`dashboard/`): Next.js 16, TypeScript, Tailwind v4, shadcn/ui, Recharts. Dark theme. Manual refresh. Pages: Overview, Positions, Watchlist, Performance, History.
+**Frontend** (`dashboard/`): Next.js 16, TypeScript, Tailwind v4, shadcn/ui, Recharts. Dark theme. Auto-refresh (30s market hours, 5m off hours). Pages: Overview (pipeline timeline, portfolio, risk meter, positions, equity chart, signals), Positions, Watchlist, Performance, History.
 
-**API** (`trading-bot/api/`): Read-only FastAPI endpoints. Shares DB models with bot. Auth via `X-API-Key` header. Endpoints: `/api/status`, `/api/portfolio`, `/api/positions`, `/api/positions/closed`, `/api/watchlist`, `/api/signals/today`, `/api/performance/pnl`, `/api/performance/summary`.
+**API** (`trading-bot/api/`): Read-only FastAPI endpoints. Shares DB models with bot. Auth via `X-API-Key` header. Endpoints: `/api/status`, `/api/portfolio`, `/api/positions`, `/api/positions/closed`, `/api/watchlist`, `/api/signals/today`, `/api/performance/pnl`, `/api/performance/summary`, `/api/pipeline`, `/api/pipeline/history`, `/api/risk`, `/api/market`.
 
 **Dev workflow:**
 ```bash

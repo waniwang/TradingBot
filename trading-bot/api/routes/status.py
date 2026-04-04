@@ -8,19 +8,11 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
+from api.constants import JOB_LABELS
+
 router = APIRouter()
 
 STATUS_FILE = Path(__file__).parent.parent.parent / "bot_status.json"
-
-JOB_LABELS = {
-    "nightly_watchlist_scan": "Nightly watchlist scan",
-    "premarket_scan": "Pre-market scan",
-    "subscribe_watchlist": "Subscribe watchlist",
-    "intraday_monitor": "Intraday monitor start",
-    "eod_tasks": "End-of-day tasks",
-    "reconcile_positions": "Reconcile positions",
-    "heartbeat": "Heartbeat",
-}
 
 
 @router.get("/status")

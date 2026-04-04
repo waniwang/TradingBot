@@ -98,6 +98,63 @@ export interface DailyPnl {
   losers: number;
 }
 
+export interface PipelineJob {
+  job_id: string;
+  label: string;
+  time: string;
+  category: "scan" | "trade" | "monitor" | "system";
+}
+
+export interface PipelineExecution {
+  id: number;
+  job_id: string;
+  label: string;
+  status: "running" | "success" | "failed" | "skipped";
+  started_at: string | null;
+  finished_at: string | null;
+  duration_seconds: number | null;
+  result_summary: string | null;
+  error: string | null;
+}
+
+export interface PipelineData {
+  trade_date: string;
+  schedule: PipelineJob[];
+  executions: PipelineExecution[];
+  current_phase: string;
+  next_job: {
+    job_id: string;
+    label: string;
+    time: string;
+    countdown_seconds: number | null;
+  } | null;
+}
+
+export interface PipelineHistoryDay {
+  date: string;
+  executions: PipelineExecution[];
+}
+
+export interface MarketIndex {
+  ticker: string;
+  price: number;
+  change_pct: number;
+}
+
+export interface MarketData {
+  indices: MarketIndex[];
+  error?: string;
+}
+
+export interface RiskData {
+  daily_pnl: number;
+  daily_limit_pct: number;
+  weekly_pnl: number;
+  weekly_limit_pct: number;
+  open_positions: number;
+  max_positions: number;
+}
+
 export interface PerformanceSummary {
   total_pnl: number;
   win_rate: number;

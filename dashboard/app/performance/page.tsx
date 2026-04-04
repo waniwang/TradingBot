@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Header } from "@/components/layout/header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EquityChart } from "@/components/dashboard/equity-chart";
 import { fetchAPI } from "@/lib/api";
+import { useAutoRefresh } from "@/lib/hooks";
 import type { BotStatus, DailyPnl, PerformanceSummary } from "@/lib/types";
 
 export default function PerformancePage() {
@@ -12,8 +13,10 @@ export default function PerformancePage() {
   const [pnl, setPnl] = useState<DailyPnl[]>([]);
   const [summary, setSummary] = useState<PerformanceSummary | null>(null);
   const [loading, setLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setLoading(true);
     try {
       const [s, p, sum] = await Promise.all([
@@ -24,20 +27,32 @@ export default function PerformancePage() {
       setStatus(s);
       setPnl(p);
       setSummary(sum);
+      setLastUpdated(new Date());
+      setError(null);
     } catch (e) {
-      console.error("Failed to fetch:", e);
+      setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  const { paused, setPaused } = useAutoRefresh(refresh, 60_000, 300_000);
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [refresh]);
 
   return (
     <div className="flex min-h-screen flex-col">
-      <Header status={status} onRefresh={refresh} loading={loading} />
+      <Header
+        status={status}
+        onRefresh={refresh}
+        loading={loading}
+        lastUpdated={lastUpdated}
+        error={error}
+        autoRefreshPaused={paused}
+        onToggleAutoRefresh={() => setPaused(!paused)}
+      />
       <main className="flex-1 space-y-6 p-6">
         <h2 className="text-lg font-semibold">Performance (Last 90 Days)</h2>
 

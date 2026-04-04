@@ -1,20 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Header } from "@/components/layout/header";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { fetchAPI } from "@/lib/api";
+import { useAutoRefresh } from "@/lib/hooks";
 import type { BotStatus, ClosedPosition } from "@/lib/types";
 
 export default function HistoryPage() {
   const [status, setStatus] = useState<BotStatus | null>(null);
   const [trades, setTrades] = useState<ClosedPosition[]>([]);
   const [loading, setLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setLoading(true);
     try {
       const [s, t] = await Promise.all([
@@ -23,16 +26,20 @@ export default function HistoryPage() {
       ]);
       setStatus(s);
       setTrades(t);
+      setLastUpdated(new Date());
+      setError(null);
     } catch (e) {
-      console.error("Failed to fetch:", e);
+      setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  const { paused, setPaused } = useAutoRefresh(refresh, 60_000, 300_000);
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [refresh]);
 
   // Stats
   const totalPnl = trades.reduce((sum, t) => sum + t.pnl, 0);
@@ -41,7 +48,15 @@ export default function HistoryPage() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <Header status={status} onRefresh={refresh} loading={loading} />
+      <Header
+        status={status}
+        onRefresh={refresh}
+        loading={loading}
+        lastUpdated={lastUpdated}
+        error={error}
+        autoRefreshPaused={paused}
+        onToggleAutoRefresh={() => setPaused(!paused)}
+      />
       <main className="flex-1 space-y-6 p-6">
         <div className="flex items-baseline justify-between">
           <h2 className="text-lg font-semibold">Trade History</h2>

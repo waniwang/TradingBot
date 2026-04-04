@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from api.routes import status, portfolio, positions, watchlist, signals, performance
+from api.routes import status, portfolio, positions, watchlist, signals, performance, pipeline, risk, market
 
 API_KEY = os.environ.get("DASHBOARD_API_KEY", "dev-key")
 
@@ -51,6 +51,9 @@ app.include_router(positions.router, prefix="/api")
 app.include_router(watchlist.router, prefix="/api")
 app.include_router(signals.router, prefix="/api")
 app.include_router(performance.router, prefix="/api")
+app.include_router(pipeline.router, prefix="/api")
+app.include_router(risk.router, prefix="/api")
+app.include_router(market.router, prefix="/api")
 
 
 @app.get("/api/health")

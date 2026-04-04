@@ -32,7 +32,7 @@ from apscheduler.triggers.cron import CronTrigger
 from core.loader import load_strategies, get_registry, get_plugin
 from core.scheduler import register_strategy_jobs
 from core import data_cache
-from db.models import init_db, get_session
+from db.models import init_db, get_session, JobExecution
 from executor.alpaca_client import AlpacaClient
 from monitor.position_tracker import PositionTracker
 from risk.manager import RiskManager
@@ -276,6 +276,14 @@ def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=Non
         if errors:
             notify("SCAN ERRORS:\n" + "\n".join(errors))
 
+    # Return summary for job tracking
+    by_setup: dict[str, int] = {}
+    for c in _watchlist:
+        st = c.get("setup_type", "other")
+        by_setup[st] = by_setup.get(st, 0) + 1
+    parts = [f"{v} {k}" for k, v in by_setup.items()]
+    return f"{len(_watchlist)} candidates ({', '.join(parts)})" if _watchlist else "0 candidates"
+
 
 def job_subscribe_watchlist(
     client: AlpacaClient,
@@ -351,6 +359,8 @@ def job_subscribe_watchlist(
     except Exception as e:
         logger.error("STREAM SUBSCRIPTION FAILED: %s", e, exc_info=True)
         notify(f"CRITICAL: Stream subscription failed — NO SIGNALS WILL FIRE today.\n{e}")
+        return f"FAILED: {e}"
+    return f"Subscribed to {len(tickers)} tickers"
 
 
 def job_intraday_monitor(
@@ -365,6 +375,7 @@ def job_intraday_monitor(
     logger.info("=== INTRADAY MONITOR STARTED — stream active ===")
     # Data processing is driven by the Alpaca WebSocket stream callback
     # registered in job_subscribe_watchlist at 9:25 AM.
+    return "Stream active"
 
 
 def process_ticker_update(
@@ -824,6 +835,7 @@ def job_eod_tasks(
         tracker.set_weekly_halt(False)
         logger.info("Weekly halt reset (end of week)")
     _set_phase("idle")
+    return f"P&L: {sign}${daily.total_pnl:.2f}, {daily.num_trades} trades"
 
 
 def job_nightly_watchlist_scan(config: dict, client: AlpacaClient, db_engine, notify, force: bool = False):
@@ -872,6 +884,7 @@ def job_nightly_watchlist_scan(config: dict, client: AlpacaClient, db_engine, no
             notify(f"WARNING: Nightly scan found 0 momentum candidates from {ur} tickers — possible data fetch issue")
     _set_phase("idle")
     _set_progress()  # clear progress
+    return f"Ready: {summary.get('ready', 0)}, Watching: {summary.get('watching', 0)}"
 
 
 # ---------------------------------------------------------------------------
@@ -944,6 +957,90 @@ def _set_progress(task: str = "", detail: str = ""):
         _current_progress = {"task": task, "detail": detail}
     else:
         _current_progress = {}
+
+
+# ---------------------------------------------------------------------------
+# Job execution tracking — persists each job run to the DB for the pipeline UI
+# ---------------------------------------------------------------------------
+
+JOB_LABELS = {
+    "premarket_scan": "Pre-market Scan",
+    "subscribe_watchlist": "Subscribe Watchlist",
+    "intraday_monitor": "Intraday Monitor",
+    "eod_tasks": "End-of-Day Tasks",
+    "breakout_nightly_scan": "Nightly Breakout Scan",
+    "ep_earnings_scan": "EP Earnings Scan",
+    "ep_earnings_execute": "EP Earnings Execute",
+    "ep_news_scan": "EP News Scan",
+    "ep_news_execute": "EP News Execute",
+}
+
+
+class _track_job:
+    """Context manager that logs a job execution to the JobExecution table.
+
+    Usage:
+        with _track_job("premarket_scan") as tracker:
+            ... do work ...
+            tracker.summary = "8 candidates found"
+    """
+
+    def __init__(self, job_id: str, label: str | None = None):
+        self.job_id = job_id
+        self.label = label or JOB_LABELS.get(job_id, job_id)
+        self.summary: str | None = None
+        self._row_id: int | None = None
+
+    def __enter__(self):
+        if _db_engine is None:
+            return self
+        now = datetime.now(ET)
+        try:
+            with get_session(_db_engine) as session:
+                row = JobExecution(
+                    job_id=self.job_id,
+                    job_label=self.label,
+                    started_at=now,
+                    status="running",
+                    trade_date=now.date(),
+                )
+                session.add(row)
+                session.commit()
+                self._row_id = row.id
+        except Exception as e:
+            logger.debug("Failed to insert job_execution row: %s", e)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if _db_engine is None or self._row_id is None:
+            return False
+        now = datetime.now(ET)
+        try:
+            with get_session(_db_engine) as session:
+                row = session.get(JobExecution, self._row_id)
+                if row:
+                    row.finished_at = now
+                    row.duration_seconds = (now - row.started_at).total_seconds()
+                    if exc_type is not None:
+                        import traceback as _tb
+                        row.status = "failed"
+                        row.error = "".join(_tb.format_exception(exc_type, exc_val, exc_tb))[:2000]
+                    else:
+                        row.status = "success"
+                    row.result_summary = (self.summary or "")[:500] or None
+                    session.commit()
+        except Exception as e:
+            logger.debug("Failed to update job_execution row: %s", e)
+        return False  # don't suppress exceptions
+
+
+def _tracked(job_id: str, fn, *args, **kwargs):
+    """Convenience: run *fn* inside a _track_job context and capture its return as summary."""
+    with _track_job(job_id) as tracker:
+        result = fn(*args, **kwargs)
+        if isinstance(result, str):
+            tracker.summary = result
+        return result
 
 
 TRIGGER_FILE = Path("trigger_scan")
@@ -1236,30 +1333,30 @@ def main():
     register_strategy_jobs(scheduler, plugins, config, client, db_engine, notify)
 
     scheduler.add_job(
-        job_premarket_scan,
+        _tracked,
         CronTrigger(hour=6, minute=0, timezone=ET),
-        args=[config, client, db_engine, notify],
+        args=["premarket_scan", job_premarket_scan, config, client, db_engine, notify],
         id="premarket_scan",
         replace_existing=True,
     )
     scheduler.add_job(
-        job_subscribe_watchlist,
+        _tracked,
         CronTrigger(hour=9, minute=25, timezone=ET),
-        args=[client, config, tracker, risk, db_engine, notify],
+        args=["subscribe_watchlist", job_subscribe_watchlist, client, config, tracker, risk, db_engine, notify],
         id="subscribe_watchlist",
         replace_existing=True,
     )
     scheduler.add_job(
-        job_intraday_monitor,
+        _tracked,
         CronTrigger(hour=9, minute=30, timezone=ET),
-        args=[config, client, tracker, risk, db_engine, notify],
+        args=["intraday_monitor", job_intraday_monitor, config, client, tracker, risk, db_engine, notify],
         id="intraday_monitor",
         replace_existing=True,
     )
     scheduler.add_job(
-        job_eod_tasks,
+        _tracked,
         CronTrigger(hour=15, minute=55, timezone=ET),
-        args=[config, client, tracker, db_engine, notify],
+        args=["eod_tasks", job_eod_tasks, config, client, tracker, db_engine, notify],
         id="eod_tasks",
         replace_existing=True,
     )
