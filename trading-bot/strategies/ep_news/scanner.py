@@ -26,12 +26,13 @@ Filters (in order):
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import numpy as np
+import yfinance as yf
 
-from strategies.ep_earnings.scanner import _check_earnings_today, _get_ticker_info
+from strategies.ep_earnings.scanner import _get_ticker_info
 
 logger = logging.getLogger(__name__)
 
@@ -233,10 +234,11 @@ def scan_ep_news(
 
         c["market_cap"] = market_cap
 
-        # Earnings exclusion: skip if this is an earnings gap
+        # Earnings exclusion: skip if this is an earnings gap OR if we can't confirm
         if exclude_earnings:
-            if _check_earnings_today(sym, today):
-                logger.debug("%s: has earnings today, skipping (not a news gap)", sym)
+            confirmed_no_earnings = _confirm_no_earnings(sym, today)
+            if not confirmed_no_earnings:
+                logger.debug("%s: has earnings or earnings check failed, skipping", sym)
                 continue
 
         filtered_c.append(c)
@@ -252,3 +254,32 @@ def scan_ep_news(
         len(result), min_gap_pct, min_price, min_market_cap / 1e9,
     )
     return result
+
+
+def _confirm_no_earnings(ticker: str, today: date) -> bool:
+    """
+    Return True only if we *successfully confirmed* no earnings today/yesterday.
+
+    Unlike _check_earnings_today (which returns False on failure, conservative
+    for EP Earnings), this function is conservative for EP News: if the API
+    fails, we return False (can't confirm no earnings → skip the stock).
+
+    Returns:
+        True  — API succeeded and no earnings found (safe to treat as news gap)
+        False — earnings found OR API failed (skip this stock)
+    """
+    try:
+        t = yf.Ticker(ticker)
+        dates = t.get_earnings_dates(limit=4)
+        if dates is None or (hasattr(dates, "empty") and dates.empty):
+            return True  # API succeeded, no dates at all → confirmed no earnings
+
+        yesterday = today - timedelta(days=1)
+        for dt in dates.index:
+            d = dt.date() if hasattr(dt, "date") else dt
+            if d in (today, yesterday):
+                return False  # confirmed: has earnings today/yesterday
+        return True  # API succeeded, no matching dates → confirmed no earnings
+    except Exception:
+        logger.debug("%s: earnings check failed, skipping conservatively", ticker)
+        return False  # API failed → can't confirm → skip

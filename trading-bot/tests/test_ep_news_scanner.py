@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pandas as pd
 
-from strategies.ep_news.scanner import scan_ep_news
+from strategies.ep_news.scanner import scan_ep_news, _confirm_no_earnings
 from strategies.ep_news.strategy import (
     compute_features,
     evaluate_strategy_a,
@@ -109,7 +109,7 @@ class TestPhaseAFilters:
         config = _make_config()
 
         with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
-             patch("strategies.ep_news.scanner._check_earnings_today", return_value=False):
+             patch("strategies.ep_news.scanner._confirm_no_earnings", return_value=True):
             result = scan_ep_news(config, client)
 
         assert len(result) == 1
@@ -207,7 +207,7 @@ class TestPhaseCFilters:
         config = _make_config()
 
         with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
-             patch("strategies.ep_news.scanner._check_earnings_today", return_value=True):
+             patch("strategies.ep_news.scanner._confirm_no_earnings", return_value=False):
             result = scan_ep_news(config, client)
         assert len(result) == 0
 
@@ -217,9 +217,20 @@ class TestPhaseCFilters:
         config = _make_config()
 
         with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
-             patch("strategies.ep_news.scanner._check_earnings_today", return_value=False):
+             patch("strategies.ep_news.scanner._confirm_no_earnings", return_value=True):
             result = scan_ep_news(config, client)
         assert len(result) == 1
+
+    def test_earnings_api_failure_skips_stock(self):
+        """When earnings API fails, stock is conservatively skipped (not included)."""
+        client = _make_passing_client()
+        config = _make_config()
+
+        # _confirm_no_earnings returns False on API failure → stock excluded
+        with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
+             patch("strategies.ep_news.scanner._confirm_no_earnings", return_value=False):
+            result = scan_ep_news(config, client)
+        assert len(result) == 0
 
     def test_earnings_exclusion_disabled(self):
         """When exclude_earnings=False, stock with earnings still passes."""
@@ -229,6 +240,84 @@ class TestPhaseCFilters:
         with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")):
             result = scan_ep_news(config, client)
         assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# _confirm_no_earnings unit tests
+# ---------------------------------------------------------------------------
+
+class TestConfirmNoEarnings:
+    """Tests for the safety-inverted earnings check used by EP News."""
+
+    def test_no_earnings_dates_returns_true(self):
+        """Successful API call with no earnings dates → confirmed no earnings."""
+        mock_dates = pd.DataFrame()  # empty DataFrame
+        with patch("strategies.ep_news.scanner.yf") as mock_yf:
+            mock_ticker = MagicMock()
+            mock_ticker.get_earnings_dates.return_value = mock_dates
+            mock_yf.Ticker.return_value = mock_ticker
+
+            result = _confirm_no_earnings("NVDA", date(2026, 4, 4))
+        assert result is True
+
+    def test_earnings_today_returns_false(self):
+        """Successful API call showing earnings today → has earnings."""
+        today = date(2026, 4, 4)
+        idx = pd.DatetimeIndex([pd.Timestamp(today)])
+        mock_dates = pd.DataFrame({"EPS": [1.5]}, index=idx)
+        with patch("strategies.ep_news.scanner.yf") as mock_yf:
+            mock_ticker = MagicMock()
+            mock_ticker.get_earnings_dates.return_value = mock_dates
+            mock_yf.Ticker.return_value = mock_ticker
+
+            result = _confirm_no_earnings("NVDA", today)
+        assert result is False
+
+    def test_earnings_yesterday_returns_false(self):
+        """Earnings yesterday (after-hours) → has earnings."""
+        today = date(2026, 4, 4)
+        yesterday = today - timedelta(days=1)
+        idx = pd.DatetimeIndex([pd.Timestamp(yesterday)])
+        mock_dates = pd.DataFrame({"EPS": [1.5]}, index=idx)
+        with patch("strategies.ep_news.scanner.yf") as mock_yf:
+            mock_ticker = MagicMock()
+            mock_ticker.get_earnings_dates.return_value = mock_dates
+            mock_yf.Ticker.return_value = mock_ticker
+
+            result = _confirm_no_earnings("NVDA", today)
+        assert result is False
+
+    def test_earnings_last_week_returns_true(self):
+        """Earnings from last week → no recent earnings → confirmed safe."""
+        today = date(2026, 4, 4)
+        old_date = today - timedelta(days=7)
+        idx = pd.DatetimeIndex([pd.Timestamp(old_date)])
+        mock_dates = pd.DataFrame({"EPS": [1.5]}, index=idx)
+        with patch("strategies.ep_news.scanner.yf") as mock_yf:
+            mock_ticker = MagicMock()
+            mock_ticker.get_earnings_dates.return_value = mock_dates
+            mock_yf.Ticker.return_value = mock_ticker
+
+            result = _confirm_no_earnings("NVDA", today)
+        assert result is True
+
+    def test_api_exception_returns_false(self):
+        """API failure → can't confirm → skip conservatively."""
+        with patch("strategies.ep_news.scanner.yf") as mock_yf:
+            mock_yf.Ticker.side_effect = Exception("yfinance down")
+
+            result = _confirm_no_earnings("NVDA", date(2026, 4, 4))
+        assert result is False
+
+    def test_none_response_returns_true(self):
+        """API returns None (no data) → confirmed no earnings."""
+        with patch("strategies.ep_news.scanner.yf") as mock_yf:
+            mock_ticker = MagicMock()
+            mock_ticker.get_earnings_dates.return_value = None
+            mock_yf.Ticker.return_value = mock_ticker
+
+            result = _confirm_no_earnings("NVDA", date(2026, 4, 4))
+        assert result is True
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +345,7 @@ class TestOutputFormat:
         config = _make_config()
 
         with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
-             patch("strategies.ep_news.scanner._check_earnings_today", return_value=False):
+             patch("strategies.ep_news.scanner._confirm_no_earnings", return_value=True):
             result = scan_ep_news(config, client)
 
         gaps = [r["gap_pct"] for r in result]
@@ -268,7 +357,7 @@ class TestOutputFormat:
         config = _make_config()
 
         with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
-             patch("strategies.ep_news.scanner._check_earnings_today", return_value=False):
+             patch("strategies.ep_news.scanner._confirm_no_earnings", return_value=True):
             result = scan_ep_news(config, client)
 
         assert len(result) == 1

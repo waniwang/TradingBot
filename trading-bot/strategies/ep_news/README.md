@@ -4,9 +4,11 @@ EOD long swing on news-driven (non-earnings) gap-ups. Same timing as EP Earnings
 
 ## Flow
 
-1. **3:00 PM** — `scanner.py` finds news gappers (excludes earnings), `strategy.py` evaluates A/B filters
+1. **3:05 PM** — `scanner.py` finds news gappers (excludes earnings), `strategy.py` evaluates A/B filters
 2. **3:50 PM** — Plugin executes entries near close
 3. **Ongoing** — Stop per strategy tier, max 50-day hold
+
+**Note:** EP News scans at 3:05 PM (offset from EP Earnings at 3:00 PM) to avoid yfinance rate limiting from simultaneous per-ticker API calls.
 
 ## Scanner Filters (`scanner.py`)
 
@@ -16,6 +18,8 @@ Same three-phase filter as EP Earnings, with differences:
 |------------|------------|---------|
 | Market cap | >= $800M | >= $1B |
 | Earnings | Required | Excluded |
+
+**Earnings exclusion safety:** Uses `_confirm_no_earnings()` which returns `True` only on a successful yfinance API response confirming no earnings. If the API fails, the stock is conservatively skipped (unlike EP Earnings where failure = skip is already the safe direction). This prevents accidentally entering earnings-driven gaps as "news" when yfinance is down.
 
 ## Strategy A (NEWS-Tight) — stop -7%
 

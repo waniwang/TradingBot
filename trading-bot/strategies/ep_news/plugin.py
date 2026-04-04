@@ -44,7 +44,7 @@ class EPNewsPlugin:
     schedule = [
         ScheduleEntry(
             job_id="ep_news_scan",
-            cron={"hour": 15, "minute": 0, "day_of_week": "mon-fri"},
+            cron={"hour": 15, "minute": 5, "day_of_week": "mon-fri"},
             handler=_scan_job,
         ),
         ScheduleEntry(
