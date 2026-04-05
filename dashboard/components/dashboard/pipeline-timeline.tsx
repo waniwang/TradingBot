@@ -6,9 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import type { PipelineData, PipelineExecution, PipelineHistoryDay } from "@/lib/types";
 import { fetchAPI } from "@/lib/api";
 
-type StepStatus = "success" | "running" | "failed" | "skipped" | "upcoming" | "missed";
+export type StepStatus = "success" | "running" | "failed" | "skipped" | "upcoming" | "missed" | "stale";
 
-interface TimelineStep {
+export interface TimelineStep {
   job_id: string;
   label: string;
   time: string;
@@ -17,29 +17,37 @@ interface TimelineStep {
   execution: PipelineExecution | null;
 }
 
-function deriveSteps(data: PipelineData): TimelineStep[] {
-  // Build a map of executions by job_id (use last one if multiple)
+const STALENESS_MS = 10 * 60 * 1000; // 10 minutes
+
+export function getETOffset(): number {
+  // Returns ms to add to Date.now() to get ET time
+  // getTimezoneOffset() returns minutes to ADD to local to get UTC (positive west of UTC)
+  const jan = new Date(new Date().getFullYear(), 0, 1).getTimezoneOffset();
+  const jul = new Date(new Date().getFullYear(), 6, 1).getTimezoneOffset();
+  const isDST = new Date().getTimezoneOffset() < Math.max(jan, jul);
+  const etOffsetHours = isDST ? -4 : -5;
+  const localOffsetMinutes = new Date().getTimezoneOffset();
+  // local + localOffset = UTC; UTC + etOffset = ET
+  // So: ET = local + localOffset + etOffset
+  // Offset to add to local = (localOffset + etOffset) in ms
+  return (localOffsetMinutes + etOffsetHours * 60) * 60 * 1000;
+}
+
+export function deriveSteps(data: PipelineData): TimelineStep[] {
   const execMap = new Map<string, PipelineExecution>();
   for (const exec of data.executions) {
     execMap.set(exec.job_id, exec);
   }
 
-  // Sort schedule by time for display
-  // The schedule comes pre-ordered: nightly (17:00) first, then 06:00..15:55
-  // We want chronological order within a trading day: 06:00..17:00
   const sorted = [...data.schedule].sort((a, b) => {
     const toMin = (t: string) => {
       const [h, m] = t.split(":").map(Number);
-      // Treat 17:00 as previous day = push to front with negative offset
-      // Actually for display, nightly scan at 17:00 is the LAST job of the cycle
       return h * 60 + m;
     };
     return toMin(a.time) - toMin(b.time);
   });
 
-  // Current ET time for determining upcoming vs missed
   const now = new Date();
-  // Convert to ET (approximate — good enough for UI)
   const etOffset = getETOffset();
   const etNow = new Date(now.getTime() + etOffset);
   const nowMinutes = etNow.getHours() * 60 + etNow.getMinutes();
@@ -50,6 +58,13 @@ function deriveSteps(data: PipelineData): TimelineStep[] {
 
     if (exec) {
       status = exec.status as StepStatus;
+      // Detect stale "running" jobs (>10 min without finishing)
+      if (status === "running" && exec.started_at) {
+        const ageMs = Date.now() - new Date(exec.started_at).getTime();
+        if (ageMs > STALENESS_MS) {
+          status = "stale";
+        }
+      }
     } else {
       const [h, m] = job.time.split(":").map(Number);
       const jobMinutes = h * 60 + m;
@@ -60,19 +75,7 @@ function deriveSteps(data: PipelineData): TimelineStep[] {
   });
 }
 
-function getETOffset(): number {
-  // Rough ET offset in ms from UTC
-  // ET is UTC-5 (EST) or UTC-4 (EDT)
-  const jan = new Date(new Date().getFullYear(), 0, 1).getTimezoneOffset();
-  const jul = new Date(new Date().getFullYear(), 6, 1).getTimezoneOffset();
-  const isDST = new Date().getTimezoneOffset() < Math.max(jan, jul);
-  const etOffsetHours = isDST ? -4 : -5;
-  const localOffsetMs = new Date().getTimezoneOffset() * 60 * 1000;
-  const etOffsetMs = etOffsetHours * 60 * 60 * 1000;
-  return localOffsetMs + etOffsetMs;
-}
-
-function formatDuration(seconds: number): string {
+export function formatDuration(seconds: number): string {
   if (seconds < 60) return `${Math.round(seconds)}s`;
   const m = Math.floor(seconds / 60);
   const s = Math.round(seconds % 60);
@@ -91,32 +94,37 @@ function formatTime(time24: string): string {
 const STATUS_STYLES: Record<StepStatus, { dot: string; line: string; text: string }> = {
   success: {
     dot: "bg-profit border-profit",
-    line: "bg-profit/40",
+    line: "bg-border",
     text: "text-foreground",
   },
   running: {
     dot: "bg-blue-500 border-blue-500 animate-pulse",
-    line: "bg-blue-500/40",
+    line: "bg-border",
     text: "text-foreground",
   },
   failed: {
     dot: "bg-loss border-loss",
-    line: "bg-loss/40",
+    line: "bg-border",
     text: "text-foreground",
+  },
+  stale: {
+    dot: "bg-yellow-500 border-yellow-500",
+    line: "bg-border",
+    text: "text-yellow-400",
   },
   skipped: {
     dot: "bg-muted border-muted-foreground/30",
-    line: "bg-muted",
+    line: "bg-border",
     text: "text-muted-foreground",
   },
   upcoming: {
     dot: "bg-transparent border-muted-foreground/40",
-    line: "bg-muted",
+    line: "bg-border",
     text: "text-muted-foreground",
   },
   missed: {
     dot: "bg-transparent border-yellow-500/60",
-    line: "bg-muted",
+    line: "bg-border",
     text: "text-yellow-500",
   },
 };
@@ -128,7 +136,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   system: "bg-muted text-muted-foreground",
 };
 
-export function PipelineTimeline({ data }: { data: PipelineData | null }) {
+export function PipelineTimeline({ data, hideHistory }: { data: PipelineData | null; hideHistory?: boolean }) {
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<PipelineHistoryDay[] | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -149,6 +157,7 @@ export function PipelineTimeline({ data }: { data: PipelineData | null }) {
   const steps = deriveSteps(data);
   const completedCount = steps.filter((s) => s.status === "success").length;
   const failedCount = steps.filter((s) => s.status === "failed").length;
+  const staleCount = steps.filter((s) => s.status === "stale").length;
 
   const loadHistory = async () => {
     if (history) {
@@ -178,15 +187,20 @@ export function PipelineTimeline({ data }: { data: PipelineData | null }) {
               {failedCount > 0 && (
                 <span className="ml-1 text-loss">{failedCount} failed</span>
               )}
+              {staleCount > 0 && (
+                <span className="ml-1 text-yellow-400">{staleCount} stale</span>
+              )}
             </span>
           </CardTitle>
-          <button
-            onClick={loadHistory}
-            disabled={historyLoading}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            {historyLoading ? "Loading..." : showHistory ? "Hide history" : "Past 5 days"}
-          </button>
+          {!hideHistory && (
+            <button
+              onClick={loadHistory}
+              disabled={historyLoading}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {historyLoading ? "Loading..." : showHistory ? "Hide history" : "Past 5 days"}
+            </button>
+          )}
         </div>
       </CardHeader>
       <CardContent className="pt-0">
@@ -215,7 +229,7 @@ export function PipelineTimeline({ data }: { data: PipelineData | null }) {
                 </div>
 
                 {/* Content column */}
-                <div className={`flex-1 pb-3 ${isLast ? "" : ""}`}>
+                <div className="flex-1 pb-3">
                   <div className="flex items-center gap-2">
                     <span className={`text-sm font-medium leading-tight ${styles.text}`}>
                       {step.label}
@@ -226,6 +240,11 @@ export function PipelineTimeline({ data }: { data: PipelineData | null }) {
                     {step.status === "running" && (
                       <Badge className="bg-blue-500/20 text-blue-400 text-[10px] px-1.5 py-0 animate-pulse">
                         running
+                      </Badge>
+                    )}
+                    {step.status === "stale" && (
+                      <Badge className="bg-yellow-500/20 text-yellow-400 text-[10px] px-1.5 py-0">
+                        stale
                       </Badge>
                     )}
                     {step.status === "failed" && (
@@ -258,7 +277,7 @@ export function PipelineTimeline({ data }: { data: PipelineData | null }) {
         </div>
 
         {/* History section */}
-        {showHistory && history && (
+        {!hideHistory && showHistory && history && (
           <div className="mt-4 border-t border-border pt-3">
             <p className="mb-2 text-xs font-medium text-muted-foreground">Recent Pipeline History</p>
             <div className="space-y-3">

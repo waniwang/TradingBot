@@ -6,7 +6,7 @@ import { PortfolioCards } from "@/components/dashboard/portfolio-cards";
 import { PositionsTable } from "@/components/dashboard/positions-table";
 import { EquityChart } from "@/components/dashboard/equity-chart";
 import { RecentSignals } from "@/components/dashboard/recent-signals";
-import { PipelineTimeline } from "@/components/dashboard/pipeline-timeline";
+import { PipelineStatus } from "@/components/dashboard/pipeline-status";
 import { RiskMeter } from "@/components/dashboard/risk-meter";
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
@@ -76,7 +76,7 @@ export default function OverviewPage() {
         marketIndices={marketIndices}
       />
       <main className="flex-1 space-y-6 p-6">
-        <PipelineTimeline data={pipeline} />
+        <PipelineStatus data={pipeline} />
 
         <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
           <PortfolioCards data={portfolio} />

@@ -42,20 +42,20 @@ export function EquityChart({ data }: { data: DailyPnl[] }) {
                   <stop offset="95%" stopColor={cumColor} stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(0 0% 20%)" />
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
               <XAxis
                 dataKey="date"
-                tick={{ fontSize: 11, fill: "hsl(0 0% 50%)" }}
+                tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
                 tickFormatter={(v) => v.slice(5)}
               />
               <YAxis
-                tick={{ fontSize: 11, fill: "hsl(0 0% 50%)" }}
+                tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
                 tickFormatter={(v) => `$${v}`}
               />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: "hsl(260 10% 15%)",
-                  border: "1px solid hsl(260 10% 25%)",
+                  backgroundColor: "var(--color-popover)",
+                  border: "1px solid var(--color-border)",
                   borderRadius: "6px",
                   fontSize: 12,
                 }}
@@ -80,20 +80,20 @@ export function EquityChart({ data }: { data: DailyPnl[] }) {
         <CardContent>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(0 0% 20%)" />
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
               <XAxis
                 dataKey="date"
-                tick={{ fontSize: 11, fill: "hsl(0 0% 50%)" }}
+                tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
                 tickFormatter={(v) => v.slice(5)}
               />
               <YAxis
-                tick={{ fontSize: 11, fill: "hsl(0 0% 50%)" }}
+                tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
                 tickFormatter={(v) => `$${v}`}
               />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: "hsl(260 10% 15%)",
-                  border: "1px solid hsl(260 10% 25%)",
+                  backgroundColor: "var(--color-popover)",
+                  border: "1px solid var(--color-border)",
                   borderRadius: "6px",
                   fontSize: 12,
                 }}

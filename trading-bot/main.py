@@ -1205,8 +1205,9 @@ def _reconcile_on_startup(client, db_engine, notify):
     Run at startup to detect unsafe states left by a previous crash:
       1. Open positions with no stop order → CRITICAL alert
       2. Orders stuck in 'submitted' state → query broker for actual status
+      3. JobExecution rows stuck in 'running' → mark as failed
     """
-    from db.models import Position, Order
+    from db.models import Position, Order, JobExecution
 
     logger.info("Running startup reconciliation...")
 
@@ -1256,6 +1257,27 @@ def _reconcile_on_startup(client, db_engine, notify):
             except Exception as e:
                 logger.error("Could not reconcile stuck order %s: %s", order.broker_order_id, e)
                 notify(f"⚠️ STARTUP: Could not reconcile stuck order for {order.ticker}. Check broker.")
+
+    # Clean up jobs stuck in 'running' from a previous crash
+    now = datetime.now(ET)
+    with get_session(db_engine) as session:
+        stale_jobs = (
+            session.query(JobExecution)
+            .filter(JobExecution.status == "running")
+            .all()
+        )
+        for job in stale_jobs:
+            job.status = "failed"
+            job.finished_at = now
+            job.duration_seconds = (now - job.started_at).total_seconds() if job.started_at else None
+            job.error = "Bot crashed or restarted while job was running"
+        if stale_jobs:
+            session.commit()
+            logger.warning(
+                "Cleaned up %d stale running job(s) from previous crash: %s",
+                len(stale_jobs),
+                [j.job_label for j in stale_jobs],
+            )
 
     logger.info("Startup reconciliation complete.")
 
@@ -1387,6 +1409,25 @@ def main():
     def shutdown(sig, frame):
         logger.info("Shutdown signal received")
         scheduler.shutdown(wait=False)
+        # Mark any currently-running jobs as failed before exiting
+        try:
+            now = datetime.now(ET)
+            with get_session(db_engine) as session:
+                running = (
+                    session.query(JobExecution)
+                    .filter(JobExecution.status == "running")
+                    .all()
+                )
+                for job in running:
+                    job.status = "failed"
+                    job.finished_at = now
+                    job.duration_seconds = (now - job.started_at).total_seconds() if job.started_at else None
+                    job.error = "Bot shutdown (signal received)"
+                if running:
+                    session.commit()
+                    logger.info("Marked %d running job(s) as failed on shutdown", len(running))
+        except Exception as e:
+            logger.error("Failed to clean up running jobs on shutdown: %s", e)
         client.disconnect()
         sys.exit(0)
 
