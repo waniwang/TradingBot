@@ -171,6 +171,23 @@ export interface PipelineHistoryResponse {
   recent_executions: FlatExecution[];
 }
 
+export type SelectedPipelineJob = {
+  job_id: string;
+  label: string;
+  status: string;
+  failure_reason: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_seconds: number | null;
+  result_summary: string | null;
+  error: string | null;
+  category?: string;
+  phase?: string;
+  description?: string;
+  date?: string;
+  scheduled_time?: string;
+};
+
 export interface MarketIndex {
   ticker: string;
   price: number;

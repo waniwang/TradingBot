@@ -1,10 +1,16 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import type { FlatExecution } from "@/lib/types";
+import type { FlatExecution, SelectedPipelineJob } from "@/lib/types";
 import { formatDuration } from "./pipeline-timeline";
 
-export function PipelineRecentLog({ executions }: { executions: FlatExecution[] | undefined }) {
+export function PipelineRecentLog({
+  executions,
+  onSelectJob,
+}: {
+  executions: FlatExecution[] | undefined;
+  onSelectJob?: (job: SelectedPipelineJob) => void;
+}) {
   if (!executions || executions.length === 0) {
     return null;
   }
@@ -27,7 +33,24 @@ export function PipelineRecentLog({ executions }: { executions: FlatExecution[] 
             : "-";
 
           return (
-            <div key={`${exec.date}-${exec.job_id}-${i}`} className="flex items-center gap-2.5 px-4 py-1.5 text-sm">
+            <div
+              key={`${exec.date}-${exec.job_id}-${i}`}
+              className="flex items-center gap-2.5 px-4 py-1.5 text-sm cursor-pointer transition-colors hover:bg-muted/50"
+              onClick={() =>
+                onSelectJob?.({
+                  job_id: exec.job_id,
+                  label: exec.label,
+                  status: exec.status,
+                  failure_reason: exec.failure_reason ?? null,
+                  started_at: exec.started_at ?? null,
+                  finished_at: exec.finished_at ?? null,
+                  duration_seconds: exec.duration_seconds ?? null,
+                  result_summary: exec.result_summary ?? null,
+                  error: exec.error ?? null,
+                  date: exec.date,
+                })
+              }
+            >
               <span
                 className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                   exec.status === "success"

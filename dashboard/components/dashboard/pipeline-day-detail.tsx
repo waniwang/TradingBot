@@ -1,7 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import type { PipelineDayHistory, MergedPipelineJob } from "@/lib/types";
+import type { PipelineDayHistory, MergedPipelineJob, SelectedPipelineJob } from "@/lib/types";
 import { STATUS_STYLES, formatDuration, formatTime } from "./pipeline-timeline";
 import type { StepStatus } from "./pipeline-timeline";
 
@@ -21,7 +21,13 @@ const CATEGORY_COLORS: Record<string, string> = {
   system: "bg-muted text-muted-foreground",
 };
 
-export function PipelineDayDetail({ day }: { day: PipelineDayHistory | null }) {
+export function PipelineDayDetail({
+  day,
+  onSelectJob,
+}: {
+  day: PipelineDayHistory | null;
+  onSelectJob?: (job: SelectedPipelineJob) => void;
+}) {
   if (!day) return null;
 
   const successCount = day.jobs.filter((j) => j.status === "success").length;
@@ -69,7 +75,28 @@ export function PipelineDayDetail({ day }: { day: PipelineDayHistory | null }) {
               const styles = STATUS_STYLES[status] || STATUS_STYLES.upcoming;
 
               return (
-                <div key={job.job_id} className="flex items-center gap-2.5 py-1.5 text-sm">
+                <div
+                  key={job.job_id}
+                  className="flex items-center gap-2.5 py-1.5 text-sm cursor-pointer rounded-md transition-colors hover:bg-muted/50 -mx-1.5 px-1.5"
+                  onClick={() =>
+                    onSelectJob?.({
+                      job_id: job.job_id,
+                      label: job.label,
+                      status: job.status,
+                      failure_reason: job.failure_reason ?? null,
+                      started_at: job.started_at ?? null,
+                      finished_at: job.finished_at ?? null,
+                      duration_seconds: job.duration_seconds ?? null,
+                      result_summary: job.result_summary ?? null,
+                      error: job.error ?? null,
+                      category: job.category,
+                      phase: job.phase,
+                      description: job.description,
+                      scheduled_time: job.scheduled_time,
+                      date: day.date,
+                    })
+                  }
+                >
                   <span
                     className={`h-2 w-2 shrink-0 rounded-full border-2 ${styles.dot}`}
                   />

@@ -2,7 +2,7 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import type { PipelineData, PipelineExecution } from "@/lib/types";
+import type { PipelineData, PipelineExecution, SelectedPipelineJob } from "@/lib/types";
 
 export type StepStatus = "success" | "running" | "failed" | "skipped" | "upcoming" | "missed";
 
@@ -143,7 +143,13 @@ const CATEGORY_COLORS: Record<string, string> = {
   system: "bg-muted text-muted-foreground",
 };
 
-export function PipelineTimeline({ data }: { data: PipelineData | null }) {
+export function PipelineTimeline({
+  data,
+  onSelectJob,
+}: {
+  data: PipelineData | null;
+  onSelectJob?: (job: SelectedPipelineJob) => void;
+}) {
   if (!data) {
     return (
       <Card>
@@ -217,7 +223,23 @@ export function PipelineTimeline({ data }: { data: PipelineData | null }) {
                   return (
                     <div
                       key={step.job_id}
-                      className={`flex gap-3 ${step.isNext ? "rounded-md bg-blue-500/5 -mx-2 px-2" : ""}`}
+                      className={`flex gap-3 cursor-pointer rounded-md transition-colors hover:bg-muted/50 ${step.isNext ? "bg-blue-500/5 -mx-2 px-2" : "-mx-2 px-2"}`}
+                      onClick={() =>
+                        onSelectJob?.({
+                          job_id: step.job_id,
+                          label: step.label,
+                          status: step.status,
+                          failure_reason: step.failure_reason,
+                          started_at: step.execution?.started_at ?? null,
+                          finished_at: step.execution?.finished_at ?? null,
+                          duration_seconds: step.execution?.duration_seconds ?? null,
+                          result_summary: step.execution?.result_summary ?? null,
+                          error: step.execution?.error ?? null,
+                          category: step.category,
+                          phase: step.phase,
+                          description: step.description,
+                        })
+                      }
                     >
                       {/* Time column */}
                       <div className="w-16 shrink-0 pt-0.5 text-right">

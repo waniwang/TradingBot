@@ -9,7 +9,8 @@ import { PipelineDayDetail } from "@/components/dashboard/pipeline-day-detail";
 import { PipelineRecentLog } from "@/components/dashboard/pipeline-recent-log";
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
-import type { BotStatus, PipelineData, PipelineHistoryResponse } from "@/lib/types";
+import { PipelineJobDetailModal } from "@/components/dashboard/pipeline-job-detail-modal";
+import type { BotStatus, PipelineData, PipelineHistoryResponse, SelectedPipelineJob } from "@/lib/types";
 
 export default function PipelinePage() {
   const [status, setStatus] = useState<BotStatus | null>(null);
@@ -19,6 +20,7 @@ export default function PipelinePage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [selectedJob, setSelectedJob] = useState<SelectedPipelineJob | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -79,7 +81,7 @@ export default function PipelinePage() {
         )}
 
         {/* Live pipeline timeline */}
-        <PipelineTimeline data={pipeline} />
+        <PipelineTimeline data={pipeline} onSelectJob={setSelectedJob} />
 
         {/* History section */}
         <section className="space-y-3">
@@ -99,13 +101,17 @@ export default function PipelinePage() {
           )}
 
           {/* Selected day detail */}
-          <PipelineDayDetail day={selectedDay} />
+          <PipelineDayDetail day={selectedDay} onSelectJob={setSelectedJob} />
 
           {/* Recent executions log */}
           {history && (
-            <PipelineRecentLog executions={history.recent_executions} />
+            <PipelineRecentLog executions={history.recent_executions} onSelectJob={setSelectedJob} />
           )}
         </section>
+        <PipelineJobDetailModal
+          job={selectedJob}
+          onClose={() => setSelectedJob(null)}
+        />
       </main>
     </div>
   );

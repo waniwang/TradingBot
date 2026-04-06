@@ -89,6 +89,10 @@ def _apply_stale_transform(exec_dict: dict) -> dict:
         if age > STALE_THRESHOLD_SECONDS:
             exec_dict["status"] = "failed"
             exec_dict["failure_reason"] = "timeout"
+            exec_dict["error"] = (
+                "This job was still marked as 'running' after 10 minutes. "
+                "The bot process likely crashed or was stopped before the job could complete."
+            )
     except Exception:
         pass
     return exec_dict
@@ -105,7 +109,7 @@ def _serialize_execution(r: JobExecution, include_error: bool = True) -> dict:
         "finished_at": r.finished_at.isoformat() if r.finished_at else None,
         "duration_seconds": r.duration_seconds,
         "result_summary": r.result_summary,
-        "error": (r.error[:200] if r.error else None) if include_error else None,
+        "error": r.error if include_error else None,
         "failure_reason": None,
     }
     return _apply_stale_transform(d)

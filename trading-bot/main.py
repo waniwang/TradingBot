@@ -294,6 +294,9 @@ def job_subscribe_watchlist(
     notify,
 ):
     """9:25 AM ET — subscribe to Alpaca real-time bars for watchlist."""
+    if not is_trading_day(client):
+        logger.info("Subscribe watchlist skipped — not a trading day")
+        return "Skipped — not a trading day"
     if not _watchlist:
         logger.info("Watchlist empty — nothing to subscribe")
         return
@@ -372,6 +375,9 @@ def job_intraday_monitor(
     notify,
 ):
     """9:30 AM ET — log confirmation that the stream is running."""
+    if not is_trading_day(client):
+        logger.info("Intraday monitor skipped — not a trading day")
+        return "Skipped — not a trading day"
     logger.info("=== INTRADAY MONITOR STARTED — stream active ===")
     # Data processing is driven by the Alpaca WebSocket stream callback
     # registered in job_subscribe_watchlist at 9:25 AM.
@@ -1370,28 +1376,28 @@ def main():
 
     scheduler.add_job(
         _tracked,
-        CronTrigger(hour=6, minute=0, timezone=ET),
+        CronTrigger(hour=6, minute=0, day_of_week="mon-fri", timezone=ET),
         args=["premarket_scan", job_premarket_scan, config, client, db_engine, notify],
         id="premarket_scan",
         replace_existing=True,
     )
     scheduler.add_job(
         _tracked,
-        CronTrigger(hour=9, minute=25, timezone=ET),
+        CronTrigger(hour=9, minute=25, day_of_week="mon-fri", timezone=ET),
         args=["subscribe_watchlist", job_subscribe_watchlist, client, config, tracker, risk, db_engine, notify],
         id="subscribe_watchlist",
         replace_existing=True,
     )
     scheduler.add_job(
         _tracked,
-        CronTrigger(hour=9, minute=30, timezone=ET),
+        CronTrigger(hour=9, minute=30, day_of_week="mon-fri", timezone=ET),
         args=["intraday_monitor", job_intraday_monitor, config, client, tracker, risk, db_engine, notify],
         id="intraday_monitor",
         replace_existing=True,
     )
     scheduler.add_job(
         _tracked,
-        CronTrigger(hour=15, minute=55, timezone=ET),
+        CronTrigger(hour=15, minute=55, day_of_week="mon-fri", timezone=ET),
         args=["eod_tasks", job_eod_tasks, config, client, tracker, db_engine, notify],
         id="eod_tasks",
         replace_existing=True,
