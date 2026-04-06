@@ -1,11 +1,6 @@
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "dev-key";
-
 export async function fetchAPI<T>(path: string): Promise<T> {
-  // Calls /api/* which Next.js rewrites to the backend server.
-  // This avoids HTTPS→HTTP mixed content issues.
-  const res = await fetch(path, {
-    headers: { "X-API-Key": API_KEY },
-  });
+  // Calls /api/* which middleware rewrites to the backend with API key injected server-side.
+  const res = await fetch(path);
   if (!res.ok) {
     throw new Error(`API error ${res.status}: ${res.statusText}`);
   }
