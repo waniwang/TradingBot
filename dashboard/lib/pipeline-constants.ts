@@ -16,7 +16,7 @@ export const PHASE_LABELS: Record<string, string> = {
   close: "Close",
 };
 
-/* ── Category badge colors (filled style — identifies job type) ── */
+/* ── Category badge colors (filled pill — identifies job type) ── */
 
 export const CATEGORY_COLORS: Record<string, string> = {
   scan: "bg-blue-500/15 text-blue-400",
@@ -25,20 +25,20 @@ export const CATEGORY_COLORS: Record<string, string> = {
   system: "bg-muted text-muted-foreground",
 };
 
-/* ── Status badge colors (outlined style — identifies execution state) ── */
+/* ── Status text colors (plain text, no pill — identifies execution state) ── */
 
-export const STATUS_BADGE_COLORS: Record<string, string> = {
-  success: "border-profit/40 text-profit bg-transparent",
-  running: "border-blue-400/40 text-blue-400 bg-transparent animate-pulse",
-  failed: "border-loss/40 text-loss bg-transparent",
-  missed: "border-yellow-500/40 text-yellow-400 bg-transparent",
-  upcoming: "border-border text-muted-foreground bg-transparent",
-  skipped: "border-border text-muted-foreground bg-transparent",
-  next: "border-blue-400/40 text-blue-400 bg-transparent animate-pulse",
+export const STATUS_TEXT_COLORS: Record<string, string> = {
+  success: "text-profit",
+  running: "text-blue-400 animate-pulse",
+  failed: "text-loss",
+  missed: "text-yellow-400",
+  upcoming: "text-muted-foreground",
+  skipped: "text-muted-foreground",
+  next: "text-blue-400 animate-pulse",
 };
 
-export function getStatusBadgeClass(status: string): string {
-  return STATUS_BADGE_COLORS[status] || STATUS_BADGE_COLORS.upcoming;
+export function getStatusTextClass(status: string): string {
+  return STATUS_TEXT_COLORS[status] || STATUS_TEXT_COLORS.upcoming;
 }
 
 export function getStatusLabel(

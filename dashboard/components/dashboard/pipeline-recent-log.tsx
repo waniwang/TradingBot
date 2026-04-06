@@ -1,9 +1,8 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
 import type { FlatExecution, SelectedPipelineJob } from "@/lib/types";
 import { formatDuration } from "./pipeline-timeline";
-import { getStatusBadgeClass, getStatusLabel } from "@/lib/pipeline-constants";
+import { getStatusTextClass, getStatusLabel } from "@/lib/pipeline-constants";
 
 export function PipelineRecentLog({
   executions,
@@ -68,12 +67,9 @@ export function PipelineRecentLog({
               <span className="w-40 shrink-0 truncate text-xs font-medium">
                 {exec.label}
               </span>
-              <Badge
-                variant="outline"
-                className={`text-[10px] px-1.5 py-0 ${getStatusBadgeClass(exec.status)}`}
-              >
+              <span className={`text-[10px] font-medium w-16 shrink-0 ${getStatusTextClass(exec.status)}`}>
                 {getStatusLabel(exec.status, exec.failure_reason)}
-              </Badge>
+              </span>
               <span className="w-16 shrink-0 text-xs tabular-nums text-muted-foreground">
                 {startedTime}
               </span>

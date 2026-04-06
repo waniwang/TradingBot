@@ -13,7 +13,7 @@ import { formatDuration } from "./pipeline-timeline";
 import {
   PHASE_LABELS,
   CATEGORY_COLORS,
-  getStatusBadgeClass,
+  getStatusTextClass,
   getStatusLabel,
 } from "@/lib/pipeline-constants";
 
@@ -56,12 +56,9 @@ export function PipelineJobDetailModal({
         <DialogHeader>
           <div className="flex items-center gap-2 flex-wrap">
             <DialogTitle>{job.label}</DialogTitle>
-            <Badge
-              variant="outline"
-              className={`text-[10px] px-1.5 py-0 ${getStatusBadgeClass(job.status)}`}
-            >
+            <span className={`text-xs font-medium ${getStatusTextClass(job.status)}`}>
               {getStatusLabel(job.status, job.failure_reason)}
-            </Badge>
+            </span>
             {job.category && (
               <Badge
                 className={`text-[10px] px-1.5 py-0 ${CATEGORY_COLORS[job.category] || CATEGORY_COLORS.system}`}

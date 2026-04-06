@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import type { PipelineData, PipelineExecution, SelectedPipelineJob } from "@/lib/types";
 import {
   CATEGORY_COLORS,
-  getStatusBadgeClass,
+  getStatusTextClass,
 } from "@/lib/pipeline-constants";
 
 export type StepStatus = "success" | "running" | "failed" | "skipped" | "upcoming" | "missed";
@@ -367,30 +367,21 @@ export function PipelineTimeline({
                             >
                               {step.category}
                             </Badge>
-                            {/* Status badges — outlined style, visually distinct */}
+                            {/* Status — plain text, visually distinct from filled category badges */}
                             {step.isNext && (
-                              <Badge
-                                variant="outline"
-                                className={`text-[10px] px-1.5 py-0 ${getStatusBadgeClass("next")}`}
-                              >
+                              <span className={`text-[10px] font-medium ${getStatusTextClass("next")}`}>
                                 next
-                              </Badge>
+                              </span>
                             )}
                             {step.status === "running" && !step.isNext && (
-                              <Badge
-                                variant="outline"
-                                className={`text-[10px] px-1.5 py-0 ${getStatusBadgeClass("running")}`}
-                              >
+                              <span className={`text-[10px] font-medium ${getStatusTextClass("running")}`}>
                                 running
-                              </Badge>
+                              </span>
                             )}
                             {step.status === "failed" && (
-                              <Badge
-                                variant="outline"
-                                className={`text-[10px] px-1.5 py-0 ${getStatusBadgeClass("failed")}`}
-                              >
+                              <span className={`text-[10px] font-medium ${getStatusTextClass("failed")}`}>
                                 {step.failure_reason === "timeout" ? "timed out" : "failed"}
-                              </Badge>
+                              </span>
                             )}
                           </div>
                           <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-tight">

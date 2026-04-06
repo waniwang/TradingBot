@@ -1,13 +1,12 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
 import type { PipelineDayHistory, MergedPipelineJob, SelectedPipelineJob } from "@/lib/types";
 import { STATUS_STYLES, formatDuration, formatTime } from "./pipeline-timeline";
 import type { StepStatus } from "./pipeline-timeline";
 import {
   PHASE_ORDER,
   PHASE_LABELS,
-  getStatusBadgeClass,
+  getStatusTextClass,
   getStatusLabel,
 } from "@/lib/pipeline-constants";
 
@@ -93,12 +92,9 @@ export function PipelineDayDetail({
                   <span className={`w-44 shrink-0 truncate font-medium ${styles.text}`}>
                     {job.label}
                   </span>
-                  <Badge
-                    variant="outline"
-                    className={`text-[10px] px-1.5 py-0 ${getStatusBadgeClass(status)}`}
-                  >
+                  <span className={`text-[10px] font-medium w-16 shrink-0 ${getStatusTextClass(status)}`}>
                     {getStatusLabel(status, job.failure_reason)}
-                  </Badge>
+                  </span>
                   <span className="w-16 shrink-0 text-xs tabular-nums text-muted-foreground">
                     {job.started_at
                       ? new Date(job.started_at).toLocaleTimeString("en-US", {
