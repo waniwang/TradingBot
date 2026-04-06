@@ -3,6 +3,10 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { PipelineData, PipelineExecution, SelectedPipelineJob } from "@/lib/types";
+import {
+  CATEGORY_COLORS,
+  getStatusBadgeClass,
+} from "@/lib/pipeline-constants";
 
 export type StepStatus = "success" | "running" | "failed" | "skipped" | "upcoming" | "missed";
 
@@ -17,6 +21,7 @@ export interface TimelineStep {
   failure_reason: string | null;
   execution: PipelineExecution | null;
   isNext: boolean;
+  displayMinutes: number;
 }
 
 export function deriveSteps(data: PipelineData): TimelineStep[] {
@@ -68,12 +73,17 @@ export function deriveSteps(data: PipelineData): TimelineStep[] {
 
     const isNext = data.next_job?.job_id === job.job_id;
 
+    // Display minutes: overnight (offset=1) gets -1 so it sorts to top
+    const [h, m] = job.time.split(":").map(Number);
+    const displayMinutes = job.display_day_offset === 1 ? -1 : h * 60 + m;
+
     return {
       ...job,
       status,
       failure_reason,
       execution: exec,
       isNext,
+      displayMinutes,
     };
   });
 }
@@ -98,6 +108,29 @@ export function formatDuration(seconds: number): string {
 
 export function formatTime(time24: string): string {
   const [h, m] = time24.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const h12 = h % 12 || 12;
+  return `${h12}:${m.toString().padStart(2, "0")} ${ampm}`;
+}
+
+function formatCountdown(seconds: number): string {
+  if (seconds <= 0) return "now";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function getCurrentETMinutes(): number {
+  const now = new Date();
+  const etOffset = getETOffset();
+  const etNow = new Date(now.getTime() + etOffset);
+  return etNow.getHours() * 60 + etNow.getMinutes();
+}
+
+function formatETTime(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
   const ampm = h >= 12 ? "PM" : "AM";
   const h12 = h % 12 || 12;
   return `${h12}:${m.toString().padStart(2, "0")} ${ampm}`;
@@ -136,12 +169,35 @@ export const STATUS_STYLES: Record<StepStatus, { dot: string; line: string; text
   },
 };
 
-const CATEGORY_COLORS: Record<string, string> = {
-  scan: "bg-blue-500/15 text-blue-400",
-  trade: "bg-profit/15 text-profit",
-  monitor: "bg-purple-500/15 text-purple-400",
-  system: "bg-muted text-muted-foreground",
-};
+function NowIndicator({ countdownSeconds }: { countdownSeconds?: number | null }) {
+  const nowMinutes = getCurrentETMinutes();
+  return (
+    <div className="flex gap-3 -mx-2 px-2 py-1">
+      {/* Time column */}
+      <div className="w-16 shrink-0 text-right">
+        <span className="text-[10px] font-semibold tabular-nums text-blue-400">
+          {formatETTime(nowMinutes)}
+        </span>
+      </div>
+      {/* Line column — aligned with dots */}
+      <div className="flex flex-col items-center justify-center">
+        <div className="h-1.5 w-1.5 rounded-full bg-blue-400" />
+      </div>
+      {/* Label */}
+      <div className="flex flex-1 items-center">
+        <div className="h-px flex-1 bg-blue-400/30" />
+        <span className="ml-2 text-[10px] font-medium text-blue-400/70">
+          NOW
+          {countdownSeconds != null && countdownSeconds > 0 && (
+            <span className="ml-1.5 text-muted-foreground font-normal">
+              next in {formatCountdown(countdownSeconds)}
+            </span>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 export function PipelineTimeline({
   data,
@@ -179,6 +235,40 @@ export function PipelineTimeline({
     }
   }
 
+  // Determine where to place the "now" indicator
+  const nowMinutes = getCurrentETMinutes();
+  // Only show on trading days
+  const showNowIndicator = data.is_trading_day;
+
+  // Find which phase/step index the now indicator should appear after
+  // Returns { phaseIdx, stepIdx } — indicator goes after that step
+  // Or { phaseIdx: -1 } if before all steps
+  let nowPosition: { phaseIdx: number; stepIdx: number } | null = null;
+
+  if (showNowIndicator) {
+    // Walk through all steps in display order and find where "now" falls
+    let lastPhaseIdx = -1;
+    let lastStepIdx = -1;
+
+    for (let pi = 0; pi < grouped.length; pi++) {
+      for (let si = 0; si < grouped[pi].steps.length; si++) {
+        const step = grouped[pi].steps[si];
+        if (step.displayMinutes === -1) continue; // overnight — always past, skip
+        if (step.displayMinutes <= nowMinutes) {
+          lastPhaseIdx = pi;
+          lastStepIdx = si;
+        }
+      }
+    }
+
+    if (lastPhaseIdx === -1) {
+      // Before all regular jobs — place after the overnight phase header
+      nowPosition = { phaseIdx: 0, stepIdx: -1 };
+    } else {
+      nowPosition = { phaseIdx: lastPhaseIdx, stepIdx: lastStepIdx };
+    }
+  }
+
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -194,7 +284,7 @@ export function PipelineTimeline({
       </CardHeader>
       <CardContent className="pt-0">
         <div className="space-y-0">
-          {grouped.map((group) => {
+          {grouped.map((group, phaseIdx) => {
             const meta = phaseMeta[group.phase];
             return (
               <div key={group.phase}>
@@ -213,6 +303,13 @@ export function PipelineTimeline({
                   </div>
                 </div>
 
+                {/* Now indicator before first step in this phase */}
+                {nowPosition &&
+                  nowPosition.phaseIdx === phaseIdx &&
+                  nowPosition.stepIdx === -1 && (
+                    <NowIndicator countdownSeconds={data.next_job?.countdown_seconds} />
+                  )}
+
                 {/* Steps in this phase */}
                 {group.steps.map((step, i) => {
                   const styles = STATUS_STYLES[step.status];
@@ -221,97 +318,118 @@ export function PipelineTimeline({
                     group.phase === grouped[grouped.length - 1].phase && isLastInPhase;
 
                   return (
-                    <div
-                      key={step.job_id}
-                      className={`flex gap-3 cursor-pointer rounded-md transition-colors hover:bg-muted/50 ${step.isNext ? "bg-blue-500/5 -mx-2 px-2" : "-mx-2 px-2"}`}
-                      onClick={() =>
-                        onSelectJob?.({
-                          job_id: step.job_id,
-                          label: step.label,
-                          status: step.status,
-                          failure_reason: step.failure_reason,
-                          started_at: step.execution?.started_at ?? null,
-                          finished_at: step.execution?.finished_at ?? null,
-                          duration_seconds: step.execution?.duration_seconds ?? null,
-                          result_summary: step.execution?.result_summary ?? null,
-                          error: step.execution?.error ?? null,
-                          category: step.category,
-                          phase: step.phase,
-                          description: step.description,
-                        })
-                      }
-                    >
-                      {/* Time column */}
-                      <div className="w-16 shrink-0 pt-0.5 text-right">
-                        <span className="text-[11px] tabular-nums text-muted-foreground">
-                          {formatTime(step.time)}
-                        </span>
-                      </div>
-
-                      {/* Dot + line column */}
-                      <div className="flex flex-col items-center">
-                        <div
-                          className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full border-2 ${styles.dot}`}
-                        />
-                        {!isLastOverall && (
-                          <div className={`w-0.5 flex-1 min-h-4 ${styles.line}`} />
-                        )}
-                      </div>
-
-                      {/* Content column */}
-                      <div className="flex-1 pb-3">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-sm font-medium leading-tight ${styles.text}`}>
-                            {step.label}
+                    <div key={step.job_id}>
+                      <div
+                        className={`flex gap-3 cursor-pointer rounded-md transition-colors hover:bg-muted/50 ${step.isNext ? "bg-blue-500/5 -mx-2 px-2" : "-mx-2 px-2"}`}
+                        onClick={() =>
+                          onSelectJob?.({
+                            job_id: step.job_id,
+                            label: step.label,
+                            status: step.status,
+                            failure_reason: step.failure_reason,
+                            started_at: step.execution?.started_at ?? null,
+                            finished_at: step.execution?.finished_at ?? null,
+                            duration_seconds: step.execution?.duration_seconds ?? null,
+                            result_summary: step.execution?.result_summary ?? null,
+                            error: step.execution?.error ?? null,
+                            category: step.category,
+                            phase: step.phase,
+                            description: step.description,
+                          })
+                        }
+                      >
+                        {/* Time column */}
+                        <div className="w-16 shrink-0 pt-0.5 text-right">
+                          <span className="text-[11px] tabular-nums text-muted-foreground">
+                            {formatTime(step.time)}
                           </span>
-                          <Badge
-                            className={`text-[10px] px-1.5 py-0 ${CATEGORY_COLORS[step.category] || CATEGORY_COLORS.system}`}
-                          >
-                            {step.category}
-                          </Badge>
-                          {step.isNext && (
-                            <Badge className="bg-blue-500/20 text-blue-400 text-[10px] px-1.5 py-0 animate-pulse">
-                              next
-                            </Badge>
-                          )}
-                          {step.status === "running" && !step.isNext && (
-                            <Badge className="bg-blue-500/20 text-blue-400 text-[10px] px-1.5 py-0 animate-pulse">
-                              running
-                            </Badge>
-                          )}
-                          {step.status === "failed" && (
-                            <Badge className="bg-loss/20 text-loss text-[10px] px-1.5 py-0">
-                              {step.failure_reason === "timeout" ? "timed out" : "failed"}
-                            </Badge>
+                        </div>
+
+                        {/* Dot + line column */}
+                        <div className="flex flex-col items-center">
+                          <div
+                            className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full border-2 ${styles.dot}`}
+                          />
+                          {!isLastOverall && (
+                            <div className={`w-0.5 flex-1 min-h-4 ${styles.line}`} />
                           )}
                         </div>
-                        <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-tight">
-                          {step.description}
-                        </p>
-                        {step.execution && step.status !== "upcoming" && (
-                          <div className="mt-0.5 text-xs text-muted-foreground">
-                            {step.execution.duration_seconds != null && (
-                              <span>{formatDuration(step.execution.duration_seconds)}</span>
+
+                        {/* Content column */}
+                        <div className="flex-1 pb-3">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-sm font-medium leading-tight ${styles.text}`}>
+                              {step.label}
+                            </span>
+                            {/* Category badge — filled style */}
+                            <Badge
+                              className={`text-[10px] px-1.5 py-0 ${CATEGORY_COLORS[step.category] || CATEGORY_COLORS.system}`}
+                            >
+                              {step.category}
+                            </Badge>
+                            {/* Status badges — outlined style, visually distinct */}
+                            {step.isNext && (
+                              <Badge
+                                variant="outline"
+                                className={`text-[10px] px-1.5 py-0 ${getStatusBadgeClass("next")}`}
+                              >
+                                next
+                              </Badge>
                             )}
-                            {step.execution.result_summary && (
-                              <span className="ml-1.5">
-                                &mdash; {step.execution.result_summary}
-                              </span>
+                            {step.status === "running" && !step.isNext && (
+                              <Badge
+                                variant="outline"
+                                className={`text-[10px] px-1.5 py-0 ${getStatusBadgeClass("running")}`}
+                              >
+                                running
+                              </Badge>
                             )}
-                            {step.execution.error && (
-                              <span className="ml-1.5 text-loss" title={step.execution.error}>
-                                &mdash; {step.execution.error.slice(0, 80)}
-                              </span>
+                            {step.status === "failed" && (
+                              <Badge
+                                variant="outline"
+                                className={`text-[10px] px-1.5 py-0 ${getStatusBadgeClass("failed")}`}
+                              >
+                                {step.failure_reason === "timeout" ? "timed out" : "failed"}
+                              </Badge>
                             )}
                           </div>
-                        )}
+                          <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-tight">
+                            {step.description}
+                          </p>
+                          {step.execution && step.status !== "upcoming" && (
+                            <div className="mt-0.5 text-xs text-muted-foreground">
+                              {step.execution.duration_seconds != null && (
+                                <span>{formatDuration(step.execution.duration_seconds)}</span>
+                              )}
+                              {step.execution.result_summary && (
+                                <span className="ml-1.5">
+                                  &mdash; {step.execution.result_summary}
+                                </span>
+                              )}
+                              {step.execution.error && (
+                                <span className="ml-1.5 text-loss" title={step.execution.error}>
+                                  &mdash; {step.execution.error.slice(0, 80)}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
+
+                      {/* Now indicator after this step */}
+                      {nowPosition &&
+                        nowPosition.phaseIdx === phaseIdx &&
+                        nowPosition.stepIdx === i && (
+                          <NowIndicator countdownSeconds={data.next_job?.countdown_seconds} />
+                        )}
                     </div>
                   );
                 })}
               </div>
             );
           })}
+
+          {/* Now indicator after all steps — only if no steps matched (all jobs in the future) */}
         </div>
       </CardContent>
     </Card>

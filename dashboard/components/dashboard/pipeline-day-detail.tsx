@@ -4,22 +4,12 @@ import { Badge } from "@/components/ui/badge";
 import type { PipelineDayHistory, MergedPipelineJob, SelectedPipelineJob } from "@/lib/types";
 import { STATUS_STYLES, formatDuration, formatTime } from "./pipeline-timeline";
 import type { StepStatus } from "./pipeline-timeline";
-
-const PHASE_ORDER = ["overnight", "premarket", "market_open", "afternoon", "close"];
-const PHASE_LABELS: Record<string, string> = {
-  overnight: "Overnight",
-  premarket: "Pre-Market",
-  market_open: "Market Open",
-  afternoon: "Afternoon Swing",
-  close: "Close",
-};
-
-const CATEGORY_COLORS: Record<string, string> = {
-  scan: "bg-blue-500/15 text-blue-400",
-  trade: "bg-profit/15 text-profit",
-  monitor: "bg-purple-500/15 text-purple-400",
-  system: "bg-muted text-muted-foreground",
-};
+import {
+  PHASE_ORDER,
+  PHASE_LABELS,
+  getStatusBadgeClass,
+  getStatusLabel,
+} from "@/lib/pipeline-constants";
 
 export function PipelineDayDetail({
   day,
@@ -104,17 +94,10 @@ export function PipelineDayDetail({
                     {job.label}
                   </span>
                   <Badge
-                    className={`text-[10px] px-1.5 py-0 ${
-                      status === "success"
-                        ? "bg-profit/15 text-profit"
-                        : status === "failed"
-                          ? "bg-loss/15 text-loss"
-                          : status === "missed"
-                            ? "bg-yellow-500/15 text-yellow-400"
-                            : "bg-muted text-muted-foreground"
-                    }`}
+                    variant="outline"
+                    className={`text-[10px] px-1.5 py-0 ${getStatusBadgeClass(status)}`}
                   >
-                    {job.failure_reason === "timeout" ? "timed out" : status}
+                    {getStatusLabel(status, job.failure_reason)}
                   </Badge>
                   <span className="w-16 shrink-0 text-xs tabular-nums text-muted-foreground">
                     {job.started_at

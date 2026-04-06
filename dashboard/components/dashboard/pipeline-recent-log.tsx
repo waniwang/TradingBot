@@ -3,6 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import type { FlatExecution, SelectedPipelineJob } from "@/lib/types";
 import { formatDuration } from "./pipeline-timeline";
+import { getStatusBadgeClass, getStatusLabel } from "@/lib/pipeline-constants";
 
 export function PipelineRecentLog({
   executions,
@@ -24,7 +25,6 @@ export function PipelineRecentLog({
       </div>
       <div className="divide-y divide-border">
         {executions.map((exec, i) => {
-          const status = exec.failure_reason === "timeout" ? "timed out" : exec.status;
           const startedTime = exec.started_at
             ? new Date(exec.started_at).toLocaleTimeString("en-US", {
                 hour: "2-digit",
@@ -69,15 +69,10 @@ export function PipelineRecentLog({
                 {exec.label}
               </span>
               <Badge
-                className={`text-[10px] px-1.5 py-0 ${
-                  exec.status === "success"
-                    ? "bg-profit/15 text-profit"
-                    : exec.status === "failed"
-                      ? "bg-loss/15 text-loss"
-                      : "bg-muted text-muted-foreground"
-                }`}
+                variant="outline"
+                className={`text-[10px] px-1.5 py-0 ${getStatusBadgeClass(exec.status)}`}
               >
-                {status}
+                {getStatusLabel(exec.status, exec.failure_reason)}
               </Badge>
               <span className="w-16 shrink-0 text-xs tabular-nums text-muted-foreground">
                 {startedTime}
