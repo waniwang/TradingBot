@@ -1030,7 +1030,21 @@ class _track_job:
                     row.result_summary = (self.summary or "")[:500] or None
                     session.commit()
         except Exception as e:
-            logger.debug("Failed to update job_execution row: %s", e)
+            logger.error("Failed to update job_execution row for %s: %s", self.job_id, e)
+            # Retry once with a fresh session
+            try:
+                with get_session(_db_engine) as session:
+                    row = session.get(JobExecution, self._row_id)
+                    if row and row.status == "running":
+                        row.finished_at = now
+                        row.duration_seconds = (now - row.started_at).total_seconds()
+                        row.status = "failed" if exc_type else "success"
+                        row.error = f"Original commit failed: {e}" if exc_type else None
+                        row.result_summary = (self.summary or "")[:500] or None
+                        session.commit()
+                        logger.info("Retry succeeded for job_execution %s", self.job_id)
+            except Exception as e2:
+                logger.error("Retry also failed for job_execution %s: %s", self.job_id, e2)
         return False  # don't suppress exceptions
 
 

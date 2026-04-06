@@ -1,36 +1,22 @@
 "use client";
 
-import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import type { PipelineData, PipelineExecution, PipelineHistoryDay } from "@/lib/types";
-import { fetchAPI } from "@/lib/api";
+import type { PipelineData, PipelineExecution } from "@/lib/types";
 
-export type StepStatus = "success" | "running" | "failed" | "skipped" | "upcoming" | "missed" | "stale";
+export type StepStatus = "success" | "running" | "failed" | "skipped" | "upcoming" | "missed";
 
 export interface TimelineStep {
   job_id: string;
   label: string;
   time: string;
   category: string;
+  phase: string;
+  description: string;
   status: StepStatus;
+  failure_reason: string | null;
   execution: PipelineExecution | null;
-}
-
-const STALENESS_MS = 10 * 60 * 1000; // 10 minutes
-
-export function getETOffset(): number {
-  // Returns ms to add to Date.now() to get ET time
-  // getTimezoneOffset() returns minutes to ADD to local to get UTC (positive west of UTC)
-  const jan = new Date(new Date().getFullYear(), 0, 1).getTimezoneOffset();
-  const jul = new Date(new Date().getFullYear(), 6, 1).getTimezoneOffset();
-  const isDST = new Date().getTimezoneOffset() < Math.max(jan, jul);
-  const etOffsetHours = isDST ? -4 : -5;
-  const localOffsetMinutes = new Date().getTimezoneOffset();
-  // local + localOffset = UTC; UTC + etOffset = ET
-  // So: ET = local + localOffset + etOffset
-  // Offset to add to local = (localOffset + etOffset) in ms
-  return (localOffsetMinutes + etOffsetHours * 60) * 60 * 1000;
+  isNext: boolean;
 }
 
 export function deriveSteps(data: PipelineData): TimelineStep[] {
@@ -39,7 +25,11 @@ export function deriveSteps(data: PipelineData): TimelineStep[] {
     execMap.set(exec.job_id, exec);
   }
 
+  // Sort: display_day_offset=1 first (overnight), then by time
   const sorted = [...data.schedule].sort((a, b) => {
+    if (a.display_day_offset !== b.display_day_offset) {
+      return b.display_day_offset - a.display_day_offset; // offset=1 first
+    }
     const toMin = (t: string) => {
       const [h, m] = t.split(":").map(Number);
       return h * 60 + m;
@@ -55,24 +45,46 @@ export function deriveSteps(data: PipelineData): TimelineStep[] {
   return sorted.map((job) => {
     const exec = execMap.get(job.job_id) || null;
     let status: StepStatus;
+    let failure_reason: string | null = null;
 
     if (exec) {
-      status = exec.status as StepStatus;
-      // Detect stale "running" jobs (>10 min without finishing)
-      if (status === "running" && exec.started_at) {
-        const ageMs = Date.now() - new Date(exec.started_at).getTime();
-        if (ageMs > STALENESS_MS) {
-          status = "stale";
-        }
+      if (exec.failure_reason === "timeout") {
+        status = "failed";
+        failure_reason = "timeout";
+      } else {
+        status = exec.status as StepStatus;
       }
     } else {
-      const [h, m] = job.time.split(":").map(Number);
-      const jobMinutes = h * 60 + m;
-      status = jobMinutes <= nowMinutes ? "missed" : "upcoming";
+      // No execution row — check if job time has passed
+      if (job.display_day_offset === 1) {
+        // Overnight job (ran previous day) — no execution means missed or upcoming
+        status = "upcoming";
+      } else {
+        const [h, m] = job.time.split(":").map(Number);
+        const jobMinutes = h * 60 + m;
+        status = jobMinutes <= nowMinutes ? "missed" : "upcoming";
+      }
     }
 
-    return { ...job, status, execution: exec };
+    const isNext = data.next_job?.job_id === job.job_id;
+
+    return {
+      ...job,
+      status,
+      failure_reason,
+      execution: exec,
+      isNext,
+    };
   });
+}
+
+export function getETOffset(): number {
+  const jan = new Date(new Date().getFullYear(), 0, 1).getTimezoneOffset();
+  const jul = new Date(new Date().getFullYear(), 6, 1).getTimezoneOffset();
+  const isDST = new Date().getTimezoneOffset() < Math.max(jan, jul);
+  const etOffsetHours = isDST ? -4 : -5;
+  const localOffsetMinutes = new Date().getTimezoneOffset();
+  return (localOffsetMinutes + etOffsetHours * 60) * 60 * 1000;
 }
 
 export function formatDuration(seconds: number): string {
@@ -84,14 +96,14 @@ export function formatDuration(seconds: number): string {
   return `${h}h ${m % 60}m`;
 }
 
-function formatTime(time24: string): string {
+export function formatTime(time24: string): string {
   const [h, m] = time24.split(":").map(Number);
   const ampm = h >= 12 ? "PM" : "AM";
   const h12 = h % 12 || 12;
   return `${h12}:${m.toString().padStart(2, "0")} ${ampm}`;
 }
 
-const STATUS_STYLES: Record<StepStatus, { dot: string; line: string; text: string }> = {
+export const STATUS_STYLES: Record<StepStatus, { dot: string; line: string; text: string }> = {
   success: {
     dot: "bg-profit border-profit",
     line: "bg-border",
@@ -106,11 +118,6 @@ const STATUS_STYLES: Record<StepStatus, { dot: string; line: string; text: strin
     dot: "bg-loss border-loss",
     line: "bg-border",
     text: "text-foreground",
-  },
-  stale: {
-    dot: "bg-yellow-500 border-yellow-500",
-    line: "bg-border",
-    text: "text-yellow-400",
   },
   skipped: {
     dot: "bg-muted border-muted-foreground/30",
@@ -136,11 +143,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   system: "bg-muted text-muted-foreground",
 };
 
-export function PipelineTimeline({ data, hideHistory }: { data: PipelineData | null; hideHistory?: boolean }) {
-  const [showHistory, setShowHistory] = useState(false);
-  const [history, setHistory] = useState<PipelineHistoryDay[] | null>(null);
-  const [historyLoading, setHistoryLoading] = useState(false);
-
+export function PipelineTimeline({ data }: { data: PipelineData | null }) {
   if (!data) {
     return (
       <Card>
@@ -157,171 +160,137 @@ export function PipelineTimeline({ data, hideHistory }: { data: PipelineData | n
   const steps = deriveSteps(data);
   const completedCount = steps.filter((s) => s.status === "success").length;
   const failedCount = steps.filter((s) => s.status === "failed").length;
-  const staleCount = steps.filter((s) => s.status === "stale").length;
 
-  const loadHistory = async () => {
-    if (history) {
-      setShowHistory(!showHistory);
-      return;
+  // Group steps by phase, preserving order
+  const phases = data.phase_order || ["overnight", "premarket", "market_open", "afternoon", "close"];
+  const phaseMeta = data.phases || {};
+  const grouped: { phase: string; steps: TimelineStep[] }[] = [];
+
+  for (const phase of phases) {
+    const phaseSteps = steps.filter((s) => s.phase === phase);
+    if (phaseSteps.length > 0) {
+      grouped.push({ phase, steps: phaseSteps });
     }
-    setHistoryLoading(true);
-    try {
-      const res = await fetchAPI<{ days: PipelineHistoryDay[] }>("/api/pipeline/history?days=5");
-      setHistory(res.days);
-      setShowHistory(true);
-    } catch (e) {
-      console.error("Failed to load pipeline history:", e);
-    } finally {
-      setHistoryLoading(false);
-    }
-  };
+  }
 
   return (
     <Card>
       <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-medium">
-            Daily Pipeline
-            <span className="ml-2 text-xs font-normal text-muted-foreground">
-              {completedCount}/{steps.length} completed
-              {failedCount > 0 && (
-                <span className="ml-1 text-loss">{failedCount} failed</span>
-              )}
-              {staleCount > 0 && (
-                <span className="ml-1 text-yellow-400">{staleCount} stale</span>
-              )}
-            </span>
-          </CardTitle>
-          {!hideHistory && (
-            <button
-              onClick={loadHistory}
-              disabled={historyLoading}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {historyLoading ? "Loading..." : showHistory ? "Hide history" : "Past 5 days"}
-            </button>
-          )}
-        </div>
+        <CardTitle className="text-sm font-medium">
+          Daily Pipeline
+          <span className="ml-2 text-xs font-normal text-muted-foreground">
+            {completedCount}/{steps.length} completed
+            {failedCount > 0 && (
+              <span className="ml-1 text-loss">{failedCount} failed</span>
+            )}
+          </span>
+        </CardTitle>
       </CardHeader>
       <CardContent className="pt-0">
         <div className="space-y-0">
-          {steps.map((step, i) => {
-            const styles = STATUS_STYLES[step.status];
-            const isLast = i === steps.length - 1;
-
+          {grouped.map((group) => {
+            const meta = phaseMeta[group.phase];
             return (
-              <div key={step.job_id} className="flex gap-3">
-                {/* Time column */}
-                <div className="w-16 shrink-0 pt-0.5 text-right">
-                  <span className="text-[11px] tabular-nums text-muted-foreground">
-                    {formatTime(step.time)}
-                  </span>
-                </div>
-
-                {/* Dot + line column */}
-                <div className="flex flex-col items-center">
-                  <div
-                    className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full border-2 ${styles.dot}`}
-                  />
-                  {!isLast && (
-                    <div className={`w-0.5 flex-1 min-h-4 ${styles.line}`} />
-                  )}
-                </div>
-
-                {/* Content column */}
-                <div className="flex-1 pb-3">
+              <div key={group.phase}>
+                {/* Phase header */}
+                <div className="flex gap-3 pt-3 pb-1.5 first:pt-0">
+                  <div className="w-16 shrink-0" />
                   <div className="flex items-center gap-2">
-                    <span className={`text-sm font-medium leading-tight ${styles.text}`}>
-                      {step.label}
+                    <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                      {meta?.label || group.phase}
                     </span>
-                    <Badge className={`text-[10px] px-1.5 py-0 ${CATEGORY_COLORS[step.category] || CATEGORY_COLORS.system}`}>
-                      {step.category}
-                    </Badge>
-                    {step.status === "running" && (
-                      <Badge className="bg-blue-500/20 text-blue-400 text-[10px] px-1.5 py-0 animate-pulse">
-                        running
-                      </Badge>
-                    )}
-                    {step.status === "stale" && (
-                      <Badge className="bg-yellow-500/20 text-yellow-400 text-[10px] px-1.5 py-0">
-                        stale
-                      </Badge>
-                    )}
-                    {step.status === "failed" && (
-                      <Badge className="bg-loss/20 text-loss text-[10px] px-1.5 py-0">
-                        failed
-                      </Badge>
+                    {meta?.time_range && (
+                      <span className="text-[10px] text-muted-foreground/50">
+                        {meta.time_range}
+                      </span>
                     )}
                   </div>
-                  {step.execution && step.status !== "upcoming" && (
-                    <div className="mt-0.5 text-xs text-muted-foreground">
-                      {step.execution.duration_seconds != null && (
-                        <span>{formatDuration(step.execution.duration_seconds)}</span>
-                      )}
-                      {step.execution.result_summary && (
-                        <span className="ml-1.5">
-                          — {step.execution.result_summary}
-                        </span>
-                      )}
-                      {step.execution.error && (
-                        <span className="ml-1.5 text-loss" title={step.execution.error}>
-                          — {step.execution.error.slice(0, 80)}
-                        </span>
-                      )}
-                    </div>
-                  )}
                 </div>
+
+                {/* Steps in this phase */}
+                {group.steps.map((step, i) => {
+                  const styles = STATUS_STYLES[step.status];
+                  const isLastInPhase = i === group.steps.length - 1;
+                  const isLastOverall =
+                    group.phase === grouped[grouped.length - 1].phase && isLastInPhase;
+
+                  return (
+                    <div
+                      key={step.job_id}
+                      className={`flex gap-3 ${step.isNext ? "rounded-md bg-blue-500/5 -mx-2 px-2" : ""}`}
+                    >
+                      {/* Time column */}
+                      <div className="w-16 shrink-0 pt-0.5 text-right">
+                        <span className="text-[11px] tabular-nums text-muted-foreground">
+                          {formatTime(step.time)}
+                        </span>
+                      </div>
+
+                      {/* Dot + line column */}
+                      <div className="flex flex-col items-center">
+                        <div
+                          className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full border-2 ${styles.dot}`}
+                        />
+                        {!isLastOverall && (
+                          <div className={`w-0.5 flex-1 min-h-4 ${styles.line}`} />
+                        )}
+                      </div>
+
+                      {/* Content column */}
+                      <div className="flex-1 pb-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm font-medium leading-tight ${styles.text}`}>
+                            {step.label}
+                          </span>
+                          <Badge
+                            className={`text-[10px] px-1.5 py-0 ${CATEGORY_COLORS[step.category] || CATEGORY_COLORS.system}`}
+                          >
+                            {step.category}
+                          </Badge>
+                          {step.isNext && (
+                            <Badge className="bg-blue-500/20 text-blue-400 text-[10px] px-1.5 py-0 animate-pulse">
+                              next
+                            </Badge>
+                          )}
+                          {step.status === "running" && !step.isNext && (
+                            <Badge className="bg-blue-500/20 text-blue-400 text-[10px] px-1.5 py-0 animate-pulse">
+                              running
+                            </Badge>
+                          )}
+                          {step.status === "failed" && (
+                            <Badge className="bg-loss/20 text-loss text-[10px] px-1.5 py-0">
+                              {step.failure_reason === "timeout" ? "timed out" : "failed"}
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-tight">
+                          {step.description}
+                        </p>
+                        {step.execution && step.status !== "upcoming" && (
+                          <div className="mt-0.5 text-xs text-muted-foreground">
+                            {step.execution.duration_seconds != null && (
+                              <span>{formatDuration(step.execution.duration_seconds)}</span>
+                            )}
+                            {step.execution.result_summary && (
+                              <span className="ml-1.5">
+                                &mdash; {step.execution.result_summary}
+                              </span>
+                            )}
+                            {step.execution.error && (
+                              <span className="ml-1.5 text-loss" title={step.execution.error}>
+                                &mdash; {step.execution.error.slice(0, 80)}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             );
           })}
         </div>
-
-        {/* History section */}
-        {!hideHistory && showHistory && history && (
-          <div className="mt-4 border-t border-border pt-3">
-            <p className="mb-2 text-xs font-medium text-muted-foreground">Recent Pipeline History</p>
-            <div className="space-y-3">
-              {history.map((day) => (
-                <div key={day.date}>
-                  <p className="text-xs font-medium text-muted-foreground mb-1">{day.date}</p>
-                  <div className="grid grid-cols-1 gap-1">
-                    {day.executions.map((exec) => (
-                      <div
-                        key={exec.id}
-                        className="flex items-center gap-2 text-xs"
-                      >
-                        <span
-                          className={`h-1.5 w-1.5 rounded-full shrink-0 ${
-                            exec.status === "success"
-                              ? "bg-profit"
-                              : exec.status === "failed"
-                              ? "bg-loss"
-                              : exec.status === "running"
-                              ? "bg-blue-500"
-                              : "bg-muted-foreground"
-                          }`}
-                        />
-                        <span className="text-muted-foreground w-28 shrink-0 truncate">
-                          {exec.label}
-                        </span>
-                        <span className="tabular-nums text-muted-foreground">
-                          {exec.duration_seconds != null
-                            ? formatDuration(exec.duration_seconds)
-                            : "-"}
-                        </span>
-                        {exec.result_summary && (
-                          <span className="text-muted-foreground truncate">
-                            {exec.result_summary}
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </CardContent>
     </Card>
   );

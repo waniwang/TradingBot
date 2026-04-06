@@ -103,6 +103,9 @@ export interface PipelineJob {
   label: string;
   time: string;
   category: "scan" | "trade" | "monitor" | "system";
+  phase: string;
+  description: string;
+  display_day_offset: number;
 }
 
 export interface PipelineExecution {
@@ -115,10 +118,13 @@ export interface PipelineExecution {
   duration_seconds: number | null;
   result_summary: string | null;
   error: string | null;
+  failure_reason: string | null;
 }
 
 export interface PipelineData {
   trade_date: string;
+  is_trading_day: boolean;
+  last_trading_date: string | null;
   schedule: PipelineJob[];
   executions: PipelineExecution[];
   current_phase: string;
@@ -128,11 +134,41 @@ export interface PipelineData {
     time: string;
     countdown_seconds: number | null;
   } | null;
+  phases: Record<string, { label: string; time_range: string }>;
+  phase_order: string[];
 }
 
-export interface PipelineHistoryDay {
+export interface MergedPipelineJob {
+  job_id: string;
+  label: string;
+  phase: string;
+  description: string;
+  scheduled_time: string;
+  category: string;
+  display_day_offset: number;
+  status: "success" | "running" | "failed" | "skipped" | "upcoming" | "missed";
+  failure_reason: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_seconds: number | null;
+  result_summary: string | null;
+  error: string | null;
+}
+
+export interface PipelineDayHistory {
   date: string;
-  executions: PipelineExecution[];
+  is_trading_day: boolean;
+  summary: "all_passed" | "some_issues" | "failures" | "in_progress" | "no_data";
+  jobs: MergedPipelineJob[];
+}
+
+export interface FlatExecution extends PipelineExecution {
+  date: string;
+}
+
+export interface PipelineHistoryResponse {
+  days: PipelineDayHistory[];
+  recent_executions: FlatExecution[];
 }
 
 export interface MarketIndex {

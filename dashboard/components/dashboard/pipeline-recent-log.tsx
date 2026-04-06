@@ -1,0 +1,76 @@
+"use client";
+
+import { Badge } from "@/components/ui/badge";
+import type { FlatExecution } from "@/lib/types";
+import { formatDuration } from "./pipeline-timeline";
+
+export function PipelineRecentLog({ executions }: { executions: FlatExecution[] | undefined }) {
+  if (!executions || executions.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-lg border border-border">
+      <div className="border-b border-border px-4 py-2">
+        <span className="text-xs font-medium text-muted-foreground">
+          Recent Executions ({executions.length})
+        </span>
+      </div>
+      <div className="divide-y divide-border">
+        {executions.map((exec, i) => {
+          const status = exec.failure_reason === "timeout" ? "timed out" : exec.status;
+          const startedTime = exec.started_at
+            ? new Date(exec.started_at).toLocaleTimeString("en-US", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : "-";
+
+          return (
+            <div key={`${exec.date}-${exec.job_id}-${i}`} className="flex items-center gap-2.5 px-4 py-1.5 text-sm">
+              <span
+                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                  exec.status === "success"
+                    ? "bg-profit"
+                    : exec.status === "failed"
+                      ? "bg-loss"
+                      : exec.status === "running"
+                        ? "bg-blue-500 animate-pulse"
+                        : "bg-muted-foreground"
+                }`}
+              />
+              <span className="w-16 shrink-0 text-xs tabular-nums text-muted-foreground">
+                {exec.date?.slice(5)}
+              </span>
+              <span className="w-40 shrink-0 truncate text-xs font-medium">
+                {exec.label}
+              </span>
+              <Badge
+                className={`text-[10px] px-1.5 py-0 ${
+                  exec.status === "success"
+                    ? "bg-profit/15 text-profit"
+                    : exec.status === "failed"
+                      ? "bg-loss/15 text-loss"
+                      : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {status}
+              </Badge>
+              <span className="w-16 shrink-0 text-xs tabular-nums text-muted-foreground">
+                {startedTime}
+              </span>
+              <span className="w-16 shrink-0 text-xs tabular-nums text-muted-foreground">
+                {exec.duration_seconds != null ? formatDuration(exec.duration_seconds) : "-"}
+              </span>
+              {exec.result_summary && (
+                <span className="truncate text-xs text-muted-foreground">
+                  {exec.result_summary}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

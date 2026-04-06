@@ -22,17 +22,16 @@ export function PipelineStatus({ data }: { data: PipelineData | null }) {
   const completed = steps.filter((s) => s.status === "success").length;
   const running = steps.filter((s) => s.status === "running").length;
   const failed = steps.filter((s) => s.status === "failed").length;
-  const stale = steps.filter((s) => s.status === "stale").length;
 
   const allDone = completed === total;
-  const hasIssues = failed > 0 || stale > 0;
+  const hasIssues = failed > 0;
 
   return (
     <Link href="/pipeline">
       <Card className="transition-colors hover:bg-card/80">
         <CardContent className="flex items-center gap-3 py-3 px-4">
           {hasIssues ? (
-            <AlertTriangle className="h-4 w-4 shrink-0 text-yellow-400" />
+            <AlertTriangle className="h-4 w-4 shrink-0 text-loss" />
           ) : allDone ? (
             <CheckCircle2 className="h-4 w-4 shrink-0 text-profit" />
           ) : running > 0 ? (
@@ -54,11 +53,6 @@ export function PipelineStatus({ data }: { data: PipelineData | null }) {
             {failed > 0 && (
               <span className="text-loss text-xs">
                 {failed} failed
-              </span>
-            )}
-            {stale > 0 && (
-              <span className="text-yellow-400 text-xs">
-                {stale} stale
               </span>
             )}
 
