@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from api.routes import status, portfolio, positions, watchlist, signals, performance, pipeline, risk, market
+from api.routes import status, portfolio, positions, watchlist, signals, performance, pipeline, risk, market, doctor
 
 API_KEY = os.environ.get("DASHBOARD_API_KEY", "dev-key")
 
@@ -37,7 +37,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def verify_api_key(request: Request, call_next):
-    if request.url.path == "/api/health":
+    if request.url.path in ("/api/health", "/api/doctor"):
         return await call_next(request)
     key = request.headers.get("X-API-Key")
     if key != API_KEY:
@@ -54,6 +54,7 @@ app.include_router(performance.router, prefix="/api")
 app.include_router(pipeline.router, prefix="/api")
 app.include_router(risk.router, prefix="/api")
 app.include_router(market.router, prefix="/api")
+app.include_router(doctor.router, prefix="/api")
 
 
 @app.get("/api/health")
