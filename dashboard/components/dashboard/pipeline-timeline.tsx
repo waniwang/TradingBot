@@ -158,9 +158,9 @@ export const STATUS_STYLES: Record<StepStatus, { dot: string; line: string; text
     text: "text-muted-foreground",
   },
   missed: {
-    dot: "bg-transparent border-yellow-500/60",
+    dot: "bg-transparent border-muted-foreground/40",
     line: "bg-border",
-    text: "text-yellow-500",
+    text: "text-muted-foreground",
   },
 };
 

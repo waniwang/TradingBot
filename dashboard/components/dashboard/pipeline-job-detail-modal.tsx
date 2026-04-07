@@ -56,9 +56,11 @@ export function PipelineJobDetailModal({
         <DialogHeader>
           <div className="flex items-center gap-2 flex-wrap">
             <DialogTitle>{job.label}</DialogTitle>
-            <span className={`text-xs font-medium ${getStatusTextClass(job.status)}`}>
-              {getStatusLabel(job.status, job.failure_reason)}
-            </span>
+            {!["missed", "upcoming"].includes(job.status) && (
+              <span className={`text-xs font-medium ${getStatusTextClass(job.status)}`}>
+                {getStatusLabel(job.status, job.failure_reason)}
+              </span>
+            )}
             {job.category && job.category !== "system" && (
               <Badge
                 className={`text-[10px] px-1.5 py-0 ${CATEGORY_COLORS[job.category] || CATEGORY_COLORS.system}`}
@@ -126,7 +128,7 @@ export function PipelineJobDetailModal({
             {job.status === "upcoming"
               ? "This job has not run yet."
               : job.status === "missed"
-                ? "This job was scheduled but did not execute."
+                ? "This job has not run yet."
                 : job.status === "skipped"
                   ? "This job was skipped."
                   : null}
