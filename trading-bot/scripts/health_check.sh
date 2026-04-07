@@ -5,8 +5,8 @@
 # to critical/degraded. Uses a state file to avoid spamming — only alerts
 # on state changes and sends a recovery notice when the bot comes back.
 #
-# Cron (every 10 min):
-#   */10 * * * * /opt/trading-bot/scripts/health_check.sh >> /var/log/health_check.log 2>&1
+# Cron (every 12 hours):
+#   0 */12 * * * /opt/trading-bot/scripts/health_check.sh >> /var/log/health_check.log 2>&1
 
 set -euo pipefail
 

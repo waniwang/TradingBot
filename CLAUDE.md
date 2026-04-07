@@ -17,6 +17,7 @@ Automated momentum trading bot inspired by Kristjan Kullamagi's setups: **Breako
 | Dashboard (FE) | `dashboard/` — Next.js + Tailwind + shadcn/ui (deploys to Vercel) |
 | Dashboard API | `trading-bot/api/` — FastAPI (runs on Linode alongside bot) |
 | Legacy dashboard | `trading-bot/dashboard_legacy/app.py` (Streamlit, deprecated) |
+| Health check | `trading-bot/api/routes/doctor.py` — `/api/doctor` endpoint (no auth required) |
 | Verification | `trading-bot/verify_day.py` — daily execution verification |
 | Operations | `trading-bot/bot.sh` — start/stop/deploy/logs/status/verify |
 | CI/CD | `.github/workflows/deploy.yml` — auto-deploy on push to main |
@@ -116,6 +117,23 @@ On every push to `main`, `.github/workflows/deploy.yml` SSHs into the Linode ser
 ./bot.sh local logs
 ./bot.sh local verify        # run daily verification locally
 ```
+
+## Health Check (Doctor)
+
+When the user asks to check bot health, or when diagnosing issues:
+
+```bash
+# No auth required — works without API key
+curl http://172.235.216.175:8000/api/doctor    # Server
+curl http://localhost:8000/api/doctor           # Local
+```
+
+Returns `status`: `healthy`, `degraded`, or `critical` with three sub-checks:
+- **heartbeat**: Is `bot_status.json` heartbeat < 2 minutes old?
+- **systemd**: Is the `trading-bot` systemd service active?
+- **jobs**: Any successful jobs? Jobs today? Stale running jobs? Recent failures?
+
+`degraded` = some checks failing (e.g. failed jobs but bot still running). `critical` = both heartbeat AND systemd down. Investigate the `checks` object in the response to see which specific checks failed and why.
 
 ## Daily Verification
 
