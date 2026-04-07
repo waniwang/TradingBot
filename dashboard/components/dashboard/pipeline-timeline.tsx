@@ -250,7 +250,14 @@ export function PipelineTimeline({
       // Before all regular jobs — place after the overnight phase header
       nowPosition = { phaseIdx: 0, stepIdx: -1 };
     } else {
-      nowPosition = { phaseIdx: lastPhaseIdx, stepIdx: lastStepIdx };
+      // If now is past the very last job, wrap to top (next-day cycle)
+      const lastGroup = grouped[grouped.length - 1];
+      const isAfterAll =
+        lastPhaseIdx === grouped.length - 1 &&
+        lastStepIdx === lastGroup.steps.length - 1;
+      nowPosition = isAfterAll
+        ? { phaseIdx: 0, stepIdx: -1 }
+        : { phaseIdx: lastPhaseIdx, stepIdx: lastStepIdx };
     }
   }
 
@@ -309,7 +316,7 @@ export function PipelineTimeline({
                   return (
                     <div key={step.job_id}>
                       <div
-                        className={`flex gap-3 cursor-pointer rounded-md transition-colors hover:bg-muted/50 -mx-2 px-2 ${step.isNext ? "border-l-2 border-l-blue-400" : ""}`}
+                        className={`flex gap-3 cursor-pointer rounded-md transition-colors hover:bg-muted/50 -mx-2 px-2 ${step.isNext ? "bg-blue-500/8" : ""}`}
                         onClick={() =>
                           onSelectJob?.({
                             job_id: step.job_id,
