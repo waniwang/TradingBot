@@ -25,7 +25,8 @@ log "Code updated to $(git rev-parse --short HEAD)"
 # The git repo has code under trading-bot/ but services run from /opt/trading-bot/
 log "Syncing trading-bot/ to working root..."
 rsync -a --exclude=".venv" --exclude="__pycache__" --exclude="*.db" --exclude="*.log" \
-    --exclude=".env" --exclude="bot_status.json" --exclude="trading-bot" \
+    --exclude=".env" --exclude="config.yaml" --exclude="bot_status.json" \
+    --exclude="trading-bot" \
     --exclude=".git" --exclude="dashboard" --exclude="docs" --exclude=".github" \
     trading-bot/ .
 
