@@ -1,12 +1,7 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import type { PipelineData, PipelineExecution, SelectedPipelineJob } from "@/lib/types";
-import {
-  CATEGORY_COLORS,
-  getStatusTextClass,
-} from "@/lib/pipeline-constants";
 
 export type StepStatus = "success" | "running" | "failed" | "skipped" | "upcoming" | "missed";
 
@@ -172,29 +167,19 @@ export const STATUS_STYLES: Record<StepStatus, { dot: string; line: string; text
 function NowIndicator({ countdownSeconds }: { countdownSeconds?: number | null }) {
   const nowMinutes = getCurrentETMinutes();
   return (
-    <div className="flex gap-3 -mx-2 px-2 py-1">
-      {/* Time column */}
-      <div className="w-16 shrink-0 text-right">
-        <span className="text-[10px] font-semibold tabular-nums text-blue-400">
-          {formatETTime(nowMinutes)}
-        </span>
-      </div>
-      {/* Line column — aligned with dots */}
-      <div className="flex flex-col items-center justify-center">
-        <div className="h-1.5 w-1.5 rounded-full bg-blue-400" />
-      </div>
-      {/* Label */}
-      <div className="flex flex-1 items-center">
-        <div className="h-px flex-1 bg-blue-400/30" />
-        <span className="ml-2 text-[10px] font-medium text-blue-400/70">
-          NOW
-          {countdownSeconds != null && countdownSeconds > 0 && (
-            <span className="ml-1.5 text-muted-foreground font-normal">
-              next in {formatCountdown(countdownSeconds)}
-            </span>
-          )}
-        </span>
-      </div>
+    <div className="relative flex items-center -mx-2 px-2 my-2">
+      {/* Time label */}
+      <span className="shrink-0 text-[10px] font-medium tabular-nums text-blue-400 mr-3">
+        {formatETTime(nowMinutes)}
+      </span>
+      {/* Full-width line */}
+      <div className="flex-1 border-t border-dashed border-blue-400/50" />
+      {/* Countdown */}
+      <span className="shrink-0 ml-3 text-[10px] text-blue-400/70">
+        {countdownSeconds != null && countdownSeconds > 0
+          ? `next in ${formatCountdown(countdownSeconds)}`
+          : "now"}
+      </span>
     </div>
   );
 }
@@ -289,17 +274,21 @@ export function PipelineTimeline({
             return (
               <div key={group.phase}>
                 {/* Phase header */}
-                <div className="flex gap-3 pt-3 pb-1.5 first:pt-0">
-                  <div className="w-16 shrink-0" />
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                      {meta?.label || group.phase}
-                    </span>
+                {phaseIdx > 0 && (
+                  <div className="border-t border-border/50 my-1" />
+                )}
+                <div className="flex gap-3 pt-2 pb-1.5 first:pt-0">
+                  <div className="w-16 shrink-0 text-right">
                     {meta?.time_range && (
-                      <span className="text-[10px] text-muted-foreground/50">
+                      <span className="text-[10px] tabular-nums text-muted-foreground/40">
                         {meta.time_range}
                       </span>
                     )}
+                  </div>
+                  <div className="flex items-center">
+                    <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                      {meta?.label || group.phase}
+                    </span>
                   </div>
                 </div>
 
@@ -320,7 +309,7 @@ export function PipelineTimeline({
                   return (
                     <div key={step.job_id}>
                       <div
-                        className={`flex gap-3 cursor-pointer rounded-md transition-colors hover:bg-muted/50 ${step.isNext ? "bg-blue-500/5 -mx-2 px-2" : "-mx-2 px-2"}`}
+                        className={`flex gap-3 cursor-pointer rounded-md transition-colors hover:bg-muted/50 -mx-2 px-2 ${step.isNext ? "border-l-2 border-l-blue-400" : ""}`}
                         onClick={() =>
                           onSelectJob?.({
                             job_id: step.job_id,
@@ -357,33 +346,9 @@ export function PipelineTimeline({
 
                         {/* Content column */}
                         <div className="flex-1 pb-3">
-                          <div className="flex items-center gap-2">
-                            <span className={`text-sm font-medium leading-tight ${styles.text}`}>
-                              {step.label}
-                            </span>
-                            {/* Category badge — filled style */}
-                            <Badge
-                              className={`text-[10px] px-1.5 py-0 ${CATEGORY_COLORS[step.category] || CATEGORY_COLORS.system}`}
-                            >
-                              {step.category}
-                            </Badge>
-                            {/* Status — plain text, visually distinct from filled category badges */}
-                            {step.isNext && (
-                              <span className={`text-[10px] font-medium ${getStatusTextClass("next")}`}>
-                                next
-                              </span>
-                            )}
-                            {step.status === "running" && !step.isNext && (
-                              <span className={`text-[10px] font-medium ${getStatusTextClass("running")}`}>
-                                running
-                              </span>
-                            )}
-                            {step.status === "failed" && (
-                              <span className={`text-[10px] font-medium ${getStatusTextClass("failed")}`}>
-                                {step.failure_reason === "timeout" ? "timed out" : "failed"}
-                              </span>
-                            )}
-                          </div>
+                          <span className={`text-sm font-medium leading-tight ${styles.text}`}>
+                            {step.label}
+                          </span>
                           <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-tight">
                             {step.description}
                           </p>

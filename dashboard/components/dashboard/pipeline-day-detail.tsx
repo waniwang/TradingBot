@@ -1,13 +1,11 @@
 "use client";
 
 import type { PipelineDayHistory, MergedPipelineJob, SelectedPipelineJob } from "@/lib/types";
-import { STATUS_STYLES, formatDuration, formatTime } from "./pipeline-timeline";
+import { STATUS_STYLES, formatDuration } from "./pipeline-timeline";
 import type { StepStatus } from "./pipeline-timeline";
 import {
   PHASE_ORDER,
   PHASE_LABELS,
-  getStatusTextClass,
-  getStatusLabel,
 } from "@/lib/pipeline-constants";
 
 export function PipelineDayDetail({
@@ -89,13 +87,10 @@ export function PipelineDayDetail({
                   <span
                     className={`h-2 w-2 shrink-0 rounded-full border-2 ${styles.dot}`}
                   />
-                  <span className={`w-44 shrink-0 truncate font-medium ${styles.text}`}>
+                  <span className={`flex-1 truncate font-medium ${styles.text}`}>
                     {job.label}
                   </span>
-                  <span className={`text-[10px] font-medium w-16 shrink-0 ${getStatusTextClass(status)}`}>
-                    {getStatusLabel(status, job.failure_reason)}
-                  </span>
-                  <span className="w-16 shrink-0 text-xs tabular-nums text-muted-foreground">
+                  <span className="w-16 shrink-0 text-xs tabular-nums text-muted-foreground text-right">
                     {job.started_at
                       ? new Date(job.started_at).toLocaleTimeString("en-US", {
                           hour: "2-digit",
@@ -103,16 +98,11 @@ export function PipelineDayDetail({
                         })
                       : "-"}
                   </span>
-                  <span className="w-16 shrink-0 text-xs tabular-nums text-muted-foreground">
+                  <span className="w-14 shrink-0 text-xs tabular-nums text-muted-foreground text-right">
                     {job.duration_seconds != null ? formatDuration(job.duration_seconds) : "-"}
                   </span>
-                  {job.result_summary && (
-                    <span className="truncate text-xs text-muted-foreground">
-                      {job.result_summary}
-                    </span>
-                  )}
                   {job.error && (
-                    <span className="truncate text-xs text-loss" title={job.error}>
+                    <span className="truncate text-xs text-loss max-w-48" title={job.error}>
                       {job.error.slice(0, 60)}
                     </span>
                   )}

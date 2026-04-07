@@ -6,7 +6,6 @@ import { Header } from "@/components/layout/header";
 import { PipelineTimeline } from "@/components/dashboard/pipeline-timeline";
 import { PipelineHistoryCalendar } from "@/components/dashboard/pipeline-history-calendar";
 import { PipelineDayDetail } from "@/components/dashboard/pipeline-day-detail";
-import { PipelineRecentLog } from "@/components/dashboard/pipeline-recent-log";
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
 import { PipelineJobDetailModal } from "@/components/dashboard/pipeline-job-detail-modal";
@@ -103,10 +102,6 @@ export default function PipelinePage() {
           {/* Selected day detail */}
           <PipelineDayDetail day={selectedDay} onSelectJob={setSelectedJob} />
 
-          {/* Recent executions log */}
-          {history && (
-            <PipelineRecentLog executions={history.recent_executions} onSelectJob={setSelectedJob} />
-          )}
         </section>
         <PipelineJobDetailModal
           job={selectedJob}
