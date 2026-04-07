@@ -250,14 +250,18 @@ export function PipelineTimeline({
       // Before all regular jobs — place after the overnight phase header
       nowPosition = { phaseIdx: 0, stepIdx: -1 };
     } else {
-      // If now is past the very last job, wrap to top (next-day cycle)
+      // If now is past the very last job, wrap to after overnight phase
+      // (overnight jobs are from the previous day, so now belongs after them)
       const lastGroup = grouped[grouped.length - 1];
       const isAfterAll =
         lastPhaseIdx === grouped.length - 1 &&
         lastStepIdx === lastGroup.steps.length - 1;
-      nowPosition = isAfterAll
-        ? { phaseIdx: 0, stepIdx: -1 }
-        : { phaseIdx: lastPhaseIdx, stepIdx: lastStepIdx };
+      if (isAfterAll) {
+        // Place after the last step of the overnight phase (index 0)
+        nowPosition = { phaseIdx: 0, stepIdx: grouped[0].steps.length - 1 };
+      } else {
+        nowPosition = { phaseIdx: lastPhaseIdx, stepIdx: lastStepIdx };
+      }
     }
   }
 
@@ -353,9 +357,16 @@ export function PipelineTimeline({
 
                         {/* Content column */}
                         <div className="flex-1 pb-3">
-                          <span className={`text-sm font-medium leading-tight ${styles.text}`}>
-                            {step.label}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-sm font-medium leading-tight ${styles.text}`}>
+                              {step.label}
+                            </span>
+                            {step.isNext && (
+                              <span className="text-[10px] font-medium text-blue-400 animate-pulse">
+                                next
+                              </span>
+                            )}
+                          </div>
                           <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-tight">
                             {step.description}
                           </p>
