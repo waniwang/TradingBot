@@ -96,6 +96,7 @@ def load_config(path: str = "config.yaml") -> dict:
 
 _watchlist: list[dict] = []          # [{ticker, setup_type, gap_pct, ...}]
 _db_engine = None                    # set in main(), used by _write_status
+_notify_fn = None                    # set in main(), used by _track_job for failure alerts
 # Daily bar caches now live in core.data_cache (shared module)
 _daily_bars_cache = data_cache.daily_bars_cache
 _daily_closes_cache = data_cache.daily_closes_cache
@@ -1035,6 +1036,13 @@ class _track_job:
                         row.status = "success"
                     row.result_summary = (self.summary or "")[:500] or None
                     session.commit()
+            # Notify via Telegram on uncaught job failures
+            if exc_type is not None and _notify_fn:
+                short_err = str(exc_val)[:200]
+                try:
+                    _notify_fn(f"JOB FAILED: {self.label}\n{short_err}")
+                except Exception:
+                    logger.debug("Failed to send failure notification for %s", self.job_id)
         except Exception as e:
             logger.error("Failed to update job_execution row for %s: %s", self.job_id, e)
             # Retry once with a fresh session
@@ -1365,8 +1373,9 @@ def main():
         pass
 
     # Set module-level DB engine for _write_status and mark_triggered
-    global _db_engine
+    global _db_engine, _notify_fn
     _db_engine = db_engine
+    _notify_fn = notify
 
     # Set trigger args so _check_trigger can run manual scans
     global _trigger_args

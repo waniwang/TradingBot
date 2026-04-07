@@ -731,17 +731,36 @@ class AlpacaClient:
             period = "1y"
 
         result: dict[str, pd.DataFrame] = {}
+        batch_timeout = 600  # 10 minutes per batch — normal is ~5 min for 500 tickers
 
         for i in range(0, len(tickers), batch_size):
             batch = tickers[i : i + batch_size]
             try:
-                raw = yf.download(
-                    batch,
-                    period=period,
-                    group_by="ticker",
-                    progress=False,
-                    threads=True,
-                )
+                # Run yf.download in a thread with a timeout to prevent indefinite hangs
+                from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+                def _download():
+                    return yf.download(
+                        batch,
+                        period=period,
+                        group_by="ticker",
+                        progress=False,
+                        threads=True,
+                    )
+
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(_download)
+                    try:
+                        raw = future.result(timeout=batch_timeout)
+                    except FuturesTimeout:
+                        future.cancel()
+                        raise TimeoutError(
+                            f"yfinance download timed out after {batch_timeout}s for batch "
+                            f"{i // batch_size + 1} ({len(batch)} tickers). "
+                            f"This usually means yfinance threads are stalled — "
+                            f"check network connectivity and yfinance status."
+                        )
+
                 if raw.empty:
                     continue
 

@@ -59,6 +59,13 @@ def _tracked_strategy_job(job_id, handler, config, client, db_engine, notify):
         import traceback as _tb
         status = "failed"
         error_text = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))[:2000]
+        # Notify via Telegram so failures are visible immediately
+        if notify:
+            short_err = str(exc)[:200]
+            try:
+                notify(f"JOB FAILED: {label}\n{short_err}")
+            except Exception:
+                logger.debug("Failed to send failure notification for %s", job_id)
         raise
     finally:
         if row_id is not None:
