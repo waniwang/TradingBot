@@ -59,7 +59,7 @@ export function PipelineJobDetailModal({
             <span className={`text-xs font-medium ${getStatusTextClass(job.status)}`}>
               {getStatusLabel(job.status, job.failure_reason)}
             </span>
-            {job.category && (
+            {job.category && job.category !== "system" && (
               <Badge
                 className={`text-[10px] px-1.5 py-0 ${CATEGORY_COLORS[job.category] || CATEGORY_COLORS.system}`}
               >
