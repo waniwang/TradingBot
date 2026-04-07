@@ -1026,7 +1026,7 @@ class _track_job:
                 row = session.get(JobExecution, self._row_id)
                 if row:
                     row.finished_at = now
-                    row.duration_seconds = (now - row.started_at).total_seconds()
+                    row.duration_seconds = (now.replace(tzinfo=None) - row.started_at).total_seconds()
                     if exc_type is not None:
                         import traceback as _tb
                         row.status = "failed"
@@ -1043,7 +1043,7 @@ class _track_job:
                     row = session.get(JobExecution, self._row_id)
                     if row and row.status == "running":
                         row.finished_at = now
-                        row.duration_seconds = (now - row.started_at).total_seconds()
+                        row.duration_seconds = (now.replace(tzinfo=None) - row.started_at).total_seconds()
                         row.status = "failed" if exc_type else "success"
                         row.error = f"Original commit failed: {e}" if exc_type else None
                         row.result_summary = (self.summary or "")[:500] or None
@@ -1251,53 +1251,59 @@ def _reconcile_on_startup(client, db_engine, notify):
             )
 
     # Check for orders stuck in 'submitted' for more than 10 minutes
-    cutoff = datetime.utcnow() - timedelta(minutes=10)
-    with get_session(db_engine) as session:
-        stuck = (
-            session.query(Order)
-            .filter(Order.status == "submitted", Order.created_at < cutoff)
-            .all()
-        )
-        for order in stuck:
-            logger.warning("Stuck order at startup: %s %s broker_id=%s",
-                           order.ticker, order.side, order.broker_order_id)
-            try:
-                info = client.get_order_status(order.broker_order_id)
-                broker_status = info.get("status", "unknown")
-                logger.info("Broker reports stuck order %s as: %s", order.broker_order_id, broker_status)
-                if broker_status == "filled":
-                    notify(
-                        f"⚠️ STARTUP: Order for {order.ticker} shows filled on broker "
-                        f"but no position recorded.\nCheck account manually."
-                    )
-                else:
-                    # Update DB status to match broker
-                    order.status = broker_status
-                    session.commit()
-            except Exception as e:
-                logger.error("Could not reconcile stuck order %s: %s", order.broker_order_id, e)
-                notify(f"⚠️ STARTUP: Could not reconcile stuck order for {order.ticker}. Check broker.")
+    try:
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=10)
+        with get_session(db_engine) as session:
+            stuck = (
+                session.query(Order)
+                .filter(Order.status == "submitted", Order.created_at < cutoff)
+                .all()
+            )
+            for order in stuck:
+                logger.warning("Stuck order at startup: %s %s broker_id=%s",
+                               order.ticker, order.side, order.broker_order_id)
+                try:
+                    info = client.get_order_status(order.broker_order_id)
+                    broker_status = info.get("status", "unknown")
+                    logger.info("Broker reports stuck order %s as: %s", order.broker_order_id, broker_status)
+                    if broker_status == "filled":
+                        notify(
+                            f"⚠️ STARTUP: Order for {order.ticker} shows filled on broker "
+                            f"but no position recorded.\nCheck account manually."
+                        )
+                    else:
+                        # Update DB status to match broker
+                        order.status = broker_status
+                        session.commit()
+                except Exception as e:
+                    logger.error("Could not reconcile stuck order %s: %s", order.broker_order_id, e)
+                    notify(f"⚠️ STARTUP: Could not reconcile stuck order for {order.ticker}. Check broker.")
+    except Exception as e:
+        logger.error("Failed to reconcile stuck orders on startup: %s", e)
 
     # Clean up jobs stuck in 'running' from a previous crash
-    now = datetime.now(ET)
-    with get_session(db_engine) as session:
-        stale_jobs = (
-            session.query(JobExecution)
-            .filter(JobExecution.status == "running")
-            .all()
-        )
-        for job in stale_jobs:
-            job.status = "failed"
-            job.finished_at = now
-            job.duration_seconds = (now - job.started_at).total_seconds() if job.started_at else None
-            job.error = "Bot crashed or restarted while job was running"
-        if stale_jobs:
-            session.commit()
-            logger.warning(
-                "Cleaned up %d stale running job(s) from previous crash: %s",
-                len(stale_jobs),
-                [j.job_label for j in stale_jobs],
+    try:
+        now = datetime.now(ET)
+        with get_session(db_engine) as session:
+            stale_jobs = (
+                session.query(JobExecution)
+                .filter(JobExecution.status == "running")
+                .all()
             )
+            for job in stale_jobs:
+                job.status = "failed"
+                job.finished_at = now
+                job.duration_seconds = (now.replace(tzinfo=None) - job.started_at).total_seconds() if job.started_at else None
+                job.error = "Bot crashed or restarted while job was running"
+            if stale_jobs:
+                session.commit()
+                logger.warning(
+                    "Cleaned up %d stale running job(s) from previous crash: %s",
+                    len(stale_jobs),
+                    [j.job_label for j in stale_jobs],
+                )
+    except Exception as e:
+        logger.error("Failed to clean up stale jobs on startup: %s", e)
 
     logger.info("Startup reconciliation complete.")
 
@@ -1441,7 +1447,7 @@ def main():
                 for job in running:
                     job.status = "failed"
                     job.finished_at = now
-                    job.duration_seconds = (now - job.started_at).total_seconds() if job.started_at else None
+                    job.duration_seconds = (now.replace(tzinfo=None) - job.started_at).total_seconds() if job.started_at else None
                     job.error = "Bot shutdown (signal received)"
                 if running:
                     session.commit()

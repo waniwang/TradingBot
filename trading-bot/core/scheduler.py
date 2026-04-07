@@ -68,7 +68,7 @@ def _tracked_strategy_job(job_id, handler, config, client, db_engine, notify):
                     row = session.get(JobExecution, row_id)
                     if row:
                         row.finished_at = finished
-                        row.duration_seconds = (finished - row.started_at).total_seconds()
+                        row.duration_seconds = (finished.replace(tzinfo=None) - row.started_at).total_seconds()
                         row.status = status
                         row.result_summary = (summary or "")[:500] or None
                         row.error = error_text

@@ -172,17 +172,20 @@ class AlpacaClient:
         Uses Alpaca's calendar API — accurate for early closes, ad-hoc holidays, etc.
         Falls back to weekday check if the API call fails.
         """
+        from zoneinfo import ZoneInfo
+        _ET = ZoneInfo("America/New_York")
+
         if not ALPACA_AVAILABLE:
-            return datetime.now(timezone.utc).weekday() < 5
+            return datetime.now(_ET).weekday() < 5
 
         try:
-            today = datetime.now(timezone.utc).date()
+            today = datetime.now(_ET).date()
             req = GetCalendarRequest(start=today, end=today)
             cal = self._trade.get_calendar(req)
             return len(cal) > 0  # empty list → not a trading day
         except Exception as e:
             logger.warning("Market calendar check failed, falling back to weekday: %s", e)
-            return datetime.now(timezone.utc).weekday() < 5
+            return datetime.now(_ET).weekday() < 5
 
     # ------------------------------------------------------------------
     # Account info
