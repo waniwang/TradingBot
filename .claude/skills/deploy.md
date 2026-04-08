@@ -14,10 +14,10 @@ Deploy the trading bot code to the Linode server.
    - Running from the repo root will sync the wrong directory and the deploy will silently fail
    - This rsyncs code (excludes .venv, .db, .log, .env), runs DB migrations, and restarts both services
    - It will warn if market is currently open (9:30-4:00 PM ET) and ask for confirmation
-2. After deploy completes, run `./bot.sh status` to verify both services are active and heartbeat is fresh
-3. Report the results to the user: service status, heartbeat age, and dashboard URL (http://172.235.216.175:8501)
+2. After deploy completes, run `./bot.sh status` to verify the service is active and heartbeat is fresh
+3. Report the results to the user: service status and heartbeat age
 
 ## Notes
 - Server: `root@172.235.216.175`, remote dir: `/opt/trading-bot`
-- Services are managed via systemd: `trading-bot` and `trading-dashboard`
+- Service is managed via systemd: `trading-bot`
 - If deploy fails, check SSH connectivity first, then check the error logs with `./bot.sh logs`

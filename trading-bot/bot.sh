@@ -17,7 +17,6 @@ REMOTE_DIR="/opt/trading-bot"
 # PID files for local mode
 BOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BOT_PID="$BOT_DIR/.bot.pid"
-DASH_PID="$BOT_DIR/.dashboard.pid"
 
 # Parse optional target argument
 if [[ "$1" == "local" || "$1" == "server" ]]; then
@@ -51,21 +50,8 @@ local_start() {
     echo "    Bot started (PID $!)"
   fi
 
-  if [ -f "$DASH_PID" ] && kill -0 "$(cat "$DASH_PID")" 2>/dev/null; then
-    echo "Dashboard is already running (PID $(cat "$DASH_PID"))"
-  else
-    echo "==> Starting dashboard..."
-    cd "$BOT_DIR"
-    source .env 2>/dev/null || true
-    .venv/bin/streamlit run dashboard/app.py \
-      --server.port 8501 --server.headless true \
-      --browser.gatherUsageStats false >> dashboard.log 2>&1 &
-    echo $! > "$DASH_PID"
-    echo "    Dashboard started (PID $!)"
-  fi
-
   echo ""
-  echo "Dashboard: http://localhost:8501"
+  echo "Bot started."
 }
 
 local_stop() {
@@ -81,17 +67,6 @@ local_stop() {
     echo "Bot was not running"
   fi
 
-  if [ -f "$DASH_PID" ]; then
-    pid=$(cat "$DASH_PID")
-    if kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" && echo "Dashboard stopped (PID $pid)"
-    else
-      echo "Dashboard was not running"
-    fi
-    rm -f "$DASH_PID"
-  else
-    echo "Dashboard was not running"
-  fi
 }
 
 local_status() {
@@ -101,12 +76,6 @@ local_status() {
     echo "  trading-bot:       active (PID $(cat "$BOT_PID"))"
   else
     echo "  trading-bot:       stopped"
-  fi
-
-  if [ -f "$DASH_PID" ] && kill -0 "$(cat "$DASH_PID")" 2>/dev/null; then
-    echo "  trading-dashboard: active (PID $(cat "$DASH_PID"))"
-  else
-    echo "  trading-dashboard: stopped"
   fi
 
   echo ""
@@ -145,9 +114,7 @@ server_status() {
   echo "=== Server Bot Status ==="
   $SSH bash << 'REMOTE'
   bot=$(systemctl is-active trading-bot)
-  dash=$(systemctl is-active trading-dashboard)
   echo "  trading-bot:       $bot"
-  echo "  trading-dashboard: $dash"
   echo ""
   if [ -f /opt/trading-bot/bot_status.json ]; then
     python3 -c "
@@ -166,7 +133,6 @@ print(f\"  Next job:   {d.get('next_job','?')} at {d.get('next_job_time','?')}\"
 "
   fi
   echo ""
-  echo "  Dashboard: http://172.235.216.175:8501"
 REMOTE
 }
 

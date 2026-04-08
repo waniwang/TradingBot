@@ -43,22 +43,12 @@ fi
 
 # --- 3. Conditional restart ---
 bot_status=$(systemctl is-active trading-bot 2>/dev/null || echo "inactive")
-dash_status=$(systemctl is-active trading-dashboard 2>/dev/null || echo "inactive")
-
 if [ "$bot_status" = "active" ]; then
     log "trading-bot is active -> restarting..."
     systemctl restart trading-bot
     log "trading-bot restarted."
 else
     log "trading-bot is $bot_status -> skipping restart."
-fi
-
-if [ "$dash_status" = "active" ]; then
-    log "trading-dashboard is active -> restarting..."
-    systemctl restart trading-dashboard
-    log "trading-dashboard restarted."
-else
-    log "trading-dashboard is $dash_status -> skipping restart."
 fi
 
 # --- 4. Restart API if active ---
@@ -72,4 +62,4 @@ else
 fi
 
 # --- 5. Summary ---
-log "Deploy complete. Bot: $bot_status -> $(systemctl is-active trading-bot 2>/dev/null || echo inactive), Dashboard: $dash_status -> $(systemctl is-active trading-dashboard 2>/dev/null || echo inactive), API: $api_status -> $(systemctl is-active trading-api 2>/dev/null || echo inactive)"
+log "Deploy complete. Bot: $bot_status -> $(systemctl is-active trading-bot 2>/dev/null || echo inactive), API: $api_status -> $(systemctl is-active trading-api 2>/dev/null || echo inactive)"

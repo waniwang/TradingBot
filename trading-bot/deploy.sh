@@ -36,7 +36,7 @@ ssh -o StrictHostKeyChecking=no "$SERVER" "tail -10 $REMOTE_DIR/trading_bot.log"
 
 echo ""
 echo "==> Service status:"
-ssh -o StrictHostKeyChecking=no "$SERVER" "systemctl is-active trading-bot trading-dashboard"
+ssh -o StrictHostKeyChecking=no "$SERVER" "systemctl is-active trading-bot"
 
 echo ""
-echo "Done. Dashboard: http://172.235.216.175:8501"
+echo "Done."

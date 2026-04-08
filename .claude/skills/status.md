@@ -11,7 +11,7 @@ Check the health of the trading bot.
 
 1. Run `cd /Users/hanlin/Developer/Trading/trading-bot && ./bot.sh status` to check the server
 2. Parse and present the output clearly:
-   - Service status (active/stopped) for both `trading-bot` and `trading-dashboard`
+   - Service status (active/stopped) for `trading-bot`
    - Current phase (premarket_scan, intraday_monitor, idle, etc.)
    - Heartbeat freshness (if >120s, flag as STALE — bot may be down)
    - Next scheduled job and time
@@ -21,4 +21,3 @@ Check the health of the trading bot.
 ## If something looks wrong
 - Heartbeat stale (>120s): suggest checking logs with `./bot.sh logs`
 - Service stopped: suggest `./bot.sh start` or `./bot.sh restart`
-- Dashboard down: check if port 8501 is accessible
