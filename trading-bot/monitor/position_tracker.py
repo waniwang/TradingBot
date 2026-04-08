@@ -334,17 +334,26 @@ class PositionTracker:
                 self._update_trailing_stop(session, pos, closes)
 
     def _check_max_hold_exits(self, session, positions, daily_closes_map):
-        """Exit positions that have exceeded their max hold period (e.g., EP earnings 50 days)."""
-        max_hold_days = int(self.config.get("signals", {}).get("ep_earnings_max_hold_days", 50))
+        """Exit positions that have exceeded their max hold period."""
+        cfg = self.config.get("signals", {})
+        # Per-setup-type max hold days
+        max_hold_map = {
+            "ep_earnings": int(cfg.get("ep_earnings_max_hold_days", 50)),
+            "ep_earnings_c": int(cfg.get("ep_earnings_c_max_hold_days", 20)),
+            "ep_news": int(cfg.get("ep_news_max_hold_days", 50)),
+            "ep_news_c": int(cfg.get("ep_news_c_max_hold_days", 20)),
+        }
+        default_max_hold = 50
 
         for pos in positions:
+            max_hold_days = max_hold_map.get(pos.setup_type, default_max_hold)
             if pos.days_held < max_hold_days:
                 continue
             closes = daily_closes_map.get(pos.ticker)
             current_price = closes[-1] if closes else pos.entry_price
             logger.info(
-                "Max hold exit %s: %d days held >= %d max",
-                pos.ticker, pos.days_held, max_hold_days,
+                "Max hold exit %s: %d days held >= %d max (%s)",
+                pos.ticker, pos.days_held, max_hold_days, pos.setup_type,
             )
             self._close_position(session, pos, current_price, reason="max_hold_period")
 

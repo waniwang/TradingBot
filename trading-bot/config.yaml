@@ -51,6 +51,11 @@ signals:
   ep_earnings_b_atr_pct_min: 2.0                  # ATR% floor
   ep_earnings_b_atr_pct_max: 5.0                  # ATR% ceiling
   ep_earnings_b_prev_10d_max: -10.0               # prev 10D change% must be below this
+  # Strategy C (bear market / day-2 confirmation)
+  ep_earnings_c_stop_loss_pct: 7.0                 # stop loss at -7% from entry
+  ep_earnings_c_prev_10d_max: -10.0                # prev 10D change% must be below this
+  ep_earnings_c_max_hold_days: 20                  # shorter hold: 20 days (vs 50 for A/B)
+  ep_earnings_c_day2_confirm: true                 # only enter if 1D return > 0
 
   # --- EP News (EOD scanner, runs at 3:00 PM ET) ---
   ep_news_min_gap_pct: 8.0                         # gap% = (Open - prevClose) / prevClose * 100
@@ -82,6 +87,13 @@ signals:
   ep_news_b_atr_pct_min: 3.0
   ep_news_b_atr_pct_max: 7.0
   ep_news_b_max_volume_m: 5.0                      # volume < 5M shares
+  # Strategy C (bear market / day-2 confirmation)
+  ep_news_c_stop_loss_pct: 7.0                     # stop loss at -7% from entry
+  ep_news_c_prev_10d_max: -10.0                    # prev 10D change% must be below this
+  ep_news_c_atr_pct_min: 2.0                       # ATR% floor
+  ep_news_c_atr_pct_max: 5.0                       # ATR% ceiling
+  ep_news_c_max_hold_days: 20                      # shorter hold: 20 days (vs 50 for A/B)
+  ep_news_c_day2_confirm: true                     # only enter if 1D return > 0
 
   # --- Breakout ---
   # Consolidation detection (nightly scan)

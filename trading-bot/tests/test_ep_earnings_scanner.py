@@ -724,11 +724,12 @@ class TestEvaluateEpEarningsStrategies:
             assert "entry_price" in e
             assert "stop_price" in e
             assert "ep_strategy" in e
-            assert e["ep_strategy"] in ("A", "B")
-            assert e["stop_price"] == round(e["entry_price"] * 0.93, 2)
+            assert e["ep_strategy"] in ("A", "B", "C")
+            if e["ep_strategy"] in ("A", "B"):
+                assert e["stop_price"] == round(e["entry_price"] * 0.93, 2)
 
-    def test_no_entries_when_chg_open_negative(self):
-        """Stock with negative CHG-OPEN% fails both strategies."""
+    def test_no_ab_entries_when_chg_open_negative(self):
+        """Stock with negative CHG-OPEN% fails Strategy A and B (but may pass C)."""
         config = _make_strategy_config()
         candidate = _make_candidate(
             open_price=100.0, current_price=95.0,  # negative CHG-OPEN
@@ -738,10 +739,12 @@ class TestEvaluateEpEarningsStrategies:
         daily_bars = {"NVDA": df}
 
         entries = evaluate_ep_earnings_strategies([candidate], daily_bars, config)
-        assert len(entries) == 0
+        ab_entries = [e for e in entries if e["ep_strategy"] in ("A", "B")]
+        assert len(ab_entries) == 0
+        # Strategy C may still pass (it doesn't filter on CHG-OPEN%)
 
     def test_stop_price_7pct(self):
-        """Stop price is exactly -7% from entry."""
+        """Stop price is exactly -7% from entry for all strategies."""
         config = _make_strategy_config()
         candidate = _make_candidate(
             open_price=100.0, current_price=105.0,
@@ -752,6 +755,7 @@ class TestEvaluateEpEarningsStrategies:
 
         entries = evaluate_ep_earnings_strategies([candidate], daily_bars, config)
         for e in entries:
+            # All strategies use -7% stop
             expected_stop = round(105.0 * 0.93, 2)
             assert e["stop_price"] == expected_stop
 

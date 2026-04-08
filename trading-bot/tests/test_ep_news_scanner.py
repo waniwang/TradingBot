@@ -720,8 +720,8 @@ class TestEvaluateEpNewsStrategies:
         for e in a_entries:
             assert e["stop_price"] == round(105.0 * 0.93, 2)  # -7% stop
 
-    def test_no_entries_when_chg_open_too_low(self):
-        """Stock with CHG-OPEN < 2% fails both strategies."""
+    def test_no_ab_entries_when_chg_open_too_low(self):
+        """Stock with CHG-OPEN < 2% fails Strategy A and B (but may pass C)."""
         config = _make_strategy_config()
         candidate = _make_candidate(
             open_price=100.0, current_price=101.0,
@@ -731,7 +731,9 @@ class TestEvaluateEpNewsStrategies:
         daily_bars = {"NVDA": df}
 
         entries = evaluate_ep_news_strategies([candidate], daily_bars, config)
-        assert len(entries) == 0
+        ab_entries = [e for e in entries if e["ep_strategy"] in ("A", "B")]
+        assert len(ab_entries) == 0
+        # Strategy C may still pass (it doesn't filter on CHG-OPEN%)
 
     def test_empty_candidates(self):
         config = _make_strategy_config()

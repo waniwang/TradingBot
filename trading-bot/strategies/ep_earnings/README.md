@@ -4,9 +4,10 @@ EOD long swing on earnings gap-ups. Scans at 3 PM, enters near close at 3:50 PM.
 
 ## Flow
 
-1. **3:00 PM** — `scanner.py` finds earnings gappers, `strategy.py` evaluates A/B filters
-2. **3:50 PM** — Plugin executes entries (limit orders near close)
-3. **Ongoing** — -7% stop, max 50-day hold, shared exit logic (partial exits, trailing MA)
+1. **3:00 PM** — `scanner.py` finds earnings gappers, `strategy.py` evaluates A/B/C filters
+2. **3:45 PM** — Day-2 confirmation check for yesterday's Strategy C candidates
+3. **3:50 PM** — Plugin executes entries (A/B from today + confirmed C from yesterday)
+4. **Ongoing** — -7% stop, max hold (50d for A/B, 20d for C), shared exit logic
 
 ## Scanner Filters (`scanner.py`)
 
@@ -42,6 +43,21 @@ Three-phase filter:
 | ATR% | between 2% and 5% |
 | Prev 10D change | < -10% |
 | Stop | -7% |
+
+## Strategy C (Bear Market / Day-2 Confirm) -- ~48% WR, PF ~3.3
+
+Designed for bear market regimes where "strong gap day" filters (A/B) select stocks that get sold off hardest. Uses minimal filters + day-2 confirmation to filter out immediate reversals.
+
+| Filter | Value |
+|--------|-------|
+| Prev 10D change | <= -10% (beaten down pre-earnings) |
+| Day-2 confirm | 1D return > 0 (stock holds up next day) |
+| Stop | -7% |
+| Hold | 20 days (shorter than A/B's 50D) |
+
+**Entry timing:** Scanned on gap day (3:00 PM), but NOT entered until day 2 (3:50 PM) after confirming positive 1D return. Entry price = day 2 close.
+
+**Why it works:** In 2026 Q1 bear market, A/B went 0% WR while C showed 71% WR on 2026 data. The day-2 confirmation filters out stocks that gap up on earnings but immediately reverse.
 
 ## Kill Zones (Avoid)
 

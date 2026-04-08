@@ -31,3 +31,11 @@ b_prev_10d_max: -10.0
 b_atr_pct_min: 3.0
 b_atr_pct_max: 7.0
 b_max_volume_m: 5.0
+
+# Strategy C (bear market / day-2 confirmation)
+c_stop_loss_pct: 7.0
+c_prev_10d_max: -10.0
+c_atr_pct_min: 2.0
+c_atr_pct_max: 5.0
+c_max_hold_days: 20
+c_day2_confirm: true

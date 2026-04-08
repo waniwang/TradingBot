@@ -4,9 +4,10 @@ EOD long swing on news-driven (non-earnings) gap-ups. Same timing as EP Earnings
 
 ## Flow
 
-1. **3:05 PM** — `scanner.py` finds news gappers (excludes earnings), `strategy.py` evaluates A/B filters
-2. **3:50 PM** — Plugin executes entries near close
-3. **Ongoing** — Stop per strategy tier, max 50-day hold
+1. **3:05 PM** — `scanner.py` finds news gappers (excludes earnings), `strategy.py` evaluates A/B/C filters
+2. **3:45 PM** — Day-2 confirmation check for yesterday's Strategy C candidates
+3. **3:50 PM** — Plugin executes entries (A/B from today + confirmed C from yesterday)
+4. **Ongoing** — Stop per strategy tier, max hold (50d for A/B, 20d for C)
 
 **Note:** EP News scans at 3:05 PM (offset from EP Earnings at 3:00 PM) to avoid yfinance rate limiting from simultaneous per-ticker API calls.
 
@@ -44,6 +45,20 @@ Same three-phase filter as EP Earnings, with differences:
 | Volume | < 5M shares |
 
 If both pass, Strategy A is used (tighter stop).
+
+## Strategy C (Bear Market / Day-2 Confirm) -- stop -7%, hold 20D
+
+Designed for bear market regimes where "strong gap day" filters (A/B) select stocks that get sold off hardest.
+
+| Filter | Value |
+|--------|-------|
+| Prev 10D change | <= -10% (beaten down pre-news) |
+| ATR% | between 2% and 5% |
+| Day-2 confirm | 1D return > 0 (stock holds up next day) |
+| Stop | -7% |
+| Hold | 20 days |
+
+**Entry timing:** Scanned on gap day (3:05 PM), but NOT entered until day 2 (3:50 PM) after confirming positive 1D return.
 
 ## Backtesting
 

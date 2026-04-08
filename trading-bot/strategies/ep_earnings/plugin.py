@@ -21,6 +21,11 @@ def _scan_job(config, client, db_engine, notify):
     return PLUGIN.job_scan(config, client, db_engine, notify)
 
 
+def _day2_confirm_job(config, client, db_engine, notify):
+    """3:45 PM ET — check yesterday's Strategy C candidates for day-2 confirmation."""
+    return PLUGIN.job_day2_confirm(config, client, db_engine, notify)
+
+
 def _execute_job(config, client, db_engine, notify):
     """3:50 PM ET — execute staged EP earnings entries."""
     return PLUGIN.job_execute(config, client, db_engine, notify)
@@ -45,6 +50,11 @@ class EPEarningsPlugin:
             job_id="ep_earnings_scan",
             cron={"hour": 15, "minute": 0, "day_of_week": "mon-fri"},
             handler=_scan_job,
+        ),
+        ScheduleEntry(
+            job_id="ep_earnings_day2_confirm",
+            cron={"hour": 15, "minute": 45, "day_of_week": "mon-fri"},
+            handler=_day2_confirm_job,
         ),
         ScheduleEntry(
             job_id="ep_earnings_execute",
@@ -107,33 +117,49 @@ class EPEarningsPlugin:
             daily_bars = client.get_daily_bars_batch(tickers, days=300)
             logger.info("Fetched daily bars for %d/%d tickers", len(daily_bars), len(tickers))
 
-            # Phase 3: Evaluate Strategy A + B
+            # Phase 3: Evaluate Strategy A + B + C
             entries = evaluate_ep_earnings_strategies(candidates, daily_bars, config)
             logger.info("Strategy evaluation: %d entries from %d candidates", len(entries), len(candidates))
 
-            if entries:
-                persist_candidates(candidates, "ep_earnings", "active", today, db_engine)
-                self._staged_entries = entries
+            # Separate immediate entries (A/B) from day-2 pending (C)
+            immediate = [e for e in entries if not e.get("day2_confirm")]
+            pending_c = [e for e in entries if e.get("day2_confirm")]
 
-                for entry in entries:
+            if immediate or pending_c:
+                persist_candidates(candidates, "ep_earnings", "active", today, db_engine)
+
+            # Stage A/B entries for execution at 3:50 PM
+            if immediate:
+                self._staged_entries = immediate
+                for entry in immediate:
                     self._persist_entry(entry, today, db_engine)
+
+            # Persist C candidates as "watching" (pending day-2 confirmation)
+            for entry in pending_c:
+                self._persist_pending_day2(entry, today, db_engine)
+
+            if immediate or pending_c:
+                a_count = sum(1 for e in entries if e["ep_strategy"] == "A")
+                b_count = sum(1 for e in entries if e["ep_strategy"] == "B")
+                c_count = len(pending_c)
 
                 if notify:
                     lines = [f"EP EARNINGS: {len(entries)} strategy entries from {len(candidates)} candidates"]
-                    a_count = sum(1 for e in entries if e["ep_strategy"] == "A")
-                    b_count = sum(1 for e in entries if e["ep_strategy"] == "B")
-                    lines.append(f"  Strategy A: {a_count} | Strategy B: {b_count}")
-                    for e in entries:
+                    lines.append(f"  Strategy A: {a_count} | Strategy B: {b_count} | Strategy C (pending day-2): {c_count}")
+                    for e in immediate:
                         lines.append(
                             f"  {e['ticker']} ({e['ep_strategy']}): gap {e['gap_pct']:.1f}%, "
                             f"entry ${e['entry_price']:.2f}, stop ${e['stop_price']:.2f}"
                         )
+                    for e in pending_c:
+                        lines.append(
+                            f"  {e['ticker']} (C-pending): gap {e['gap_pct']:.1f}%, "
+                            f"gap close ${e['gap_day_close']:.2f} — awaiting day-2 confirm"
+                        )
                     notify("\n".join(lines))
 
                 entry_tickers = ", ".join(e["ticker"] for e in entries)
-                a_count = sum(1 for e in entries if e["ep_strategy"] == "A")
-                b_count = sum(1 for e in entries if e["ep_strategy"] == "B")
-                return f"{len(entries)} entries ({a_count}A+{b_count}B): {entry_tickers}"
+                return f"{len(entries)} entries ({a_count}A+{b_count}B+{c_count}C-pending): {entry_tickers}"
             else:
                 if notify:
                     lines = [f"EP EARNINGS: {len(candidates)} candidates, 0 passed strategy filters"]
@@ -212,9 +238,14 @@ class EPEarningsPlugin:
                 logger.info("EP earnings: %s position size = 0, skipping", ticker)
                 continue
 
+            # Use distinct setup_type for Strategy C (different max hold period)
+            setup_type = "ep_earnings"
+            if strategy_label == "C":
+                setup_type = "ep_earnings_c"
+
             signal = SignalResult(
                 ticker=ticker,
-                setup_type="ep_earnings",
+                setup_type=setup_type,
                 side="long",
                 entry_price=entry["entry_price"],
                 stop_price=entry["stop_price"],
@@ -239,6 +270,153 @@ class EPEarningsPlugin:
 
         entered_tickers = [t for t, el in by_ticker.items() if any(True for _ in el)]
         return f"{executed}/{len(by_ticker)} entered: {', '.join(list(by_ticker.keys()))}"
+
+    def job_day2_confirm(self, config, client, db_engine, notify):
+        """3:45 PM ET — check yesterday's Strategy C candidates for day-2 confirmation."""
+        from main import is_trading_day
+        from db.models import Watchlist, get_session
+
+        if not is_trading_day(client):
+            return "Skipped — not a trading day"
+
+        logger.info("=== EP EARNINGS DAY-2 CONFIRM CHECK ===")
+
+        today = datetime.now(ET).date()
+
+        # Find pending day-2 candidates from previous trading days (stage=watching, setup_type=ep_earnings)
+        confirmed = []
+        with get_session(db_engine) as session:
+            pending = session.query(Watchlist).filter(
+                Watchlist.setup_type == "ep_earnings",
+                Watchlist.stage == "watching",
+                Watchlist.scan_date < today,
+            ).all()
+
+            if not pending:
+                logger.info("EP earnings day-2 confirm: no pending candidates")
+                return "No pending candidates"
+
+            logger.info("EP earnings day-2 confirm: %d pending candidates", len(pending))
+
+            for wl in pending:
+                meta = wl.meta or {}
+                if not meta.get("day2_confirm"):
+                    continue
+
+                ticker = wl.ticker
+                gap_day_close = meta.get("gap_day_close", 0)
+
+                # Fetch current price (proxy for day 2 close at 3:45 PM)
+                try:
+                    snapshot = client.get_snapshots([ticker])
+                    snap = snapshot.get(ticker)
+                    if snap and hasattr(snap, "latest_trade"):
+                        current_price = float(snap.latest_trade.price)
+                    elif snap and hasattr(snap, "minute_bar") and snap.minute_bar:
+                        current_price = float(snap.minute_bar.close)
+                    else:
+                        logger.warning("EP earnings day-2: no price data for %s, skipping", ticker)
+                        wl.stage = "expired"
+                        continue
+                except Exception as e:
+                    logger.warning("EP earnings day-2: failed to get price for %s: %s", ticker, e)
+                    wl.stage = "expired"
+                    continue
+
+                # Day-2 confirmation: current price > gap day close (positive 1D return)
+                if current_price > gap_day_close:
+                    stop_pct = meta.get("stop_loss_pct", 7.0)
+                    stop_price = round(current_price * (1 - stop_pct / 100), 2)
+
+                    entry = {
+                        "ticker": ticker,
+                        "setup_type": "ep_earnings_c",
+                        "ep_strategy": "C",
+                        "entry_price": current_price,
+                        "stop_price": stop_price,
+                        "stop_loss_pct": stop_pct,
+                        "max_hold_days": meta.get("max_hold_days", 20),
+                        "gap_pct": meta.get("gap_pct", 0),
+                        "open_price": meta.get("open_price", 0),
+                        "prev_close": meta.get("prev_close", 0),
+                        "prev_high": meta.get("prev_high", 0),
+                        "current_price": current_price,
+                        "today_volume": 0,
+                        "market_cap": meta.get("market_cap", 0),
+                        "rvol": meta.get("rvol", 0),
+                        "chg_open_pct": meta.get("chg_open_pct", 0),
+                        "close_in_range": meta.get("close_in_range", 0),
+                        "downside_from_open": meta.get("downside_from_open", 0),
+                        "prev_10d_change_pct": meta.get("prev_10d_change_pct", 0),
+                        "atr_pct": meta.get("atr_pct", 0),
+                        "gap_day_close": gap_day_close,
+                        "day1_return_pct": round((current_price - gap_day_close) / gap_day_close * 100, 2),
+                    }
+                    confirmed.append(entry)
+                    wl.stage = "triggered"
+                    logger.info(
+                        "%s: Day-2 CONFIRMED — price $%.2f > gap close $%.2f (+%.1f%%)",
+                        ticker, current_price, gap_day_close,
+                        (current_price - gap_day_close) / gap_day_close * 100,
+                    )
+                else:
+                    wl.stage = "expired"
+                    logger.info(
+                        "%s: Day-2 REJECTED — price $%.2f <= gap close $%.2f (%.1f%%)",
+                        ticker, current_price, gap_day_close,
+                        (current_price - gap_day_close) / gap_day_close * 100,
+                    )
+
+            session.commit()
+
+        # Stage confirmed entries for execution at 3:50 PM
+        if confirmed:
+            self._staged_entries.extend(confirmed)
+            if notify:
+                lines = [f"EP EARNINGS DAY-2 CONFIRM: {len(confirmed)} confirmed"]
+                for e in confirmed:
+                    lines.append(
+                        f"  {e['ticker']}: entry ${e['entry_price']:.2f}, "
+                        f"stop ${e['stop_price']:.2f}, 1D return +{e['day1_return_pct']:.1f}%"
+                    )
+                notify("\n".join(lines))
+
+        return f"{len(confirmed)} confirmed from {len(pending)} pending"
+
+    def _persist_pending_day2(self, entry: dict, scan_date, db_engine):
+        """Persist a Strategy C candidate as pending day-2 confirmation."""
+        from db.models import Watchlist, get_session
+
+        meta = {
+            "ep_strategy": "C",
+            "day2_confirm": True,
+            "gap_day_close": entry["gap_day_close"],
+            "gap_pct": entry["gap_pct"],
+            "stop_loss_pct": entry["stop_loss_pct"],
+            "max_hold_days": entry["max_hold_days"],
+            "chg_open_pct": entry["chg_open_pct"],
+            "close_in_range": entry["close_in_range"],
+            "downside_from_open": entry["downside_from_open"],
+            "prev_10d_change_pct": entry["prev_10d_change_pct"],
+            "atr_pct": entry["atr_pct"],
+            "open_price": entry["open_price"],
+            "prev_close": entry["prev_close"],
+            "prev_high": entry.get("prev_high", 0),
+            "market_cap": entry.get("market_cap", 0),
+            "rvol": entry.get("rvol", 0),
+        }
+
+        with get_session(db_engine) as session:
+            wl = Watchlist(
+                ticker=entry["ticker"],
+                setup_type="ep_earnings",
+                stage="watching",
+                scan_date=scan_date,
+                metadata_json=_json.dumps(meta),
+                notes="EP Earnings Strategy C — pending day-2 confirm",
+            )
+            session.add(wl)
+            session.commit()
 
     def _persist_entry(self, entry: dict, scan_date, db_engine):
         """Persist an EP earnings strategy entry to the watchlist with metadata."""

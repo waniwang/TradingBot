@@ -1,8 +1,8 @@
 """
 EP Earnings swing strategy filters.
 
-Evaluates scanner candidates against Strategy A and Strategy B rules.
-Both strategies are evaluated independently so we can track performance separately.
+Evaluates scanner candidates against Strategy A, B, and C rules.
+All strategies are evaluated independently so we can track performance separately.
 
 Strategy A (Tight Filters): 69% WR, +9.18% avg, PF 5.68
   1. CHG-OPEN% > 0 (closed above open)
@@ -18,7 +18,15 @@ Strategy B (Relaxed Filters): 61% WR, +11.75% avg, PF 5.62
   4. Prev 10D change% < -10%
   5. Stop: -7% | Hold: 50 days
 
-Entry: at/near market close (~3:50 PM ET) on gap day.
+Strategy C (Bear Market / Day-2 Confirm): ~48% WR, +7.6% avg, PF ~3.3
+  1. Prev 10D change% <= -10% (beaten down pre-earnings)
+  2. No CHG-OPEN% or close_in_range filters (works in all regimes)
+  3. Day-2 confirmation: only enter if 1D return > 0 (stock holds up next day)
+  4. Entry at day 2 close, not gap day close
+  5. Stop: -7% | Hold: 20 days
+
+Entry for A/B: at/near market close (~3:50 PM ET) on gap day.
+Entry for C: at/near market close on day 2, after confirming positive 1D return.
 All features computed using current price as proxy for day's Close at ~3 PM scan time.
 """
 
@@ -37,7 +45,7 @@ logger = logging.getLogger(__name__)
 class StrategyResult:
     """Result of evaluating a candidate against EP earnings strategies."""
     ticker: str
-    strategy: str  # "ep_earnings_a" or "ep_earnings_b"
+    strategy: str  # "ep_earnings_a", "ep_earnings_b", or "ep_earnings_c"
     passes: bool
     entry_price: float
     stop_price: float
@@ -196,17 +204,43 @@ def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> bool:
     return True
 
 
+def evaluate_strategy_c(candidate: dict, features: dict, config: dict) -> bool:
+    """
+    Strategy C (Bear Market / Day-2 Confirm).
+
+    Minimal filters: only requires beaten-down pre-earnings.
+    Day-2 confirmation is handled by the plugin (not checked here).
+
+    Returns True if candidate passes Strategy C screening rules.
+    """
+    cfg = config.get("signals", {})
+
+    # 1. Prev 10D change% <= -10%
+    prev_10d_max = float(cfg.get("ep_earnings_c_prev_10d_max", -10.0))
+    if features["prev_10d_change_pct"] > prev_10d_max:
+        logger.debug(
+            "%s: Strategy C fail - prev_10d %.2f > %.1f",
+            candidate["ticker"], features["prev_10d_change_pct"], prev_10d_max,
+        )
+        return False
+
+    return True
+
+
 def evaluate_ep_earnings_strategies(
     candidates: list[dict],
     daily_bars: dict,
     config: dict,
 ) -> list[dict]:
     """
-    Evaluate scanner candidates against both Strategy A and B.
+    Evaluate scanner candidates against Strategy A, B, and C.
 
-    For each candidate that passes either strategy, creates an entry dict
+    For each candidate that passes any strategy, creates an entry dict
     with strategy tag and computed features. A single stock can produce
-    two entries (one for A, one for B) if it passes both.
+    multiple entries if it passes multiple strategies.
+
+    Strategy C entries are tagged with day2_confirm=True; they should NOT
+    be executed on gap day but held for day-2 confirmation by the plugin.
 
     Args:
         candidates: list of dicts from scan_ep_earnings()
@@ -219,6 +253,8 @@ def evaluate_ep_earnings_strategies(
     cfg = config.get("signals", {})
     stop_loss_pct = float(cfg.get("ep_earnings_stop_loss_pct", 7.0))
     max_hold_days = int(cfg.get("ep_earnings_max_hold_days", 50))
+    stop_c = float(cfg.get("ep_earnings_c_stop_loss_pct", 7.0))
+    max_hold_c = int(cfg.get("ep_earnings_c_max_hold_days", 20))
 
     entries = []
 
@@ -282,11 +318,30 @@ def evaluate_ep_earnings_strategies(
                 features["atr_pct"], features["prev_10d_change_pct"],
             )
 
+        # Evaluate Strategy C (day-2 confirmation required)
+        if evaluate_strategy_c(c, features, config):
+            stop_price_c = round(entry_price * (1 - stop_c / 100), 2)
+            entry_c = {
+                **base,
+                "ep_strategy": "C",
+                "stop_price": stop_price_c,
+                "stop_loss_pct": stop_c,
+                "max_hold_days": max_hold_c,
+                "day2_confirm": True,
+                "gap_day_close": entry_price,  # save for day-2 comparison
+            }
+            entries.append(entry_c)
+            logger.info(
+                "%s: PASSES Strategy C (P10D=%.1f%%) — pending day-2 confirmation",
+                ticker, features["prev_10d_change_pct"],
+            )
+
+    a_count = sum(1 for e in entries if e["ep_strategy"] == "A")
+    b_count = sum(1 for e in entries if e["ep_strategy"] == "B")
+    c_count = sum(1 for e in entries if e["ep_strategy"] == "C")
     logger.info(
-        "EP Earnings strategy evaluation: %d entries from %d candidates (A=%d, B=%d)",
-        len(entries), len(candidates),
-        sum(1 for e in entries if e["ep_strategy"] == "A"),
-        sum(1 for e in entries if e["ep_strategy"] == "B"),
+        "EP Earnings strategy evaluation: %d entries from %d candidates (A=%d, B=%d, C=%d pending)",
+        len(entries), len(candidates), a_count, b_count, c_count,
     )
     return entries
 
