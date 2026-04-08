@@ -92,7 +92,7 @@ class AlpacaClient:
         self._watchdog_stop: "threading.Event | None" = None
 
         self._stream_callbacks: list[Callable] = []
-        self._callback_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="bar-cb")
+        self._callback_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bar-cb")
 
     # ------------------------------------------------------------------
     # Connection
@@ -388,6 +388,13 @@ class AlpacaClient:
     def _start_stream(self, tickers: list[str]):
         """Create and launch the WebSocket stream in a daemon thread."""
         import threading
+
+        # Stop old stream to prevent thread/memory leak on reconnect
+        if self._stream:
+            try:
+                self._stream.stop()
+            except Exception:
+                pass
 
         self._stream = StockDataStream(
             api_key=self._api_key,

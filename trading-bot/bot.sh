@@ -196,21 +196,21 @@ else
       ;;
     start)
       echo "==> Starting services..."
-      $SSH "systemctl start trading-bot trading-dashboard"
+      $SSH "systemctl start trading-bot"
       sleep 3
-      $SSH "systemctl is-active trading-bot trading-dashboard"
-      echo "Done. Dashboard: http://172.235.216.175:8501"
+      $SSH "systemctl is-active trading-bot"
+      echo "Done."
       ;;
     stop)
       echo "==> Stopping services..."
-      $SSH "systemctl stop trading-bot trading-dashboard"
-      $SSH "systemctl is-active trading-bot trading-dashboard" 2>/dev/null || echo "Both stopped."
+      $SSH "systemctl stop trading-bot"
+      $SSH "systemctl is-active trading-bot" 2>/dev/null || echo "Stopped."
       ;;
     restart)
       echo "==> Restarting services..."
-      $SSH "systemctl restart trading-bot trading-dashboard"
+      $SSH "systemctl restart trading-bot"
       sleep 3
-      $SSH "systemctl is-active trading-bot trading-dashboard"
+      $SSH "systemctl is-active trading-bot"
       echo "Done."
       ;;
     scan)
