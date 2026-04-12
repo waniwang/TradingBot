@@ -15,10 +15,10 @@ risk:
 
 strategies:
   enabled:                                   # which setups to scan & trade
-    - episodic_pivot
+    # - episodic_pivot                       # disabled — focus on EP swing strategies
     - ep_earnings
     - ep_news
-    - breakout
+    # - breakout                             # disabled — focus on EP swing strategies
     # - parabolic_short                      # disabled — negative expectancy in backtests
 
 signals:
