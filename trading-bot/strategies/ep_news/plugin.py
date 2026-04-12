@@ -178,7 +178,7 @@ class EPNewsPlugin:
 
     def job_execute(self, config, client, db_engine, notify):
         """3:50 PM ET — execute entries staged by the 3:00 PM scan."""
-        from main import is_trading_day, _execute_entry
+        from main import is_trading_day, _execute_entry, _compute_current_daily_pnl, _compute_current_weekly_pnl
         from signals.base import SignalResult
         from risk.manager import RiskManager
         from db.models import Position, get_session
@@ -221,12 +221,13 @@ class EPNewsPlugin:
                 open_count = session.query(Position).filter_by(is_open=True).count()
 
             try:
-                portfolio_value = client.get_account_equity()
-            except Exception:
+                portfolio_value = client.get_portfolio_value()
+            except Exception as e:
+                logger.warning("Failed to get portfolio value, using fallback: %s", e)
                 portfolio_value = 100_000
 
-            daily_pnl = 0.0
-            weekly_pnl = 0.0
+            daily_pnl = _compute_current_daily_pnl(db_engine)
+            weekly_pnl = _compute_current_weekly_pnl(db_engine)
             can_enter, reason = risk.can_enter(open_count, daily_pnl, weekly_pnl, portfolio_value)
             if not can_enter:
                 logger.info("EP news: %s blocked by risk manager: %s", ticker, reason)

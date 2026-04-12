@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+import pytz
 from apscheduler.triggers.cron import CronTrigger
 
 logger = logging.getLogger(__name__)
+ET = pytz.timezone("America/New_York")
 
 
 def _tracked_strategy_job(job_id, handler, config, client, db_engine, notify):
@@ -95,7 +97,7 @@ def register_strategy_jobs(scheduler, plugins, config, client, db_engine, notify
         for entry in plugin.schedule:
             scheduler.add_job(
                 func=_tracked_strategy_job,
-                trigger=CronTrigger(**entry.cron),
+                trigger=CronTrigger(**entry.cron, timezone=ET),
                 id=entry.job_id,
                 args=[entry.job_id, entry.handler, config, client, db_engine, notify],
                 replace_existing=True,

@@ -914,7 +914,7 @@ def _safe_pnl_sum(positions) -> float:
 
 def _compute_current_daily_pnl(db_engine) -> float:
     from db.models import Position
-    today = datetime.utcnow().date()
+    today = datetime.now(ET).date()
     with get_session(db_engine) as session:
         closed = (
             session.query(Position)
@@ -929,7 +929,7 @@ def _compute_current_daily_pnl(db_engine) -> float:
 
 def _compute_current_weekly_pnl(db_engine) -> float:
     from db.models import Position
-    today = datetime.utcnow().date()
+    today = datetime.now(ET).date()
     week_start = today - timedelta(days=today.weekday())
     with get_session(db_engine) as session:
         closed = (
