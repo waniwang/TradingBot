@@ -10,9 +10,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import type { SelectedPipelineJob } from "@/lib/types";
 import { formatDuration } from "./pipeline-timeline";
+import Link from "next/link";
 import {
   PHASE_LABELS,
   CATEGORY_COLORS,
+  STRATEGY_LABELS,
   getStatusTextClass,
   getStatusLabel,
 } from "@/lib/pipeline-constants";
@@ -76,6 +78,16 @@ export function PipelineJobDetailModal({
 
         {/* Details grid */}
         <div className="divide-y divide-border">
+          {job.strategy && (
+            <DetailRow label="Strategy">
+              <Link
+                href={`/strategies/${job.strategy}`}
+                className="text-blue-400 hover:underline"
+              >
+                {STRATEGY_LABELS[job.strategy] ?? job.strategy}
+              </Link>
+            </DetailRow>
+          )}
           {job.phase && (
             <DetailRow label="Phase">
               {PHASE_LABELS[job.phase] || job.phase}

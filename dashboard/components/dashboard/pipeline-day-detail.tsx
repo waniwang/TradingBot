@@ -11,21 +11,35 @@ import {
 export function PipelineDayDetail({
   day,
   onSelectJob,
+  strategyFilter = "all",
+  disabledStrategySlugs,
 }: {
   day: PipelineDayHistory | null;
   onSelectJob?: (job: SelectedPipelineJob) => void;
+  strategyFilter?: string;
+  disabledStrategySlugs?: Set<string>;
 }) {
   if (!day) return null;
 
-  const successCount = day.jobs.filter((j) => j.status === "success").length;
-  const failedCount = day.jobs.filter((j) => j.status === "failed").length;
-  const missedCount = day.jobs.filter((j) => j.status === "missed").length;
-  const total = day.jobs.length;
+  // Apply same filter logic as timeline
+  const filteredJobs = day.jobs.filter((job) => {
+    const strat = job.strategy ?? null;
+    if (strategyFilter === "all") {
+      return strat === null || !disabledStrategySlugs?.has(strat);
+    }
+    if (strategyFilter === "system") return strat === null;
+    return strat === strategyFilter || strat === null;
+  });
+
+  const successCount = filteredJobs.filter((j) => j.status === "success").length;
+  const failedCount = filteredJobs.filter((j) => j.status === "failed").length;
+  const missedCount = filteredJobs.filter((j) => j.status === "missed").length;
+  const total = filteredJobs.length;
 
   // Group jobs by phase
   const grouped: { phase: string; jobs: MergedPipelineJob[] }[] = [];
   for (const phase of PHASE_ORDER) {
-    const phaseJobs = day.jobs.filter((j) => j.phase === phase);
+    const phaseJobs = filteredJobs.filter((j) => j.phase === phase);
     if (phaseJobs.length > 0) {
       grouped.push({ phase, jobs: phaseJobs });
     }
@@ -81,6 +95,7 @@ export function PipelineDayDetail({
                       description: job.description,
                       scheduled_time: job.scheduled_time,
                       date: day.date,
+                      strategy: job.strategy,
                     })
                   }
                 >

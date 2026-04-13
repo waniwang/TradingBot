@@ -102,3 +102,52 @@ PHASE_META = {
 
 # Ordered list of phases for consistent display
 PHASE_ORDER = ["overnight", "premarket", "market_open", "afternoon", "close"]
+
+# ── Strategy ↔ job mapping ───────────────────────────────────��──────
+
+# Job IDs with no associated strategy
+SYSTEM_JOB_IDS = frozenset({
+    "premarket_scan", "subscribe_watchlist",
+    "intraday_monitor", "eod_tasks",
+    "reconcile_positions", "heartbeat",
+})
+
+# All known strategies with display names and descriptions
+STRATEGY_META = {
+    "ep_earnings": {
+        "display_name": "EP Earnings Swing",
+        "description": "Long swing setup on earnings-driven gap-ups. Evaluates Strategy A (tight), B (relaxed), and C (day-2 confirmation).",
+    },
+    "ep_news": {
+        "display_name": "EP News Swing",
+        "description": "Long swing setup on news-driven gap-ups (non-earnings). Uses the same A/B/C framework with news catalysts.",
+    },
+    "breakout": {
+        "display_name": "Breakout",
+        "description": "Consolidation breakout setup. Scans for stocks in tight ranges with rising momentum, enters on opening-range breakout.",
+    },
+    "episodic_pivot": {
+        "display_name": "Episodic Pivot",
+        "description": "Intraday long on gap-up stocks triggered by catalysts (earnings, news). Enters on opening-range high breakout.",
+    },
+    "parabolic_short": {
+        "display_name": "Parabolic Short",
+        "description": "Short setup on overextended stocks. Disabled — negative expectancy in backtests.",
+    },
+}
+
+# Extra job_ids that are in plugins but not in PIPELINE_SCHEDULE
+STRATEGY_EXTRA_JOBS = {
+    "ep_earnings": ["ep_earnings_day2_confirm"],
+    "ep_news": ["ep_news_day2_confirm"],
+}
+
+
+def job_to_strategy(job_id: str) -> str | None:
+    """Return strategy slug for a job_id, or None for system jobs."""
+    if job_id in SYSTEM_JOB_IDS:
+        return None
+    for slug in STRATEGY_META:
+        if job_id.startswith(slug):
+            return slug
+    return None

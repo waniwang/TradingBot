@@ -1,7 +1,8 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { PipelineData, PipelineExecution, SelectedPipelineJob } from "@/lib/types";
+import { StrategyFilterBar } from "./strategy-filter-bar";
+import type { PipelineData, PipelineExecution, SelectedPipelineJob, StrategyInfo } from "@/lib/types";
 
 export type StepStatus = "success" | "running" | "failed" | "skipped" | "upcoming" | "missed";
 
@@ -12,6 +13,7 @@ export interface TimelineStep {
   category: string;
   phase: string;
   description: string;
+  strategy: string | null;
   status: StepStatus;
   failure_reason: string | null;
   execution: PipelineExecution | null;
@@ -187,9 +189,15 @@ function NowIndicator({ countdownSeconds }: { countdownSeconds?: number | null }
 export function PipelineTimeline({
   data,
   onSelectJob,
+  strategyFilter = "all",
+  onStrategyFilterChange,
+  strategies = [],
 }: {
   data: PipelineData | null;
   onSelectJob?: (job: SelectedPipelineJob) => void;
+  strategyFilter?: string;
+  onStrategyFilterChange?: (value: string) => void;
+  strategies?: StrategyInfo[];
 }) {
   if (!data) {
     return (
@@ -204,7 +212,23 @@ export function PipelineTimeline({
     );
   }
 
-  const steps = deriveSteps(data);
+  const allSteps = deriveSteps(data);
+
+  // Apply strategy filter
+  const disabledSlugs = new Set(strategies.filter((s) => !s.enabled).map((s) => s.slug));
+  const steps = allSteps.filter((step) => {
+    const strat = step.strategy;
+    if (strategyFilter === "all") {
+      // Hide disabled strategy jobs
+      return strat === null || !disabledSlugs.has(strat);
+    }
+    if (strategyFilter === "system") {
+      return strat === null;
+    }
+    // Specific strategy: show its jobs + system jobs
+    return strat === strategyFilter || strat === null;
+  });
+
   const completedCount = steps.filter((s) => s.status === "success").length;
   const failedCount = steps.filter((s) => s.status === "failed").length;
 
@@ -279,6 +303,13 @@ export function PipelineTimeline({
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-0">
+        {onStrategyFilterChange && strategies.length > 0 && (
+          <StrategyFilterBar
+            value={strategyFilter}
+            onChange={onStrategyFilterChange}
+            strategies={strategies}
+          />
+        )}
         <div className="space-y-0">
           {grouped.map((group, phaseIdx) => {
             const meta = phaseMeta[group.phase];
@@ -335,6 +366,7 @@ export function PipelineTimeline({
                             category: step.category,
                             phase: step.phase,
                             description: step.description,
+                            strategy: step.strategy,
                           })
                         }
                       >

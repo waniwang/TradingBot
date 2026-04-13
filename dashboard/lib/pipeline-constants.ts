@@ -48,3 +48,13 @@ export function getStatusLabel(
   if (failureReason === "timeout") return "timed out";
   return status;
 }
+
+/* ── Strategy metadata ─────────────────────────────────────────��── */
+
+export const STRATEGY_LABELS: Record<string, string> = {
+  ep_earnings: "EP Earnings",
+  ep_news: "EP News",
+  breakout: "Breakout",
+  episodic_pivot: "Episodic Pivot",
+  parabolic_short: "Parabolic Short",
+};

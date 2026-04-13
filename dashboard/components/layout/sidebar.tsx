@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
+  Layers2,
   Briefcase,
   Eye,
   TrendingUp,
@@ -13,6 +14,7 @@ import {
 
 const NAV_ITEMS = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
+  { href: "/strategies", label: "Strategies", icon: Layers2 },
   { href: "/positions", label: "Positions", icon: Briefcase },
   { href: "/watchlist", label: "Watchlist", icon: Eye },
   { href: "/pipeline", label: "Pipeline", icon: Workflow },

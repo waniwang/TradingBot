@@ -9,7 +9,7 @@ import { PipelineDayDetail } from "@/components/dashboard/pipeline-day-detail";
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
 import { PipelineJobDetailModal } from "@/components/dashboard/pipeline-job-detail-modal";
-import type { BotStatus, PipelineData, PipelineHistoryResponse, SelectedPipelineJob } from "@/lib/types";
+import type { BotStatus, PipelineData, PipelineHistoryResponse, SelectedPipelineJob, StrategyListResponse, StrategyInfo } from "@/lib/types";
 
 export default function PipelinePage() {
   const [status, setStatus] = useState<BotStatus | null>(null);
@@ -20,18 +20,22 @@ export default function PipelinePage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedJob, setSelectedJob] = useState<SelectedPipelineJob | null>(null);
+  const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
+  const [strategyFilter, setStrategyFilter] = useState<string>("all");
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, pipe, hist] = await Promise.all([
+      const [s, pipe, hist, strats] = await Promise.all([
         fetchAPI<BotStatus>("/api/status"),
         fetchAPI<PipelineData>("/api/pipeline"),
         fetchAPI<PipelineHistoryResponse>("/api/pipeline/history?days=14"),
+        fetchAPI<StrategyListResponse>("/api/strategies"),
       ]);
       setStatus(s);
       setPipeline(pipe);
       setHistory(hist);
+      setStrategies(strats.strategies);
       setLastUpdated(new Date());
       setError(null);
     } catch (e) {
@@ -49,6 +53,7 @@ export default function PipelinePage() {
 
   const isNonTradingDay = pipeline && !pipeline.is_trading_day;
   const selectedDay = history?.days.find((d) => d.date === selectedDate) || null;
+  const disabledStrategySlugs = new Set(strategies.filter((s) => !s.enabled).map((s) => s.slug));
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -80,7 +85,13 @@ export default function PipelinePage() {
         )}
 
         {/* Live pipeline timeline */}
-        <PipelineTimeline data={pipeline} onSelectJob={setSelectedJob} />
+        <PipelineTimeline
+          data={pipeline}
+          onSelectJob={setSelectedJob}
+          strategyFilter={strategyFilter}
+          onStrategyFilterChange={setStrategyFilter}
+          strategies={strategies}
+        />
 
         {/* History section */}
         <section className="space-y-3">
@@ -100,7 +111,12 @@ export default function PipelinePage() {
           )}
 
           {/* Selected day detail */}
-          <PipelineDayDetail day={selectedDay} onSelectJob={setSelectedJob} />
+          <PipelineDayDetail
+            day={selectedDay}
+            onSelectJob={setSelectedJob}
+            strategyFilter={strategyFilter}
+            disabledStrategySlugs={disabledStrategySlugs}
+          />
 
         </section>
         <PipelineJobDetailModal

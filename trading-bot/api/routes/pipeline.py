@@ -10,7 +10,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Query
 
-from api.constants import PIPELINE_SCHEDULE, JOB_LABELS, PHASE_META, PHASE_ORDER
+from api.constants import PIPELINE_SCHEDULE, JOB_LABELS, PHASE_META, PHASE_ORDER, job_to_strategy
 from db.models import JobExecution, get_engine, get_session
 
 router = APIRouter()
@@ -126,6 +126,7 @@ def _build_schedule_dicts() -> list[dict]:
             "phase": job["phase"],
             "description": job["description"],
             "display_day_offset": job["display_day_offset"],
+            "strategy": job_to_strategy(job["job_id"]),
         }
         for job in PIPELINE_SCHEDULE
     ]
@@ -148,6 +149,8 @@ def _merge_schedule_with_executions(
         job_id = job["job_id"]
         exec_data = exec_map.get(job_id)
 
+        strategy = job_to_strategy(job_id)
+
         if exec_data:
             row = {
                 "job_id": job_id,
@@ -157,6 +160,7 @@ def _merge_schedule_with_executions(
                 "scheduled_time": job["time"],
                 "category": job["category"],
                 "display_day_offset": job["display_day_offset"],
+                "strategy": strategy,
                 "status": exec_data["status"],
                 "failure_reason": exec_data.get("failure_reason"),
                 "started_at": exec_data.get("started_at"),
@@ -174,6 +178,7 @@ def _merge_schedule_with_executions(
                 "scheduled_time": job["time"],
                 "category": job["category"],
                 "display_day_offset": job["display_day_offset"],
+                "strategy": strategy,
                 "status": "missed" if is_past else "upcoming",
                 "failure_reason": None,
                 "started_at": None,

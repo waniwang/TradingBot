@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, date
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from db.models import Position, get_session
 from api.deps import get_db_engine, get_alpaca
@@ -49,17 +49,15 @@ def get_open_positions():
 
 
 @router.get("/positions/closed")
-def get_closed_positions(limit: int = 50):
+def get_closed_positions(limit: int = 50, strategy: str | None = Query(None)):
     engine = get_db_engine()
 
     with get_session(engine) as session:
-        positions = (
-            session.query(Position)
-            .filter_by(is_open=False)
-            .order_by(Position.closed_at.desc())
-            .limit(limit)
-            .all()
-        )
+        q = session.query(Position).filter_by(is_open=False)
+        if strategy:
+            escaped = strategy.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            q = q.filter(Position.setup_type.like(f"{escaped}%", escape="\\"))
+        positions = q.order_by(Position.closed_at.desc()).limit(limit).all()
 
         return [
             {

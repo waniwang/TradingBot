@@ -106,6 +106,7 @@ export interface PipelineJob {
   phase: string;
   description: string;
   display_day_offset: number;
+  strategy: string | null;
 }
 
 export interface PipelineExecution {
@@ -146,6 +147,7 @@ export interface MergedPipelineJob {
   scheduled_time: string;
   category: string;
   display_day_offset: number;
+  strategy: string | null;
   status: "success" | "running" | "failed" | "skipped" | "upcoming" | "missed";
   failure_reason: string | null;
   started_at: string | null;
@@ -186,6 +188,7 @@ export type SelectedPipelineJob = {
   description?: string;
   date?: string;
   scheduled_time?: string;
+  strategy?: string | null;
 };
 
 export interface MarketIndex {
@@ -218,4 +221,34 @@ export interface PerformanceSummary {
   avg_loss: number;
   profit_factor: number;
   strategy_breakdown: Record<string, { trades: number; pnl: number; winners: number }>;
+}
+
+export interface StrategyLastRun {
+  job_id: string;
+  label: string;
+  status: string;
+  ran_at: string | null;
+  result_summary: string | null;
+}
+
+export interface StrategyStats {
+  open_positions: number;
+  total_closed: number;
+  win_rate: number;
+  total_pnl: number;
+}
+
+export interface StrategyInfo {
+  slug: string;
+  display_name: string;
+  enabled: boolean;
+  description: string;
+  job_ids: string[];
+  config_params: Record<string, unknown>;
+  stats: StrategyStats;
+  last_run: StrategyLastRun | null;
+}
+
+export interface StrategyListResponse {
+  strategies: StrategyInfo[];
 }
