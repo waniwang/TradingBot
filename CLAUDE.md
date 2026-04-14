@@ -169,7 +169,7 @@ trading-bot/api/    → FastAPI backend (Linode, port 8000)
 
 **Frontend** (`dashboard/`): Next.js 16, TypeScript, Tailwind v4, shadcn/ui, Recharts. Dark theme. Auto-refresh (30s market hours, 5m off hours). Pages: Overview (pipeline timeline, portfolio, risk meter, positions, equity chart, signals), Positions, Watchlist, Performance, History.
 
-**API** (`trading-bot/api/`): Read-only FastAPI endpoints. Shares DB models with bot. Auth via `X-API-Key` header. Endpoints: `/api/status`, `/api/portfolio`, `/api/positions`, `/api/positions/closed`, `/api/watchlist`, `/api/signals/today`, `/api/performance/pnl`, `/api/performance/summary`, `/api/pipeline`, `/api/pipeline/history`, `/api/risk`, `/api/market`.
+**API** (`trading-bot/api/`): Read-only FastAPI endpoints. Shares DB models with bot. Auth via `X-API-Key` header. Endpoints: `/api/status`, `/api/portfolio`, `/api/positions`, `/api/positions/closed`, `/api/watchlist`, `/api/signals/today`, `/api/performance/pnl`, `/api/performance/summary`, `/api/pipeline`, `/api/pipeline/history`, `/api/pipeline/job-detail`, `/api/risk`, `/api/market`.
 
 **Dev workflow:**
 ```bash

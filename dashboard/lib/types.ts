@@ -191,6 +191,87 @@ export type SelectedPipelineJob = {
   strategy?: string | null;
 };
 
+export interface JobDetailTicker {
+  ticker: string;
+  setup_type: string;
+  stage?: string;
+  entry_price?: number | null;
+  gap_pct?: number | null;
+  rvol?: number | null;
+  market_cap?: number | null;
+  notes?: string | null;
+}
+
+export interface JobDetailSignal {
+  ticker: string;
+  setup_type: string;
+  entry_price: number;
+  stop_price: number;
+  gap_pct: number | null;
+  acted_on: boolean;
+  fired_at: string | null;
+  order: {
+    id: number;
+    side: string;
+    qty: number;
+    price: number | null;
+    status: string;
+    filled_qty: number;
+    filled_avg_price: number | null;
+  } | null;
+}
+
+export interface JobDetailPositionClosed {
+  ticker: string;
+  setup_type: string;
+  side: string;
+  shares: number;
+  entry_price: number;
+  exit_price: number | null;
+  exit_reason: string | null;
+  realized_pnl: number | null;
+  opened_at: string | null;
+  closed_at: string | null;
+}
+
+export interface JobDetailResponse {
+  job_id: string;
+  label: string;
+  phase: string;
+  category: string;
+  description: string;
+  scheduled_time: string;
+  strategy: string | null;
+  trade_date: string;
+  execution: {
+    id: number;
+    job_id: string;
+    label: string;
+    status: string;
+    started_at: string | null;
+    finished_at: string | null;
+    duration_seconds: number | null;
+    result_summary: string | null;
+    error: string | null;
+    failure_reason: string | null;
+  } | null;
+  tickers?: JobDetailTicker[];
+  strategy_breakdown?: Record<string, number>;
+  signals?: JobDetailSignal[];
+  entered_count?: number;
+  signal_count?: number;
+  positions_closed?: JobDetailPositionClosed[];
+  daily_pnl?: {
+    realized_pnl: number;
+    unrealized_pnl: number;
+    total_pnl: number;
+    portfolio_value: number;
+    num_trades: number;
+    num_winners: number;
+    num_losers: number;
+  } | null;
+}
+
 export interface MarketIndex {
   ticker: string;
   price: number;

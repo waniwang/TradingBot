@@ -46,24 +46,21 @@ export function PipelineDayDetail({
   }
 
   return (
-    <div className="rounded-lg border border-border mt-3">
-      <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-        <span className="text-sm font-medium">{day.date}</span>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="tabular-nums">{total} jobs</span>
-          {successCount > 0 && (
-            <span className="text-profit tabular-nums">{successCount} passed</span>
-          )}
-          {failedCount > 0 && (
-            <span className="text-loss tabular-nums">{failedCount} failed</span>
-          )}
-          {missedCount > 0 && (
-            <span className="text-yellow-500 tabular-nums">{missedCount} missed</span>
-          )}
-        </div>
+    <div>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+        <span className="tabular-nums">{total} jobs</span>
+        {successCount > 0 && (
+          <span className="text-profit tabular-nums">• {successCount} passed</span>
+        )}
+        {failedCount > 0 && (
+          <span className="text-loss tabular-nums">• {failedCount} failed</span>
+        )}
+        {missedCount > 0 && (
+          <span className="text-yellow-500 tabular-nums">• {missedCount} missed</span>
+        )}
       </div>
 
-      <div className="p-3 space-y-0">
+      <div className="space-y-0">
         {grouped.map((group) => (
           <div key={group.phase}>
             <div className="flex items-center gap-2 pt-2 pb-1 first:pt-0">

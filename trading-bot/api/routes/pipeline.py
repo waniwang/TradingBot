@@ -10,8 +10,19 @@ from pathlib import Path
 
 from fastapi import APIRouter, Query
 
+from fastapi import HTTPException
+
 from api.constants import PIPELINE_SCHEDULE, JOB_LABELS, PHASE_META, PHASE_ORDER, job_to_strategy
-from db.models import JobExecution, get_engine, get_session
+from db.models import (
+    JobExecution,
+    Watchlist,
+    Signal,
+    Order,
+    Position,
+    DailyPnl,
+    get_engine,
+    get_session,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -327,4 +338,228 @@ def get_pipeline_history(days: int = Query(14, ge=1, le=30)):
     return {
         "days": result_days,
         "recent_executions": all_executions[:20],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Job detail enrichment
+# ---------------------------------------------------------------------------
+
+# Map job_id -> the setup_type / strategy name used in Watchlist, Position, etc.
+_JOB_STRATEGY_SETUP = {
+    "breakout_nightly_scan": "breakout",
+    "ep_earnings_scan": "ep_earnings",
+    "ep_news_scan": "ep_news",
+    "ep_earnings_execute": "ep_earnings",
+    "ep_news_execute": "ep_news",
+}
+
+
+def _et_day_range_utc(trade_date: date) -> tuple[datetime, datetime]:
+    """Return (start_utc, end_utc) covering the ET trading day for trade_date."""
+    import pytz
+    et = pytz.timezone("America/New_York")
+    start_et = et.localize(datetime.combine(trade_date, datetime.min.time()))
+    end_et = start_et + timedelta(days=1)
+    return start_et.astimezone(timezone.utc), end_et.astimezone(timezone.utc)
+
+
+def _serialize_watchlist(row: Watchlist) -> dict:
+    meta = row.meta or {}
+    # Pull a handful of useful metadata fields when present
+    entry_price = meta.get("entry_price") or meta.get("close") or meta.get("price")
+    gap_pct = meta.get("gap_pct") or meta.get("gap")
+    rvol = meta.get("rvol")
+    mcap = meta.get("market_cap") or meta.get("mcap")
+    return {
+        "ticker": row.ticker,
+        "setup_type": row.setup_type,
+        "stage": row.stage,
+        "entry_price": entry_price,
+        "gap_pct": gap_pct,
+        "rvol": rvol,
+        "market_cap": mcap,
+        "notes": row.notes,
+    }
+
+
+def _serialize_signal(sig: Signal, order: Order | None) -> dict:
+    return {
+        "ticker": sig.ticker,
+        "setup_type": sig.setup_type,
+        "entry_price": sig.entry_price,
+        "stop_price": sig.stop_price,
+        "gap_pct": sig.gap_pct,
+        "acted_on": sig.acted_on,
+        "fired_at": sig.fired_at.isoformat() if sig.fired_at else None,
+        "order": (
+            {
+                "id": order.id,
+                "side": order.side,
+                "qty": order.qty,
+                "price": order.price,
+                "status": order.status,
+                "filled_qty": order.filled_qty,
+                "filled_avg_price": order.filled_avg_price,
+            }
+            if order
+            else None
+        ),
+    }
+
+
+def _serialize_position_closed(p: Position) -> dict:
+    return {
+        "ticker": p.ticker,
+        "setup_type": p.setup_type,
+        "side": p.side,
+        "shares": p.shares,
+        "entry_price": p.entry_price,
+        "exit_price": p.exit_price,
+        "exit_reason": p.exit_reason,
+        "realized_pnl": p.realized_pnl,
+        "opened_at": p.opened_at.isoformat() if p.opened_at else None,
+        "closed_at": p.closed_at.isoformat() if p.closed_at else None,
+    }
+
+
+def _enrich_scan_job(session, job_id: str, trade_date: date) -> dict:
+    """Enrichment for scan jobs: return Watchlist entries for the trade_date."""
+    q = session.query(Watchlist).filter(Watchlist.scan_date == trade_date)
+
+    setup_type = _JOB_STRATEGY_SETUP.get(job_id)
+    if setup_type:
+        q = q.filter(Watchlist.setup_type == setup_type)
+    else:
+        # premarket_scan / subscribe_watchlist: all stage=active for that day
+        q = q.filter(Watchlist.stage.in_(("active", "triggered")))
+
+    rows = q.order_by(Watchlist.setup_type, Watchlist.ticker).all()
+
+    tickers = [_serialize_watchlist(r) for r in rows]
+    breakdown: dict[str, int] = {}
+    for r in rows:
+        breakdown[r.setup_type] = breakdown.get(r.setup_type, 0) + 1
+
+    return {"tickers": tickers, "strategy_breakdown": breakdown}
+
+
+def _enrich_execute_job(session, job_id: str, trade_date: date) -> dict:
+    """Enrichment for execute jobs: return signals + their orders."""
+    setup_type = _JOB_STRATEGY_SETUP.get(job_id)
+    start_utc, end_utc = _et_day_range_utc(trade_date)
+
+    q = session.query(Signal).filter(
+        Signal.fired_at >= start_utc.replace(tzinfo=None),
+        Signal.fired_at < end_utc.replace(tzinfo=None),
+    )
+    if setup_type:
+        q = q.filter(Signal.setup_type == setup_type)
+
+    signals = q.order_by(Signal.fired_at).all()
+
+    out = []
+    for sig in signals:
+        order = sig.orders[0] if sig.orders else None
+        out.append(_serialize_signal(sig, order))
+
+    entered = sum(1 for s in signals if s.acted_on)
+    return {
+        "signals": out,
+        "entered_count": entered,
+        "signal_count": len(signals),
+    }
+
+
+def _enrich_monitor_job(session, trade_date: date) -> dict:
+    """Enrichment for intraday_monitor / eod_tasks: positions closed that day."""
+    start_utc, end_utc = _et_day_range_utc(trade_date)
+    rows = (
+        session.query(Position)
+        .filter(
+            Position.is_open == False,  # noqa: E712
+            Position.closed_at >= start_utc.replace(tzinfo=None),
+            Position.closed_at < end_utc.replace(tzinfo=None),
+        )
+        .order_by(Position.closed_at)
+        .all()
+    )
+    positions = [_serialize_position_closed(p) for p in rows]
+
+    daily = (
+        session.query(DailyPnl)
+        .filter(DailyPnl.trade_date == trade_date)
+        .first()
+    )
+    daily_pnl = None
+    if daily:
+        daily_pnl = {
+            "realized_pnl": daily.realized_pnl,
+            "unrealized_pnl": daily.unrealized_pnl,
+            "total_pnl": daily.total_pnl,
+            "portfolio_value": daily.portfolio_value,
+            "num_trades": daily.num_trades,
+            "num_winners": daily.num_winners,
+            "num_losers": daily.num_losers,
+        }
+    return {"positions_closed": positions, "daily_pnl": daily_pnl}
+
+
+def _schedule_meta(job_id: str) -> dict | None:
+    for entry in PIPELINE_SCHEDULE:
+        if entry["job_id"] == job_id:
+            return entry
+    return None
+
+
+@router.get("/pipeline/job-detail")
+def get_pipeline_job_detail(
+    job_id: str = Query(..., description="Job identifier (e.g., premarket_scan)"),
+    trade_date: str = Query(..., description="YYYY-MM-DD trade date"),
+):
+    """Return enriched detail for a single job run: tickers, signals, positions closed."""
+    meta = _schedule_meta(job_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
+
+    try:
+        trade_date_obj = datetime.strptime(trade_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="trade_date must be YYYY-MM-DD")
+
+    engine = get_engine()
+    with get_session(engine) as session:
+        exec_row = (
+            session.query(JobExecution)
+            .filter(
+                JobExecution.job_id == job_id,
+                JobExecution.trade_date == trade_date_obj,
+            )
+            .order_by(JobExecution.started_at.desc())
+            .first()
+        )
+        execution = _serialize_execution(exec_row, include_error=True) if exec_row else None
+
+        category = meta["category"]
+        enrichment: dict = {}
+        if category == "scan":
+            enrichment = _enrich_scan_job(session, job_id, trade_date_obj)
+        elif category == "trade":
+            enrichment = _enrich_execute_job(session, job_id, trade_date_obj)
+        elif category == "monitor" or job_id == "eod_tasks":
+            enrichment = _enrich_monitor_job(session, trade_date_obj)
+        elif job_id == "subscribe_watchlist":
+            enrichment = _enrich_scan_job(session, job_id, trade_date_obj)
+
+    return {
+        "job_id": job_id,
+        "label": meta["label"],
+        "phase": meta["phase"],
+        "category": category,
+        "description": meta["description"],
+        "scheduled_time": meta["time"],
+        "strategy": job_to_strategy(job_id),
+        "trade_date": str(trade_date_obj),
+        "execution": execution,
+        **enrichment,
     }

@@ -9,6 +9,12 @@ import { PipelineDayDetail } from "@/components/dashboard/pipeline-day-detail";
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
 import { PipelineJobDetailModal } from "@/components/dashboard/pipeline-job-detail-modal";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type { BotStatus, PipelineData, PipelineHistoryResponse, SelectedPipelineJob, StrategyListResponse, StrategyInfo } from "@/lib/types";
 
 export default function PipelinePage() {
@@ -110,15 +116,26 @@ export default function PipelinePage() {
             <div className="h-16 animate-pulse rounded-lg bg-muted" />
           )}
 
-          {/* Selected day detail */}
-          <PipelineDayDetail
-            day={selectedDay}
-            onSelectJob={setSelectedJob}
-            strategyFilter={strategyFilter}
-            disabledStrategySlugs={disabledStrategySlugs}
-          />
-
         </section>
+
+        {/* Day detail modal (opens when a date is clicked in the calendar) */}
+        <Dialog
+          open={!!selectedDay}
+          onOpenChange={(open) => !open && setSelectedDate(null)}
+        >
+          <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-auto">
+            <DialogHeader>
+              <DialogTitle>{selectedDay?.date}</DialogTitle>
+            </DialogHeader>
+            <PipelineDayDetail
+              day={selectedDay}
+              onSelectJob={setSelectedJob}
+              strategyFilter={strategyFilter}
+              disabledStrategySlugs={disabledStrategySlugs}
+            />
+          </DialogContent>
+        </Dialog>
+
         <PipelineJobDetailModal
           job={selectedJob}
           onClose={() => setSelectedJob(null)}
