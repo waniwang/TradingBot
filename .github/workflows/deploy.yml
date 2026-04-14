@@ -16,7 +16,4 @@ jobs:
           username: root
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            cd /opt/trading-bot
-            git fetch origin main
-            git reset --hard origin/main
             /opt/trading-bot/trading-bot/scripts/server-deploy.sh

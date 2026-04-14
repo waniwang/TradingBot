@@ -12,7 +12,8 @@
 
 SERVER="root@172.235.216.175"
 SSH="ssh -o StrictHostKeyChecking=no $SERVER"
-REMOTE_DIR="/opt/trading-bot"
+REMOTE_REPO="/opt/trading-bot"
+REMOTE_DIR="$REMOTE_REPO/trading-bot"
 
 # PID files for local mode
 BOT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -116,10 +117,10 @@ server_status() {
   bot=$(systemctl is-active trading-bot)
   echo "  trading-bot:       $bot"
   echo ""
-  if [ -f /opt/trading-bot/bot_status.json ]; then
+  if [ -f /opt/trading-bot/trading-bot/bot_status.json ]; then
     python3 -c "
 import json, datetime, sys
-d = json.load(open('/opt/trading-bot/bot_status.json'))
+d = json.load(open('/opt/trading-bot/trading-bot/bot_status.json'))
 hb = d.get('last_heartbeat','')
 if hb:
     dt = datetime.datetime.fromisoformat(hb)
@@ -212,7 +213,7 @@ print('yes' if in_hours else 'no')
       echo "      This manual deploy is a fallback."
       echo ""
       echo "==> Running deploy on server..."
-      $SSH "bash $REMOTE_DIR/trading-bot/scripts/server-deploy.sh"
+      $SSH "bash $REMOTE_DIR/scripts/server-deploy.sh"
 
       echo ""
       echo "==> Recent logs:"

@@ -1,8 +1,11 @@
 #!/bin/bash
-# server-deploy.sh — Called by GitHub Actions (or manually via bot.sh deploy)
+# server-deploy.sh — Called by GitHub Actions (or manually via bot.sh deploy).
 # Pulls latest code, runs migrations, restarts services only if already active.
 #
-# Usage: /opt/trading-bot/scripts/server-deploy.sh
+# Services run directly from /opt/trading-bot/trading-bot (the git-tracked
+# project root). No rsync-to-root step — single source tree, single instance.
+#
+# Usage: /opt/trading-bot/trading-bot/scripts/server-deploy.sh
 
 set -euo pipefail
 
@@ -21,18 +24,8 @@ git fetch origin main
 git reset --hard origin/main
 log "Code updated to $(git rev-parse --short HEAD)"
 
-# --- 1b. Sync trading-bot/ contents to working root ---
-# The git repo has code under trading-bot/ but services run from /opt/trading-bot/
-log "Syncing trading-bot/ to working root..."
-rsync -a --exclude=".venv" --exclude="__pycache__" --exclude="*.db" --exclude="*.log" \
-    --exclude=".env" --exclude="config.yaml" --exclude="bot_status.json" \
-    --exclude="trading-bot" \
-    --exclude=".git" --exclude="dashboard" --exclude="docs" --exclude=".github" \
-    trading-bot/ .
-
 # --- 2. Run DB migrations (skip if alembic not installed) ---
 cd "$APP_DIR"
-source .env 2>/dev/null || true
 if [ -f .venv/bin/alembic ]; then
     log "Running alembic migrations..."
     .venv/bin/alembic upgrade head 2>&1 | tee -a "$LOG_FILE"
