@@ -7,18 +7,21 @@ import { useEffect, useRef, useCallback, useState } from "react";
  */
 function isMarketHours(): boolean {
   const now = new Date();
-  const day = now.getUTCDay();
-  if (day === 0 || day === 6) return false;
-
-  // Convert to approximate ET
-  const jan = new Date(now.getFullYear(), 0, 1).getTimezoneOffset();
-  const jul = new Date(now.getFullYear(), 6, 1).getTimezoneOffset();
-  const isDST = now.getTimezoneOffset() < Math.max(jan, jul);
-  const etOffsetHours = isDST ? -4 : -5;
-  const etHour = (now.getUTCHours() + 24 + etOffsetHours) % 24;
-  const etMin = now.getUTCMinutes();
-  const etMinutes = etHour * 60 + etMin;
-
+  // Resolve day-of-week and time in America/New_York using Intl so US DST
+  // is applied correctly regardless of the viewer's local timezone.
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const weekday = parts.find((p) => p.type === "weekday")?.value;
+  if (weekday === "Sat" || weekday === "Sun") return false;
+  const hRaw = parseInt(parts.find((p) => p.type === "hour")!.value, 10);
+  const h = hRaw === 24 ? 0 : hRaw;
+  const m = parseInt(parts.find((p) => p.type === "minute")!.value, 10);
+  const etMinutes = h * 60 + m;
   return etMinutes >= 9 * 60 + 30 && etMinutes <= 16 * 60;
 }
 

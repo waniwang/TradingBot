@@ -39,10 +39,8 @@ export function deriveSteps(data: PipelineData): TimelineStep[] {
     return toMin(a.time) - toMin(b.time);
   });
 
-  const now = new Date();
-  const etOffset = getETOffset();
-  const etNow = new Date(now.getTime() + etOffset);
-  const nowMinutes = etNow.getHours() * 60 + etNow.getMinutes();
+  const et = getETHoursMinutes();
+  const nowMinutes = et.hour * 60 + et.minute;
 
   return sorted.map((job) => {
     const exec = execMap.get(job.job_id) || null;
@@ -85,13 +83,19 @@ export function deriveSteps(data: PipelineData): TimelineStep[] {
   });
 }
 
-export function getETOffset(): number {
-  const jan = new Date(new Date().getFullYear(), 0, 1).getTimezoneOffset();
-  const jul = new Date(new Date().getFullYear(), 6, 1).getTimezoneOffset();
-  const isDST = new Date().getTimezoneOffset() < Math.max(jan, jul);
-  const etOffsetHours = isDST ? -4 : -5;
-  const localOffsetMinutes = new Date().getTimezoneOffset();
-  return (localOffsetMinutes + etOffsetHours * 60) * 60 * 1000;
+/** Return the current time in US/Eastern as {hour, minute} (0-23, 0-59).
+ *  Uses Intl so US DST rules are applied regardless of the viewer's timezone. */
+export function getETHoursMinutes(d: Date = new Date()): { hour: number; minute: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const hRaw = parseInt(parts.find((p) => p.type === "hour")!.value, 10);
+  const hour = hRaw === 24 ? 0 : hRaw; // Intl can emit "24" for midnight
+  const minute = parseInt(parts.find((p) => p.type === "minute")!.value, 10);
+  return { hour, minute };
 }
 
 export function formatDuration(seconds: number): string {
@@ -119,10 +123,8 @@ function formatCountdown(seconds: number): string {
 }
 
 function getCurrentETMinutes(): number {
-  const now = new Date();
-  const etOffset = getETOffset();
-  const etNow = new Date(now.getTime() + etOffset);
-  return etNow.getHours() * 60 + etNow.getMinutes();
+  const { hour, minute } = getETHoursMinutes();
+  return hour * 60 + minute;
 }
 
 function formatETTime(minutes: number): string {
