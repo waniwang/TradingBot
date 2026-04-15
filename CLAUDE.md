@@ -184,6 +184,8 @@ cd dashboard && npm run dev
 
 EP earnings and EP news swing strategies are now integrated into the bot as strategy plugins (`strategies/ep_earnings/` and `strategies/ep_news/`).
 
+**Execution is DB-driven and crash-safe.** `job_scan` (15:00) persists A/B as `Watchlist(stage="ready")` and C as `Watchlist(stage="watching")`. `job_day2_confirm` (15:45) flips confirmed C → `stage="ready"` with execution payload in `meta`. `job_execute` (15:50) reads ready rows from the DB — nothing held in memory, so a process restart between scan/confirm and execute is safe. `verify_day.py` Check 19 surfaces any drops.
+
 ### EP Earnings Strategy A (Tight Filters): 69% WR, +9.18% avg, PF 5.68
 1. CHG-OPEN% > 0 (positive intraday)
 2. close_in_range >= 50 (closed in top half of range)

@@ -4,10 +4,21 @@ EOD long swing on earnings gap-ups. Scans at 3 PM, enters near close at 3:50 PM.
 
 ## Flow
 
-1. **3:00 PM** — `scanner.py` finds earnings gappers, `strategy.py` evaluates A/B/C filters
-2. **3:45 PM** — Day-2 confirmation check for yesterday's Strategy C candidates
-3. **3:50 PM** — Plugin executes entries (A/B from today + confirmed C from yesterday)
-4. **Ongoing** — -7% stop, max hold (50d for A/B, 20d for C), shared exit logic
+1. **3:00 PM** — `scanner.py` finds earnings gappers, `strategy.py` evaluates A/B/C filters. A/B entries are persisted as `Watchlist(stage="ready")` with the full execution payload in `metadata_json`. Strategy C candidates are persisted as `Watchlist(stage="watching")` with `meta.day2_confirm=true`.
+2. **3:45 PM** — `job_day2_confirm` snapshots prices for yesterday's `watching` C rows. Confirmed (price > gap-day close) → flips to `stage="ready"` and writes `entry_price`/`stop_price`/`day1_return_pct` into `meta`. Rejected → `stage="expired"`.
+3. **3:50 PM** — `job_execute` queries `Watchlist.stage="ready"` for `setup_type="ep_earnings"` and places orders. **DB-driven** — nothing is held in memory between scan/confirm and execute, so a process restart is safe.
+4. **Ongoing** — -7% stop, max hold (50d for A/B, 20d for C), shared exit logic.
+
+### Watchlist stage semantics
+
+| Stage | Meaning |
+|-------|---------|
+| `watching` | Strategy C candidate awaiting day-2 confirmation |
+| `ready` | Staged for the next 15:50 execution (A/B from today, or C confirmed from yesterday) |
+| `triggered` | Order placed (set by `mark_triggered` after `_execute_entry` succeeds) |
+| `expired` | Day-2 rejected, or EOD without trigger |
+
+The same Watchlist row carries `setup_type="ep_earnings"` whether the eventual signal is A, B, or C — the strategy variant lives in `meta.ep_strategy`. When `_execute_entry` flips the row to `triggered`, plugins pass `watchlist_setup_type="ep_earnings"` so the C-flavored signal `setup_type="ep_earnings_c"` doesn't break the alignment.
 
 ## Scanner Filters (`scanner.py`)
 

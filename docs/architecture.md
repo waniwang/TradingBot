@@ -71,8 +71,9 @@ Strategy Scanners                 Strategy Signals               Monitor (intrad
 | 6:00 AM | Premarket scan (EP gappers, promote breakout, pre-fetch bars) | `main.py` |
 | 9:25 AM | Finalize watchlist, subscribe to Alpaca real-time bars | `main.py` |
 | 9:30 AM | Start intraday monitor (signal evaluation on 1m bars) | `main.py` |
-| 3:00 PM | EP earnings + EP news scan + strategy evaluation | `ep_earnings/plugin.py`, `ep_news/plugin.py` |
-| 3:50 PM | EP earnings + EP news execute entries | `ep_earnings/plugin.py`, `ep_news/plugin.py` |
+| 3:00 PM | EP earnings + EP news scan + strategy evaluation (A/B → `Watchlist(stage="ready")`, C → `Watchlist(stage="watching")`) | `ep_earnings/plugin.py`, `ep_news/plugin.py` |
+| 3:45 PM | EP earnings + EP news day-2 confirmation (`watching` → `ready` if 1D return > 0) | `ep_earnings/plugin.py`, `ep_news/plugin.py` |
+| 3:50 PM | EP earnings + EP news execute entries — reads `stage="ready"` rows from DB (no in-memory state, restart-safe) | `ep_earnings/plugin.py`, `ep_news/plugin.py` |
 | 3:55 PM | EOD tasks (trailing stops, MA-close exits, P&L, Telegram) | `main.py` |
 | Every 5 min (9-15h) | Reconcile positions (broker sync) | `main.py` |
 | Every 30s | Heartbeat (`bot_status.json` for dashboard) | `main.py` |

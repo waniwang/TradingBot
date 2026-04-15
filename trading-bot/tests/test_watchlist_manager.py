@@ -578,6 +578,43 @@ class TestMarkTriggered:
             assert ep.stage == "triggered"
             assert bo.stage == "active"  # untouched
 
+    def test_setup_type_alignment_for_strategy_c(self, db_engine):
+        """Watchlist row is persisted as 'ep_earnings' but Strategy C signals fire as
+        'ep_earnings_c'. Plugins pass watchlist_setup_type='ep_earnings' to mark_triggered
+        so the row still gets updated."""
+        with get_session(db_engine) as session:
+            session.add(Watchlist(
+                ticker="LEVI", setup_type="ep_earnings", stage="ready",
+                scan_date=date.today(),
+                added_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+                stage_changed_at=datetime.utcnow(),
+            ))
+            session.commit()
+
+        # Caller passes the watchlist's setup_type, NOT the signal's setup_type
+        result = mark_triggered("LEVI", db_engine, setup_type="ep_earnings")
+        assert result is True
+
+        with get_session(db_engine) as session:
+            row = session.query(Watchlist).filter_by(ticker="LEVI").first()
+            assert row.stage == "triggered"
+
+        # Sanity: passing the C-flavored setup_type would NOT find the row,
+        # which is exactly why _execute_entry takes a watchlist_setup_type override.
+        with get_session(db_engine) as session:
+            session.add(Watchlist(
+                ticker="LEVI2", setup_type="ep_earnings", stage="ready",
+                scan_date=date.today(),
+                added_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+                stage_changed_at=datetime.utcnow(),
+            ))
+            session.commit()
+        result_wrong = mark_triggered("LEVI2", db_engine, setup_type="ep_earnings_c")
+        assert result_wrong is False
+        with get_session(db_engine) as session:
+            row = session.query(Watchlist).filter_by(ticker="LEVI2").first()
+            assert row.stage == "ready"
+
 
 # ---------------------------------------------------------------------------
 # get_pipeline_counts tests

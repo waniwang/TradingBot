@@ -495,6 +495,54 @@ def run_checks(
             "PASS", f"{len(concurrent)} concurrent (limit={max_positions})",
         ))
 
+    # ── Check 19: EP execution drop ─────────────────────────────────────
+    # Catches the failure mode where a Strategy A/B/C entry was persisted as
+    # stage="ready" (A/B at scan, C after day-2 confirm) but job_execute didn't
+    # fire it — typically because the bot restarted between scan/confirm and
+    # execute. Also flags rows marked stage="triggered" today with no matching
+    # Signal, which would indicate the watchlist row was advanced without an
+    # actual order being placed.
+    ep_setups = ("ep_earnings", "ep_news")
+    with get_session(engine) as session:
+        ready_orphans = (
+            session.query(Watchlist)
+            .filter(
+                Watchlist.setup_type.in_(ep_setups),
+                Watchlist.stage == "ready",
+                Watchlist.scan_date <= target_date,
+            )
+            .all()
+        )
+        triggered_today = (
+            session.query(Watchlist)
+            .filter(
+                Watchlist.setup_type.in_(ep_setups),
+                Watchlist.stage == "triggered",
+                Watchlist.stage_changed_at >= day_start,
+                Watchlist.stage_changed_at < day_end,
+            )
+            .all()
+        )
+        ready_summary = [
+            f"{w.ticker} ({w.setup_type}, scan={w.scan_date})" for w in ready_orphans
+        ]
+        signal_tickers = {
+            s.ticker for s in signals
+            if s.setup_type and any(s.setup_type.startswith(p) for p in ep_setups)
+        }
+        triggered_orphans = [w for w in triggered_today if w.ticker not in signal_tickers]
+        triggered_summary = [
+            f"{w.ticker} ({w.setup_type})" for w in triggered_orphans
+        ]
+    drops = ready_summary + triggered_summary
+    if drops:
+        results.append(CheckResult(
+            19, "EP execution drop", "FAIL",
+            f"{len(drops)} unexecuted: {'; '.join(drops[:8])}",
+        ))
+    else:
+        results.append(CheckResult(19, "EP execution drop", "PASS"))
+
     return results
 
 

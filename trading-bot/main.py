@@ -708,8 +708,13 @@ def _await_fill_and_setup_stop(
         logger.info("Stop order placed for %s: %s", ticker, broker_stop_id)
 
 
-def _execute_entry(ticker, signal, shares, client, db_engine, notify):
-    """Place the entry limit order, record to DB, then wait for fill in background."""
+def _execute_entry(ticker, signal, shares, client, db_engine, notify, watchlist_setup_type=None):
+    """Place the entry limit order, record to DB, then wait for fill in background.
+
+    `watchlist_setup_type` lets callers flip a Watchlist row whose setup_type differs from
+    the Signal's (e.g. Strategy C executes as `ep_earnings_c` but the Watchlist row was
+    persisted as `ep_earnings`). Defaults to `signal.setup_type`.
+    """
     import threading
     from db.models import Signal as DbSignal, Order
 
@@ -754,7 +759,10 @@ def _execute_entry(ticker, signal, shares, client, db_engine, notify):
     # Mark watchlist entry as triggered (all setup types)
     if _db_engine is not None:
         try:
-            mark_triggered(ticker, _db_engine, setup_type=signal.setup_type)
+            mark_triggered(
+                ticker, _db_engine,
+                setup_type=watchlist_setup_type or signal.setup_type,
+            )
         except Exception as e:
             logger.warning("Failed to mark %s as triggered in watchlist: %s", ticker, e)
 

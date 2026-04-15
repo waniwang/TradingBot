@@ -4,12 +4,16 @@ EOD long swing on news-driven (non-earnings) gap-ups. Same timing as EP Earnings
 
 ## Flow
 
-1. **3:05 PM** — `scanner.py` finds news gappers (excludes earnings), `strategy.py` evaluates A/B/C filters
-2. **3:45 PM** — Day-2 confirmation check for yesterday's Strategy C candidates
-3. **3:50 PM** — Plugin executes entries (A/B from today + confirmed C from yesterday)
-4. **Ongoing** — Stop per strategy tier, max hold (50d for A/B, 20d for C)
+1. **3:05 PM** — `scanner.py` finds news gappers (excludes earnings), `strategy.py` evaluates A/B/C filters. A/B → `Watchlist(stage="ready")`, C → `Watchlist(stage="watching", meta.day2_confirm=true)`.
+2. **3:45 PM** — `job_day2_confirm` snapshots prices for yesterday's `watching` C rows; confirmed → flips to `stage="ready"` with execution payload in `meta`; rejected → `stage="expired"`.
+3. **3:50 PM** — `job_execute` queries `Watchlist.stage="ready"` and places orders. **DB-driven** — no in-memory state between jobs, so a process restart is safe.
+4. **Ongoing** — Stop per strategy tier, max hold (50d for A/B, 20d for C).
 
 **Note:** EP News scans at 3:05 PM (offset from EP Earnings at 3:00 PM) to avoid yfinance rate limiting from simultaneous per-ticker API calls.
+
+### Watchlist stage semantics
+
+Same as EP Earnings — `watching` (C pending) → `ready` (staged for execution) → `triggered` (order placed) → `expired`. Strategy variant lives in `meta.ep_strategy`. Plugins pass `watchlist_setup_type="ep_news"` to `_execute_entry` so the C-flavored signal `setup_type="ep_news_c"` still flips the right Watchlist row.
 
 ## Scanner Filters (`scanner.py`)
 

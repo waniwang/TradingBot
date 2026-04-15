@@ -63,9 +63,6 @@ class EPEarningsPlugin:
         ),
     ]
 
-    def __init__(self):
-        self._staged_entries: list[dict] = []
-
     def premarket_scan(self, config, client, db_engine, notify) -> list[dict]:
         return []  # EP earnings scans at 3 PM, not premarket
 
@@ -128,11 +125,9 @@ class EPEarningsPlugin:
             if immediate or pending_c:
                 persist_candidates(candidates, "ep_earnings", "active", today, db_engine)
 
-            # Stage A/B entries for execution at 3:50 PM
-            if immediate:
-                self._staged_entries = immediate
-                for entry in immediate:
-                    self._persist_entry(entry, today, db_engine)
+            # Persist A/B entries to DB as stage="ready" — job_execute reads them at 3:50 PM
+            for entry in immediate:
+                self._persist_entry(entry, today, db_engine)
 
             # Persist C candidates as "watching" (pending day-2 confirmation)
             for entry in pending_c:
@@ -176,21 +171,43 @@ class EPEarningsPlugin:
             raise
 
     def job_execute(self, config, client, db_engine, notify):
-        """3:50 PM ET — execute entries staged by the 3:00 PM scan."""
+        """3:50 PM ET — execute entries persisted as stage='ready' in the watchlist.
+
+        DB-driven: any A/B from today's scan and any C confirmed at 15:45 will be
+        flagged stage='ready' with the execution payload in metadata_json. This is
+        crash-safe — a process restart between scan/confirm and execute is recoverable
+        because nothing is held in memory.
+        """
         from main import is_trading_day, _execute_entry, _compute_current_daily_pnl, _compute_current_weekly_pnl
         from signals.base import SignalResult
         from risk.manager import RiskManager
-        from db.models import Position, get_session
+        from db.models import Position, Watchlist, get_session
 
         if not is_trading_day(client):
             return "Skipped — not a trading day"
 
-        entries = self._staged_entries
+        today = datetime.now(ET).date()
+
+        # Load entries from DB, not memory
+        entries: list[dict] = []
+        with get_session(db_engine) as session:
+            rows = session.query(Watchlist).filter(
+                Watchlist.setup_type == "ep_earnings",
+                Watchlist.stage == "ready",
+                Watchlist.scan_date <= today,
+            ).all()
+            for wl in rows:
+                meta = wl.meta or {}
+                if not meta.get("ep_strategy"):
+                    logger.warning("EP earnings: ready row %s has no ep_strategy in meta, skipping", wl.ticker)
+                    continue
+                entries.append({"ticker": wl.ticker, **meta})
+
         if not entries:
-            logger.info("EP earnings execute: no entries to execute")
+            logger.info("EP earnings execute: no ready rows in watchlist")
             return "No entries staged"
 
-        logger.info("=== EP EARNINGS EXECUTE: %d entries ===", len(entries))
+        logger.info("=== EP EARNINGS EXECUTE: %d ready rows ===", len(entries))
         risk = RiskManager(config)
 
         # Group by ticker: if same stock passes both A and B, enter once
@@ -261,15 +278,15 @@ class EPEarningsPlugin:
                 "EP earnings entry: %s (%s) %d shares @ $%.2f stop $%.2f",
                 ticker, strategy_label, shares, signal.entry_price, signal.stop_price,
             )
-            _execute_entry(ticker, signal, shares, client, db_engine, notify)
+            _execute_entry(
+                ticker, signal, shares, client, db_engine, notify,
+                watchlist_setup_type="ep_earnings",
+            )
             executed += 1
-
-        self._staged_entries = []
 
         if notify:
             notify(f"EP EARNINGS EXECUTE: {executed}/{len(by_ticker)} tickers entered")
 
-        entered_tickers = [t for t, el in by_ticker.items() if any(True for _ in el)]
         return f"{executed}/{len(by_ticker)} entered: {', '.join(list(by_ticker.keys()))}"
 
     def job_day2_confirm(self, config, client, db_engine, notify):
@@ -328,37 +345,27 @@ class EPEarningsPlugin:
                 if current_price > gap_day_close:
                     stop_pct = meta.get("stop_loss_pct", 7.0)
                     stop_price = round(current_price * (1 - stop_pct / 100), 2)
+                    day1_return_pct = round((current_price - gap_day_close) / gap_day_close * 100, 2)
 
-                    entry = {
-                        "ticker": ticker,
-                        "setup_type": "ep_earnings_c",
+                    # Promote to "ready" — job_execute at 3:50 PM picks this up from DB.
+                    # Update meta with the execution payload so execute can rebuild the entry
+                    # without depending on any in-memory state.
+                    meta.update({
                         "ep_strategy": "C",
                         "entry_price": current_price,
                         "stop_price": stop_price,
                         "stop_loss_pct": stop_pct,
                         "max_hold_days": meta.get("max_hold_days", 20),
-                        "gap_pct": meta.get("gap_pct", 0),
-                        "open_price": meta.get("open_price", 0),
-                        "prev_close": meta.get("prev_close", 0),
-                        "prev_high": meta.get("prev_high", 0),
                         "current_price": current_price,
                         "today_volume": 0,
-                        "market_cap": meta.get("market_cap", 0),
-                        "rvol": meta.get("rvol", 0),
-                        "chg_open_pct": meta.get("chg_open_pct", 0),
-                        "close_in_range": meta.get("close_in_range", 0),
-                        "downside_from_open": meta.get("downside_from_open", 0),
-                        "prev_10d_change_pct": meta.get("prev_10d_change_pct", 0),
-                        "atr_pct": meta.get("atr_pct", 0),
-                        "gap_day_close": gap_day_close,
-                        "day1_return_pct": round((current_price - gap_day_close) / gap_day_close * 100, 2),
-                    }
-                    confirmed.append(entry)
-                    wl.stage = "triggered"
+                        "day1_return_pct": day1_return_pct,
+                    })
+                    wl.meta = meta
+                    wl.stage = "ready"
+                    confirmed.append({"ticker": ticker, **meta})
                     logger.info(
-                        "%s: Day-2 CONFIRMED — price $%.2f > gap close $%.2f (+%.1f%%)",
-                        ticker, current_price, gap_day_close,
-                        (current_price - gap_day_close) / gap_day_close * 100,
+                        "%s: Day-2 CONFIRMED — price $%.2f > gap close $%.2f (+%.1f%%) — promoted to ready",
+                        ticker, current_price, gap_day_close, day1_return_pct,
                     )
                 else:
                     wl.stage = "expired"
@@ -370,17 +377,14 @@ class EPEarningsPlugin:
 
             session.commit()
 
-        # Stage confirmed entries for execution at 3:50 PM
-        if confirmed:
-            self._staged_entries.extend(confirmed)
-            if notify:
-                lines = [f"EP EARNINGS DAY-2 CONFIRM: {len(confirmed)} confirmed"]
-                for e in confirmed:
-                    lines.append(
-                        f"  {e['ticker']}: entry ${e['entry_price']:.2f}, "
-                        f"stop ${e['stop_price']:.2f}, 1D return +{e['day1_return_pct']:.1f}%"
-                    )
-                notify("\n".join(lines))
+        if confirmed and notify:
+            lines = [f"EP EARNINGS DAY-2 CONFIRM: {len(confirmed)} confirmed"]
+            for e in confirmed:
+                lines.append(
+                    f"  {e['ticker']}: entry ${e['entry_price']:.2f}, "
+                    f"stop ${e['stop_price']:.2f}, 1D return +{e['day1_return_pct']:.1f}%"
+                )
+            notify("\n".join(lines))
 
         return f"{len(confirmed)} confirmed from {len(pending)} pending"
 
