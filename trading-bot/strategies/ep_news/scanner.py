@@ -6,16 +6,16 @@ Applies the same Spikeet-derived universe filters as the EP Earnings scanner,
 but EXCLUDES stocks that had earnings today (those are handled by ep_earnings.py).
 
 Filters (in order):
-  Phase A (Alpaca, fast):
-    1. Security class heuristic (alpha symbols <= 5 chars)
-    2. Previous close > min price ($3)
-    3. Gap% > 8% (actual Open vs prev Close)
-    4. Open > yesterday's high
+  Phase A (broad universe via yfinance, then broker snapshots):
+    1. Broad-universe gap pre-screen (yfinance): gap% >= 8%, prev_close >= $3
+    2. Security class heuristic (alpha symbols <= 5 chars)
+    3. Broker snapshot refresh (real-time prev_close/open/volume)
+    4. Gap% >= 8% (actual Open vs prev Close)
+    5. Open > yesterday's high
 
   Phase B (yfinance daily bars, batch):
     5. Open > 200-day SMA
-    6. Today's RVOL > 1.0 (today's volume / 14d avg daily volume)
-    7. Prior 6-month gain < 50%
+    (RVOL is computed for enrichment but NOT filtered — Spikeet picks often have RVOL < 1)
 
   Phase C (yfinance per-ticker, slowest):
     8. Market cap >= $1B
@@ -65,14 +65,15 @@ def scan_ep_news(
     exclude_earnings = bool(sig_cfg.get("ep_news_exclude_earnings", True))
     require_open_above_prev_high = bool(sig_cfg.get("ep_news_require_open_above_prev_high", True))
     require_above_200d_sma = bool(sig_cfg.get("ep_news_require_above_200d_sma", True))
-    min_rvol = float(sig_cfg.get("ep_news_min_rvol", 1.0))
 
     # ---------------------------------------------------------------
-    # Phase A: Alpaca screener + snapshot filters (fast)
+    # Phase A: broad-universe gap pre-screen (yfinance) + snapshot filters
     # ---------------------------------------------------------------
-    movers = client.get_market_movers_gainers(top=50)
+    from scanner.gap_screen import scan_broad_gaps
+
+    movers = scan_broad_gaps(min_gap_pct=min_gap_pct, min_price=min_price)
     if not movers:
-        logger.warning("EP News scan: no market movers returned")
+        logger.warning("EP News scan: no broad-universe gap candidates")
         return []
 
     # Symbol validation
@@ -175,29 +176,12 @@ def scan_ep_news(
         else:
             c["sma_200"] = None
 
-        # Filter: today's RVOL (volume at scan time / 14d avg daily volume)
+        # Compute RVOL for display/enrichment (not used as filter — Spikeet picks often have RVOL < 1)
         if len(volumes) >= 14:
             avg_14d_vol = float(np.mean(volumes[-14:]))
-            if avg_14d_vol > 0:
-                rvol = c["today_volume"] / avg_14d_vol
-                if rvol < min_rvol:
-                    logger.debug(
-                        "%s: RVOL %.2f < min %.2f (vol=%d, avg14d=%d), skipping",
-                        sym, rvol, min_rvol, c["today_volume"], int(avg_14d_vol),
-                    )
-                    continue
-                c["rvol"] = round(rvol, 2)
-            else:
-                c["rvol"] = 0.0
+            c["rvol"] = round(c["today_volume"] / avg_14d_vol, 2) if avg_14d_vol > 0 else 0.0
         else:
             c["rvol"] = 0.0
-
-        # Filter: prior 6-month gain < 50%
-        if len(closes) >= 60:
-            prior_gain = (closes[-2] - closes[0]) / closes[0] * 100 if len(closes) >= 2 else 0
-            if prior_gain >= 50:
-                logger.debug("%s: prior 6m gain %.1f%% >= 50%%, skipping", sym, prior_gain)
-                continue
 
         filtered_b.append(c)
 
