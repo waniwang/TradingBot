@@ -22,6 +22,27 @@ from strategies.ep_earnings.strategy import (
 
 
 # ---------------------------------------------------------------------------
+# scan_broad_gaps mock — Phase A pre-screen now uses yfinance directly via
+# scanner/gap_screen.py. We replace it per-test with a controlled list so the
+# suite stays offline. Helpers below also seed legacy
+# `client.get_market_movers_gainers` for any code path that still references it.
+# ---------------------------------------------------------------------------
+
+_GAP_MOVERS: list = []
+
+
+@pytest.fixture(autouse=True)
+def _mock_gap_screen():
+    _GAP_MOVERS.clear()
+
+    def fake_scan(**_):
+        return list(_GAP_MOVERS)
+
+    with patch("scanner.gap_screen.scan_broad_gaps", side_effect=fake_scan):
+        yield
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -87,9 +108,9 @@ def _make_passing_client(
 ):
     """Create a mock client where one stock passes all Phase A + B filters."""
     client = MagicMock()
-    client.get_market_movers_gainers.return_value = [
-        {"symbol": symbol, "percent_change": 15.0, "price": open_price},
-    ]
+    movers = [{"symbol": symbol, "percent_change": 15.0, "price": open_price}]
+    client.get_market_movers_gainers.return_value = movers
+    _GAP_MOVERS[:] = movers  # seed the gap_screen mock for the new code path
     client.get_snapshots.return_value = {
         symbol: _make_snapshot(prev_close, prev_high, open_price, latest_price, daily_volume),
     }
@@ -161,6 +182,7 @@ class TestPhaseAFilters:
         """No market movers returns empty list."""
         client = MagicMock()
         client.get_market_movers_gainers.return_value = []
+        _GAP_MOVERS.clear()
 
         result = scan_ep_earnings(_make_config(), client)
         assert result == []
@@ -168,11 +190,13 @@ class TestPhaseAFilters:
     def test_filters_invalid_symbols(self):
         """Non-alpha and >5 char symbols are filtered out."""
         client = MagicMock()
-        client.get_market_movers_gainers.return_value = [
+        movers = [
             {"symbol": "GOOD", "percent_change": 20.0, "price": 50.0},
             {"symbol": "BAD123", "percent_change": 20.0, "price": 50.0},
             {"symbol": "TOOLONG", "percent_change": 20.0, "price": 50.0},
         ]
+        client.get_market_movers_gainers.return_value = movers
+        _GAP_MOVERS[:] = movers
         client.get_snapshots.return_value = {
             "GOOD": _make_snapshot(40.0, 42.0, 50.0, 52.0, 1_000_000),
         }
@@ -308,11 +332,13 @@ class TestOutputFormat:
     def test_sorted_by_gap_descending(self):
         """Results sorted by gap% descending."""
         client = MagicMock()
-        client.get_market_movers_gainers.return_value = [
+        movers = [
             {"symbol": "AAA", "percent_change": 10.0, "price": 55.0},
             {"symbol": "BBB", "percent_change": 30.0, "price": 70.0},
             {"symbol": "CCC", "percent_change": 20.0, "price": 60.0},
         ]
+        client.get_market_movers_gainers.return_value = movers
+        _GAP_MOVERS[:] = movers
         client.get_snapshots.return_value = {
             "AAA": _make_snapshot(50.0, 52.0, 55.0, 56.0, 1_000_000),
             "BBB": _make_snapshot(50.0, 52.0, 70.0, 72.0, 1_000_000),

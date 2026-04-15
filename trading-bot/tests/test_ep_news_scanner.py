@@ -21,6 +21,23 @@ from strategies.ep_news.strategy import (
 )
 
 
+# Phase A pre-screen now uses yfinance via scanner/gap_screen.py — patch it
+# per-test to keep the suite offline. Helpers seed `_GAP_MOVERS` to control output.
+
+_GAP_MOVERS: list = []
+
+
+@pytest.fixture(autouse=True)
+def _mock_gap_screen():
+    _GAP_MOVERS.clear()
+
+    def fake_scan(**_):
+        return list(_GAP_MOVERS)
+
+    with patch("scanner.gap_screen.scan_broad_gaps", side_effect=fake_scan):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -87,9 +104,9 @@ def _make_passing_client(
 ):
     """Create a mock client where one stock passes all Phase A + B filters."""
     client = MagicMock()
-    client.get_market_movers_gainers.return_value = [
-        {"symbol": symbol, "percent_change": 15.0, "price": open_price},
-    ]
+    movers = [{"symbol": symbol, "percent_change": 15.0, "price": open_price}]
+    client.get_market_movers_gainers.return_value = movers
+    _GAP_MOVERS[:] = movers
     client.get_snapshots.return_value = {
         symbol: _make_snapshot(prev_close, prev_high, open_price, latest_price, daily_volume),
     }
@@ -144,6 +161,7 @@ class TestPhaseAFilters:
         """No market movers returns empty list."""
         client = MagicMock()
         client.get_market_movers_gainers.return_value = []
+        _GAP_MOVERS.clear()
         result = scan_ep_news(_make_config(), client)
         assert result == []
 
@@ -328,11 +346,13 @@ class TestOutputFormat:
     def test_sorted_by_gap_descending(self):
         """Results sorted by gap% descending."""
         client = MagicMock()
-        client.get_market_movers_gainers.return_value = [
+        movers = [
             {"symbol": "AAA", "percent_change": 10.0, "price": 55.0},
             {"symbol": "BBB", "percent_change": 30.0, "price": 70.0},
             {"symbol": "CCC", "percent_change": 20.0, "price": 60.0},
         ]
+        client.get_market_movers_gainers.return_value = movers
+        _GAP_MOVERS[:] = movers
         client.get_snapshots.return_value = {
             "AAA": _make_snapshot(50.0, 52.0, 55.0, 56.0, 1_000_000),
             "BBB": _make_snapshot(50.0, 52.0, 70.0, 72.0, 1_000_000),

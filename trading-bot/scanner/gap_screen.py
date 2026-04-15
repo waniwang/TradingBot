@@ -13,6 +13,7 @@ prev_close calculation.
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -22,6 +23,13 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_UNIVERSE_FILE = Path(__file__).resolve().parent.parent / "broad_universe.txt"
 
+# Throttling defaults — tuned to stay under Yahoo's per-IP rate limit while
+# completing the ~5K-ticker scan well within the 3:00 → 3:50 PM execution window.
+DEFAULT_BATCH_SIZE = 200
+DEFAULT_INTER_BATCH_DELAY_S = 2.0
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_RETRY_BACKOFF_BASE_S = 4.0  # 4s, 16s, 64s
+
 
 def load_universe(path: Path | None = None) -> list[str]:
     p = path or DEFAULT_UNIVERSE_FILE
@@ -29,26 +37,20 @@ def load_universe(path: Path | None = None) -> list[str]:
         return [line.strip() for line in f if line.strip()]
 
 
-def scan_broad_gaps(
-    min_gap_pct: float = 8.0,
-    min_price: float = 3.0,
-    universe: list[str] | None = None,
-    batch_size: int = 500,
-) -> list[dict]:
-    """
-    Return candidates from the broad universe whose today's Open gaps up
-    >= min_gap_pct above prev close (and prev close >= min_price).
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    """yfinance raises YFRateLimitError; we duck-type to avoid hard import."""
+    return type(exc).__name__ == "YFRateLimitError" or "rate limit" in str(exc).lower()
 
-    Returns a list shaped like broker movers: [{symbol, percent_change, price}, ...]
-    sorted by gap% descending, uncapped.
-    """
-    tickers = universe if universe is not None else load_universe()
-    if not tickers:
-        return []
 
-    results: list[dict] = []
-    for i in range(0, len(tickers), batch_size):
-        batch = tickers[i : i + batch_size]
+def _download_batch_with_retry(
+    batch: list[str],
+    max_retries: int,
+    retry_backoff_base_s: float,
+    sleep_fn=time.sleep,
+):
+    """Call yf.download with exponential backoff on rate-limit errors."""
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
         try:
             df = yf.download(
                 batch,
@@ -59,11 +61,63 @@ def scan_broad_gaps(
                 threads=True,
                 auto_adjust=False,
             )
-        except Exception as e:
-            logger.warning("gap_screen batch %d failed: %s", i, e)
-            continue
+            return df
+        except Exception as e:  # noqa: BLE001
+            last_exc = e
+            if not _is_rate_limit_error(e) or attempt == max_retries - 1:
+                logger.warning("gap_screen batch download failed: %s", e)
+                return None
+            wait_s = retry_backoff_base_s * (4 ** attempt)
+            logger.warning(
+                "gap_screen rate-limited (attempt %d/%d), sleeping %.1fs",
+                attempt + 1, max_retries, wait_s,
+            )
+            sleep_fn(wait_s)
+    logger.warning("gap_screen batch exhausted retries: %s", last_exc)
+    return None
 
+
+def scan_broad_gaps(
+    min_gap_pct: float = 8.0,
+    min_price: float = 3.0,
+    universe: list[str] | None = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    inter_batch_delay_s: float = DEFAULT_INTER_BATCH_DELAY_S,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    retry_backoff_base_s: float = DEFAULT_RETRY_BACKOFF_BASE_S,
+    sleep_fn=time.sleep,
+) -> list[dict]:
+    """
+    Return candidates from the broad universe whose today's Open gaps up
+    >= min_gap_pct above prev close (and prev close >= min_price).
+
+    Throttled to stay under Yahoo's rate limit: small batches with a delay
+    between them and exponential-backoff retry on YFRateLimitError. With the
+    defaults a 5K-ticker universe completes in ~2 minutes — well inside the
+    50-minute scan-to-execute window.
+
+    `sleep_fn` is injected so tests can run without real waits.
+
+    Returns a list shaped like broker movers: [{symbol, percent_change, price}, ...]
+    sorted by gap% descending, uncapped.
+    """
+    tickers = universe if universe is not None else load_universe()
+    if not tickers:
+        return []
+
+    results: list[dict] = []
+    total_batches = (len(tickers) + batch_size - 1) // batch_size
+
+    for batch_idx, i in enumerate(range(0, len(tickers), batch_size)):
+        batch = tickers[i : i + batch_size]
+        df = _download_batch_with_retry(
+            batch, max_retries=max_retries,
+            retry_backoff_base_s=retry_backoff_base_s,
+            sleep_fn=sleep_fn,
+        )
         if df is None or df.empty:
+            if batch_idx < total_batches - 1:
+                sleep_fn(inter_batch_delay_s)
             continue
 
         multi = isinstance(df.columns, pd.MultiIndex)
@@ -91,6 +145,10 @@ def scan_broad_gaps(
                 })
             except (KeyError, ValueError, TypeError):
                 continue
+
+        # Pace the next batch to stay under Yahoo's per-IP rate limit
+        if batch_idx < total_batches - 1:
+            sleep_fn(inter_batch_delay_s)
 
     results.sort(key=lambda x: -x["percent_change"])
     logger.info(
