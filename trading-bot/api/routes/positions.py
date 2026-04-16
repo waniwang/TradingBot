@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query
 
 from db.models import Position, get_session
 from api.deps import get_db_engine, get_alpaca
+from api.variation import resolve_variations_batch
 
 router = APIRouter()
 
@@ -19,6 +20,10 @@ def get_open_positions():
 
     with get_session(engine) as session:
         positions = session.query(Position).filter_by(is_open=True).all()
+
+        variations = resolve_variations_batch(
+            session, [(p.ticker, p.setup_type, p.opened_at) for p in positions]
+        )
 
         result = []
         for p in positions:
@@ -43,6 +48,7 @@ def get_open_positions():
                 "days": p.days_held,
                 "partial": p.partial_exit_done,
                 "opened_at": p.opened_at.isoformat() if p.opened_at else None,
+                "variation": variations[(p.ticker, p.setup_type, p.opened_at)],
             })
 
     return result
@@ -59,6 +65,10 @@ def get_closed_positions(limit: int = 50, strategy: str | None = Query(None)):
             q = q.filter(Position.setup_type.like(f"{escaped}%", escape="\\"))
         positions = q.order_by(Position.closed_at.desc()).limit(limit).all()
 
+        variations = resolve_variations_batch(
+            session, [(p.ticker, p.setup_type, p.opened_at) for p in positions]
+        )
+
         return [
             {
                 "id": p.id,
@@ -71,6 +81,7 @@ def get_closed_positions(limit: int = 50, strategy: str | None = Query(None)):
                 "pnl": p.realized_pnl or 0.0,
                 "days": p.days_held,
                 "reason": (p.exit_reason or "").replace("_", " "),
+                "variation": variations[(p.ticker, p.setup_type, p.opened_at)],
             }
             for p in positions
         ]

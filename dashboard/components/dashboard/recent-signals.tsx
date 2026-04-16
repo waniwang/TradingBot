@@ -5,6 +5,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import type { SignalToday } from "@/lib/types";
+import { VariationBadge } from "@/components/strategies/variation-badge";
 
 export function RecentSignals({ signals }: { signals: SignalToday[] }) {
   if (signals.length === 0) {
@@ -33,7 +34,12 @@ export function RecentSignals({ signals }: { signals: SignalToday[] }) {
           {signals.map((s) => (
             <TableRow key={s.id}>
               <TableCell className="tabular-nums text-muted-foreground">{s.time}</TableCell>
-              <TableCell className="font-medium">{s.ticker}</TableCell>
+              <TableCell className="font-medium">
+                <div className="flex items-center gap-1.5">
+                  {s.ticker}
+                  <VariationBadge value={s.variation} />
+                </div>
+              </TableCell>
               <TableCell>
                 <Badge variant="outline" className="text-xs">{s.setup}</Badge>
               </TableCell>

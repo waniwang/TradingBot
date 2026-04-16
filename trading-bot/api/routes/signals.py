@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from db.models import Signal, get_session
 from api.deps import get_db_engine
+from api.variation import resolve_variations_batch
 
 router = APIRouter()
 
@@ -25,6 +26,10 @@ def get_signals_today():
             .all()
         )
 
+        variations = resolve_variations_batch(
+            session, [(s.ticker, s.setup_type, s.fired_at) for s in signals]
+        )
+
         return [
             {
                 "id": s.id,
@@ -36,6 +41,7 @@ def get_signals_today():
                 "stop": s.stop_price,
                 "gap_pct": round(s.gap_pct, 1) if s.gap_pct else None,
                 "acted": s.acted_on,
+                "variation": variations[(s.ticker, s.setup_type, s.fired_at)],
             }
             for s in signals
         ]

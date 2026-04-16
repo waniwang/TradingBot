@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 from api.constants import PIPELINE_SCHEDULE, JOB_LABELS, PHASE_META, PHASE_ORDER, job_to_strategy
 from api.deps import get_enabled_strategies
+from api.variation import resolve_variations_batch
 from db.models import (
     JobExecution,
     Watchlist,
@@ -384,6 +385,8 @@ def _serialize_watchlist(row: Watchlist) -> dict:
     gap_pct = meta.get("gap_pct") or meta.get("gap")
     rvol = meta.get("rvol")
     mcap = meta.get("market_cap") or meta.get("mcap")
+    # ep_strategy (A/B/C) lives directly on the Watchlist row's meta
+    variation = meta.get("ep_strategy")
     return {
         "ticker": row.ticker,
         "setup_type": row.setup_type,
@@ -393,10 +396,11 @@ def _serialize_watchlist(row: Watchlist) -> dict:
         "rvol": rvol,
         "market_cap": mcap,
         "notes": row.notes,
+        "variation": variation,
     }
 
 
-def _serialize_signal(sig: Signal, order: Order | None) -> dict:
+def _serialize_signal(sig: Signal, order: Order | None, variation: str | None) -> dict:
     return {
         "ticker": sig.ticker,
         "setup_type": sig.setup_type,
@@ -405,6 +409,7 @@ def _serialize_signal(sig: Signal, order: Order | None) -> dict:
         "gap_pct": sig.gap_pct,
         "acted_on": sig.acted_on,
         "fired_at": sig.fired_at.isoformat() if sig.fired_at else None,
+        "variation": variation,
         "order": (
             {
                 "id": order.id,
@@ -421,7 +426,7 @@ def _serialize_signal(sig: Signal, order: Order | None) -> dict:
     }
 
 
-def _serialize_position_closed(p: Position) -> dict:
+def _serialize_position_closed(p: Position, variation: str | None) -> dict:
     return {
         "ticker": p.ticker,
         "setup_type": p.setup_type,
@@ -433,6 +438,7 @@ def _serialize_position_closed(p: Position) -> dict:
         "realized_pnl": p.realized_pnl,
         "opened_at": p.opened_at.isoformat() if p.opened_at else None,
         "closed_at": p.closed_at.isoformat() if p.closed_at else None,
+        "variation": variation,
     }
 
 
@@ -471,10 +477,15 @@ def _enrich_execute_job(session, job_id: str, trade_date: date) -> dict:
 
     signals = q.order_by(Signal.fired_at).all()
 
+    variations = resolve_variations_batch(
+        session, [(s.ticker, s.setup_type, s.fired_at) for s in signals]
+    )
+
     out = []
     for sig in signals:
         order = sig.orders[0] if sig.orders else None
-        out.append(_serialize_signal(sig, order))
+        variation = variations[(sig.ticker, sig.setup_type, sig.fired_at)]
+        out.append(_serialize_signal(sig, order, variation))
 
     entered = sum(1 for s in signals if s.acted_on)
     return {
@@ -497,7 +508,13 @@ def _enrich_monitor_job(session, trade_date: date) -> dict:
         .order_by(Position.closed_at)
         .all()
     )
-    positions = [_serialize_position_closed(p) for p in rows]
+    variations = resolve_variations_batch(
+        session, [(p.ticker, p.setup_type, p.opened_at) for p in rows]
+    )
+    positions = [
+        _serialize_position_closed(p, variations[(p.ticker, p.setup_type, p.opened_at)])
+        for p in rows
+    ]
 
     daily = (
         session.query(DailyPnl)

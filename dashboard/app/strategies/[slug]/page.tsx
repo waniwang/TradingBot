@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { StrategyTradesTable } from "@/components/strategies/strategy-trades-table";
 import { StrategyJobsTable } from "@/components/strategies/strategy-jobs-table";
+import { ParametersCard } from "@/components/strategies/parameters-card";
 import { PipelineJobDetailModal } from "@/components/dashboard/pipeline-job-detail-modal";
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
@@ -18,6 +19,8 @@ import type {
   StrategyListResponse,
   StrategyInfo,
   ClosedPosition,
+  ParamPhase,
+  PhaseLabel,
   PipelineHistoryResponse,
   MergedPipelineJob,
   SelectedPipelineJob,
@@ -29,6 +32,9 @@ export default function StrategyDetailPage() {
 
   const [status, setStatus] = useState<BotStatus | null>(null);
   const [strategy, setStrategy] = useState<StrategyInfo | null>(null);
+  const [phaseLabels, setPhaseLabels] = useState<
+    Record<ParamPhase, PhaseLabel> | undefined
+  >(undefined);
   const [trades, setTrades] = useState<ClosedPosition[]>([]);
   const [history, setHistory] = useState<PipelineHistoryResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -47,6 +53,7 @@ export default function StrategyDetailPage() {
       ]);
       setStatus(s);
       setStrategy(strats.strategies.find((st) => st.slug === slug) ?? null);
+      setPhaseLabels(strats.phase_labels);
       setTrades(closed);
       setHistory(hist);
       setLastUpdated(new Date());
@@ -184,31 +191,12 @@ export default function StrategyDetailPage() {
                   />
                 </div>
 
-                {/* Config parameters */}
-                {Object.keys(strategy.config_params).length > 0 && (
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm font-medium">
-                        Parameters
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-3">
-                        {Object.entries(strategy.config_params).map(
-                          ([key, value]) => (
-                            <div key={key} className="flex justify-between gap-2">
-                              <dt className="text-xs text-muted-foreground truncate">
-                                {key}
-                              </dt>
-                              <dd className="text-xs font-medium tabular-nums shrink-0">
-                                {String(value)}
-                              </dd>
-                            </div>
-                          )
-                        )}
-                      </dl>
-                    </CardContent>
-                  </Card>
+                {/* Config parameters — grouped by variation (Universal / A / B / C) */}
+                {strategy.config_params.length > 0 && (
+                  <ParametersCard
+                    params={strategy.config_params}
+                    phaseLabels={phaseLabels}
+                  />
                 )}
               </div>
             </TabsContent>
@@ -263,3 +251,4 @@ function StatCard({
     </Card>
   );
 }
+

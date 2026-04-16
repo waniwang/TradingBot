@@ -1,6 +1,7 @@
 "use client";
 
 import type { ClosedPosition } from "@/lib/types";
+import { VariationBadge } from "./variation-badge";
 
 export function StrategyTradesTable({ trades }: { trades: ClosedPosition[] }) {
   if (trades.length === 0) {
@@ -11,6 +12,9 @@ export function StrategyTradesTable({ trades }: { trades: ClosedPosition[] }) {
     );
   }
 
+  // Only EP strategies carry variation — hide the column entirely when all rows are null.
+  const showVariation = trades.some((t) => t.variation);
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -18,6 +22,9 @@ export function StrategyTradesTable({ trades }: { trades: ClosedPosition[] }) {
           <tr className="border-b border-border text-xs text-muted-foreground">
             <th className="pb-2 pr-4 text-left font-medium">Date</th>
             <th className="pb-2 pr-4 text-left font-medium">Ticker</th>
+            {showVariation && (
+              <th className="pb-2 pr-4 text-left font-medium">Variation</th>
+            )}
             <th className="pb-2 pr-4 text-right font-medium">Entry</th>
             <th className="pb-2 pr-4 text-right font-medium">Exit</th>
             <th className="pb-2 pr-4 text-right font-medium">P&L</th>
@@ -37,6 +44,15 @@ export function StrategyTradesTable({ trades }: { trades: ClosedPosition[] }) {
                   : "-"}
               </td>
               <td className="py-2 pr-4 font-medium">{t.ticker}</td>
+              {showVariation && (
+                <td className="py-2 pr-4">
+                  {t.variation ? (
+                    <VariationBadge value={t.variation} />
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
+              )}
               <td className="py-2 pr-4 text-right tabular-nums">
                 ${t.entry.toFixed(2)}
               </td>

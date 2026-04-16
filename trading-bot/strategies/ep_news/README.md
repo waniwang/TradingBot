@@ -107,3 +107,9 @@ min_market_cap: 1_000_000_000
 exclude_earnings: true
 max_hold_days: 50
 ```
+
+## Dashboard Parameter Display
+
+The Strategies detail page (`/strategies/ep_news`) renders each parameter with its description, variation (A/B/C), and the phase/job where it's applied (scan vs execute vs day-2 confirm). Descriptions and phase tags live in [`trading-bot/api/param_meta.py`](../../api/param_meta.py). Update that file whenever you add a new `ep_news_*` key to `config.yaml`.
+
+The A/B/C badges on trade rows and pipeline job details are derived at read time via [`api/variation.py`](../../api/variation.py), which joins `Signal` back to the originating `Watchlist.meta["ep_strategy"]`.

@@ -12,6 +12,7 @@ from api.constants import (
     job_to_strategy,
 )
 from api.deps import get_config, get_db_engine
+from api.param_meta import PHASE_LABELS, build_config_params
 from db.models import JobExecution, Position, get_session
 
 router = APIRouter()
@@ -73,14 +74,11 @@ def get_strategies():
             winners = winners or 0
             win_rate = round(winners / total_closed * 100, 1) if total_closed > 0 else 0.0
 
-            # Extract strategy-specific config params
-            signals_cfg = config.get("signals", {})
-            prefix = f"{slug}_"
-            config_params = {
-                k[len(prefix):]: v
-                for k, v in signals_cfg.items()
-                if k.startswith(prefix)
-            }
+            # Extract strategy-specific config params, enriched with metadata
+            # (description + variation + phase). See api/param_meta.py.
+            # Handle `signals: null` in config.yaml by falling back to {}.
+            signals_cfg = config.get("signals") or {}
+            config_params = build_config_params(slug, signals_cfg)
 
             strategies.append({
                 "slug": slug,
@@ -101,4 +99,4 @@ def get_strategies():
     # Sort: enabled first, then alphabetical
     strategies.sort(key=lambda s: (not s["enabled"], s["slug"]))
 
-    return {"strategies": strategies}
+    return {"strategies": strategies, "phase_labels": PHASE_LABELS}

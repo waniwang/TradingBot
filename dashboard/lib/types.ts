@@ -37,6 +37,8 @@ export interface OpenPosition {
   days: number;
   partial: boolean;
   opened_at: string | null;
+  /** A / B / A+B / C — only set for EP strategies; null otherwise. */
+  variation: string | null;
 }
 
 export interface ClosedPosition {
@@ -50,6 +52,8 @@ export interface ClosedPosition {
   pnl: number;
   days: number;
   reason: string;
+  /** A / B / A+B / C — only set for EP strategies; null otherwise. */
+  variation: string | null;
 }
 
 export interface WatchlistCandidate {
@@ -84,6 +88,8 @@ export interface SignalToday {
   stop: number;
   gap_pct: number | null;
   acted: boolean;
+  /** A / B / A+B / C — only set for EP strategies; null otherwise. */
+  variation: string | null;
 }
 
 export interface DailyPnl {
@@ -200,6 +206,8 @@ export interface JobDetailTicker {
   rvol?: number | null;
   market_cap?: number | null;
   notes?: string | null;
+  /** A / B / C — only set for EP strategies; null otherwise. */
+  variation?: string | null;
 }
 
 export interface JobDetailSignal {
@@ -210,6 +218,8 @@ export interface JobDetailSignal {
   gap_pct: number | null;
   acted_on: boolean;
   fired_at: string | null;
+  /** A / B / A+B / C — only set for EP strategies; null otherwise. */
+  variation: string | null;
   order: {
     id: number;
     side: string;
@@ -232,6 +242,8 @@ export interface JobDetailPositionClosed {
   realized_pnl: number | null;
   opened_at: string | null;
   closed_at: string | null;
+  /** A / B / A+B / C — only set for EP strategies; null otherwise. */
+  variation: string | null;
 }
 
 export interface JobDetailResponse {
@@ -319,17 +331,35 @@ export interface StrategyStats {
   total_pnl: number;
 }
 
+export type ParamVariation = "base" | "A" | "B" | "C";
+export type ParamPhase = "scan" | "execute" | "day2_confirm";
+
+export interface ConfigParamRow {
+  key: string;
+  value: unknown;
+  description: string;
+  variation: ParamVariation;
+  phase: ParamPhase;
+}
+
+export interface PhaseLabel {
+  short: string;
+  long: string;
+  description: string;
+}
+
 export interface StrategyInfo {
   slug: string;
   display_name: string;
   enabled: boolean;
   description: string;
   job_ids: string[];
-  config_params: Record<string, unknown>;
+  config_params: ConfigParamRow[];
   stats: StrategyStats;
   last_run: StrategyLastRun | null;
 }
 
 export interface StrategyListResponse {
   strategies: StrategyInfo[];
+  phase_labels: Record<ParamPhase, PhaseLabel>;
 }

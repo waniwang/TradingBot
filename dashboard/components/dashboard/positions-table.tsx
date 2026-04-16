@@ -5,6 +5,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import type { OpenPosition } from "@/lib/types";
+import { VariationBadge } from "@/components/strategies/variation-badge";
 
 export function PositionsTable({ positions }: { positions: OpenPosition[] }) {
   if (positions.length === 0) {
@@ -36,7 +37,12 @@ export function PositionsTable({ positions }: { positions: OpenPosition[] }) {
         <TableBody>
           {positions.map((p) => (
             <TableRow key={p.id}>
-              <TableCell className="font-medium">{p.ticker}</TableCell>
+              <TableCell className="font-medium">
+                <div className="flex items-center gap-1.5">
+                  {p.ticker}
+                  <VariationBadge value={p.variation} />
+                </div>
+              </TableCell>
               <TableCell>
                 <Badge variant="outline" className="text-xs">
                   {p.setup}

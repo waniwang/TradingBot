@@ -89,6 +89,7 @@ On every push to `main`, `.github/workflows/deploy.yml` SSHs into the Linode ser
 ## Conventions
 
 - **Docs first**: Write/update docs before implementing code changes. After any code change, update the relevant README.md (strategy, module, or `docs/`) to keep docs in sync with code
+- **Dashboard param descriptions**: Descriptions + phase/variation tags for `config.yaml` `signals:` keys live in `trading-bot/api/param_meta.py`. Update there when adding a new strategy config key, or the Strategies page shows an empty description. A/B/C variation badges on signals/positions/trades are resolved at read time from `Watchlist.meta["ep_strategy"]` via `trading-bot/api/variation.py`
 - **Plain pandas**: SMA/ATR use `pandas.rolling()` — no pandas-ta (incompatible with Python 3.14)
 - **Python 3.14**: numba-dependent libraries (pandas-ta, vectorbt) won't work
 - **Alpaca BarSet**: use `bars.data` dict, NOT `bars.get()` (BarSet lacks `.get`)

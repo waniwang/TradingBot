@@ -26,6 +26,7 @@ import {
   getStatusTextClass,
   getStatusLabel,
 } from "@/lib/pipeline-constants";
+import { VariationBadge } from "@/components/strategies/variation-badge";
 
 function formatTimestamp(iso: string | null) {
   if (!iso) return "-";
@@ -85,7 +86,10 @@ function TickerGrid({ tickers }: { tickers: JobDetailTicker[] }) {
                 className="rounded-md border border-border bg-muted/20 px-2 py-1.5"
               >
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="font-mono text-sm font-semibold">{t.ticker}</span>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="font-mono text-sm font-semibold">{t.ticker}</span>
+                    <VariationBadge value={t.variation} />
+                  </div>
                   {t.gap_pct != null && (
                     <span
                       className={`text-[10px] tabular-nums ${
@@ -130,6 +134,7 @@ function SignalsList({ signals }: { signals: JobDetailSignal[] }) {
           >
             <div className="flex items-center gap-2">
               <span className="font-mono font-semibold">{s.ticker}</span>
+              <VariationBadge value={s.variation} />
               <span className="text-muted-foreground">
                 {s.order?.side ?? "buy"} {qty || ""}
               </span>
@@ -177,6 +182,7 @@ function PositionsClosedList({
         >
           <div className="flex items-center gap-2">
             <span className="font-mono font-semibold">{p.ticker}</span>
+            <VariationBadge value={p.variation} />
             <span className="text-muted-foreground">{p.exit_reason ?? "—"}</span>
           </div>
           <div className="flex items-center gap-2 tabular-nums">
