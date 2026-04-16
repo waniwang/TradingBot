@@ -71,7 +71,10 @@ def scan_ep_news(
     # ---------------------------------------------------------------
     from scanner.gap_screen import scan_broad_gaps
 
-    movers = scan_broad_gaps(min_gap_pct=min_gap_pct, min_price=min_price)
+    # Pull fresh active-tradable universe from Alpaca so delisted tickers
+    # don't waste yfinance retries. Falls back to static broad_universe.txt.
+    universe = client.get_tradable_universe() or None
+    movers = scan_broad_gaps(min_gap_pct=min_gap_pct, min_price=min_price, universe=universe)
     if not movers:
         logger.warning("EP News scan: no broad-universe gap candidates")
         return []
