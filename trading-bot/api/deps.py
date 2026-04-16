@@ -24,6 +24,14 @@ def get_config() -> dict:
 
 
 @lru_cache
+def get_enabled_strategies() -> frozenset[str]:
+    """Return the set of strategy slugs enabled in config.yaml."""
+    cfg = get_config()
+    enabled = cfg.get("strategies", {}).get("enabled", []) or []
+    return frozenset(enabled)
+
+
+@lru_cache
 def get_db_engine():
     from db.models import init_db
     config = get_config()

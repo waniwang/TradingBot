@@ -13,6 +13,7 @@ from fastapi import APIRouter, Query
 from fastapi import HTTPException
 
 from api.constants import PIPELINE_SCHEDULE, JOB_LABELS, PHASE_META, PHASE_ORDER, job_to_strategy
+from api.deps import get_enabled_strategies
 from db.models import (
     JobExecution,
     Watchlist,
@@ -126,6 +127,18 @@ def _serialize_execution(r: JobExecution, include_error: bool = True) -> dict:
     return _apply_stale_transform(d)
 
 
+def _active_schedule() -> list[dict]:
+    """PIPELINE_SCHEDULE filtered to jobs whose strategy is currently enabled.
+
+    System jobs (no associated strategy) are always included.
+    """
+    enabled = get_enabled_strategies()
+    return [
+        job for job in PIPELINE_SCHEDULE
+        if job_to_strategy(job["job_id"]) in (None, *enabled)
+    ]
+
+
 def _build_schedule_dicts() -> list[dict]:
     """Build the static schedule as a list of dicts for the API response."""
     return [
@@ -139,7 +152,7 @@ def _build_schedule_dicts() -> list[dict]:
             "display_day_offset": job["display_day_offset"],
             "strategy": job_to_strategy(job["job_id"]),
         }
-        for job in PIPELINE_SCHEDULE
+        for job in _active_schedule()
     ]
 
 
@@ -156,7 +169,7 @@ def _merge_schedule_with_executions(
     exec_map = {e["job_id"]: e for e in executions}
     merged = []
 
-    for job in PIPELINE_SCHEDULE:
+    for job in _active_schedule():
         job_id = job["job_id"]
         exec_data = exec_map.get(job_id)
 
@@ -295,7 +308,7 @@ def get_pipeline_history(days: int = Query(14, ge=1, le=30)):
     engine = get_engine()
     with get_session(engine) as session:
         # Only query scheduled pipeline jobs (exclude recurring heartbeat/reconcile)
-        scheduled_job_ids = [job["job_id"] for job in PIPELINE_SCHEDULE]
+        scheduled_job_ids = [job["job_id"] for job in _active_schedule()]
         rows = (
             session.query(JobExecution)
             .filter(JobExecution.job_id.in_(scheduled_job_ids))
