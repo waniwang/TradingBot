@@ -236,11 +236,9 @@ class EPNewsPlugin:
             with get_session(db_engine) as session:
                 open_count = session.query(Position).filter_by(is_open=True).count()
 
-            try:
-                portfolio_value = client.get_portfolio_value()
-            except Exception as e:
-                logger.warning("Failed to get portfolio value, using fallback: %s", e)
-                portfolio_value = 100_000
+            # Let any Alpaca-account error propagate — wrong-size trade is worse than no trade.
+            # _track_job catches the exception and fires JOB FAILED via Telegram.
+            portfolio_value = client.get_portfolio_value()
 
             daily_pnl = _compute_current_daily_pnl(db_engine)
             weekly_pnl = _compute_current_weekly_pnl(db_engine)

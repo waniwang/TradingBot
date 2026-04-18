@@ -70,7 +70,17 @@ class AlpacaClient:
         client.disconnect()
     """
 
-    def __init__(self, config: dict, notify=None):
+    def __init__(self, config: dict, notify=None, *, stub_ok: bool = False):
+        # Guard against the "silently running in stub mode" failure mode — a bot
+        # that looks alive, logs orders, but never sends anything to a real broker.
+        # Tests/backtests that genuinely need the stub pass stub_ok=True.
+        if not ALPACA_AVAILABLE and not stub_ok:
+            raise RuntimeError(
+                "alpaca-py is not installed — AlpacaClient cannot run. "
+                "Install it (`pip install alpaca-py>=0.43.0`) or pass stub_ok=True "
+                "if you explicitly want stub responses for testing."
+            )
+
         self.env: str = config.get("environment", "paper")
         self._notify = notify or (lambda msg: None)
         alpaca_cfg = config.get("alpaca", {})

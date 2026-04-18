@@ -720,14 +720,20 @@ def _execute_entry(ticker, signal, shares, client, db_engine, notify, watchlist_
     import threading
     from db.models import Signal as DbSignal, Order
 
+    order_side = "buy" if signal.side == "long" else "sell_short"
     try:
-        order_side = "buy" if signal.side == "long" else "sell_short"
         broker_order_id = client.place_limit_order(
             ticker, order_side, shares, signal.entry_price
         )
     except Exception as e:
-        logger.error("Entry order failed for %s: %s", ticker, e)
-        return
+        # Loud failure — don't swallow. Telegram fires via caller's _track_job.
+        logger.error("Entry order failed for %s: %s", ticker, e, exc_info=True)
+        if notify:
+            notify(
+                f"ORDER FAILED: {ticker} {order_side} {shares} @ ${signal.entry_price:.2f}\n"
+                f"{type(e).__name__}: {e}"
+            )
+        raise
 
     # Persist signal + order immediately (position created after fill confirmation)
     with get_session(db_engine) as session:
@@ -766,7 +772,15 @@ def _execute_entry(ticker, signal, shares, client, db_engine, notify, watchlist_
                 setup_type=watchlist_setup_type or signal.setup_type,
             )
         except Exception as e:
-            logger.warning("Failed to mark %s as triggered in watchlist: %s", ticker, e)
+            # Order succeeded; DB state drift is recoverable but needs operator attention.
+            logger.error("Failed to mark %s as triggered in watchlist: %s", ticker, e, exc_info=True)
+            if notify:
+                notify(
+                    f"ORDER PLACED but watchlist state NOT updated for {ticker} "
+                    f"({watchlist_setup_type or signal.setup_type}): "
+                    f"{type(e).__name__}: {e}\n"
+                    f"Row may re-trigger on restart — manual fix required."
+                )
 
     notify(
         f"ENTRY ORDER PLACED: {ticker} ({signal.setup_type})\n"
@@ -1051,8 +1065,21 @@ class _track_job:
                 short_err = str(exc_val)[:200]
                 try:
                     _notify_fn(f"JOB FAILED: {self.label}\n{short_err}")
-                except Exception:
-                    logger.debug("Failed to send failure notification for %s", self.job_id)
+                except Exception as notify_err:
+                    # Last-line-of-defense failure — elevate to ERROR and tag the DB row
+                    # so the dashboard / doctor endpoint can surface the alert gap.
+                    logger.error(
+                        "Telegram notify FAILED for %s — operator may be unaware of failure: %s",
+                        self.job_id, notify_err, exc_info=True,
+                    )
+                    try:
+                        with get_session(_db_engine) as session:
+                            row = session.get(JobExecution, self._row_id)
+                            if row:
+                                row.result_summary = ((row.result_summary or "") + " [notify_failed]")[:500]
+                                session.commit()
+                    except Exception:
+                        logger.error("Also failed to tag job_execution row with [notify_failed]")
         except Exception as e:
             logger.error("Failed to update job_execution row for %s: %s", self.job_id, e)
             # Retry once with a fresh session

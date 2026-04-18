@@ -498,3 +498,124 @@ class TestReconcilePositions:
 
         client.get_order_status.assert_not_called()
         notify.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _execute_entry — silent-failure audit (Fix 1 + Fix 2 from the trade-path plan)
+# ---------------------------------------------------------------------------
+
+class TestExecuteEntryErrorHandling:
+    """Verify trade-path failures notify the operator instead of silently returning."""
+
+    def _signal(self):
+        """Minimal SignalResult-shaped object for tests."""
+        from signals.base import SignalResult
+        return SignalResult(
+            ticker="NVDA",
+            setup_type="ep_earnings",
+            side="long",
+            entry_price=115.0,
+            stop_price=107.0,
+            orh=116.0,
+            orb_low=114.0,
+            gap_pct=15.0,
+        )
+
+    def test_order_failure_notifies_and_raises(self):
+        """Fix 1: when place_limit_order raises, notify fires and exception propagates."""
+        from main import _execute_entry
+
+        client = MagicMock()
+        client.place_limit_order.side_effect = RuntimeError("Alpaca rejected: insufficient buying power")
+        notify = MagicMock()
+
+        with pytest.raises(RuntimeError, match="insufficient buying power"):
+            _execute_entry(
+                ticker="NVDA",
+                signal=self._signal(),
+                shares=100,
+                client=client,
+                db_engine=None,
+                notify=notify,
+            )
+
+        # Alert must have fired exactly once with a useful message
+        notify.assert_called_once()
+        msg = notify.call_args[0][0]
+        assert "ORDER FAILED" in msg
+        assert "NVDA" in msg
+        assert "insufficient buying power" in msg
+
+
+class TestMarkTriggeredFailure:
+    """Fix 2: mark_triggered failure after order placed alerts operator."""
+
+    def test_mark_triggered_failure_notifies(self):
+        """When mark_triggered raises, order stays recorded but a loud Telegram fires."""
+        from main import _execute_entry
+        from db.models import init_db
+
+        engine = init_db("sqlite:///:memory:")
+        # Seed _db_engine used by _execute_entry's mark_triggered branch
+        import main as main_module
+        main_module._db_engine = engine
+
+        client = MagicMock()
+        client.place_limit_order.return_value = "test-order-id"
+        notify = MagicMock()
+
+        from signals.base import SignalResult
+        sig = SignalResult(
+            ticker="AAPL",
+            setup_type="ep_earnings",
+            side="long",
+            entry_price=175.0,
+            stop_price=162.75,
+            orh=176.0,
+            orb_low=174.0,
+            gap_pct=10.0,
+        )
+
+        with patch("main.mark_triggered", side_effect=RuntimeError("DB locked")):
+            # Should NOT raise — order already placed. Background fill thread spawned then exits cleanly.
+            _execute_entry(
+                ticker="AAPL",
+                signal=sig,
+                shares=50,
+                client=client,
+                db_engine=engine,
+                notify=notify,
+            )
+
+        # Two notify calls: (1) ENTRY ORDER PLACED, (2) ORDER PLACED but watchlist NOT updated
+        assert notify.call_count >= 2
+        mark_fail_msg = next(
+            (c.args[0] for c in notify.call_args_list if "watchlist state NOT updated" in c.args[0]),
+            None,
+        )
+        assert mark_fail_msg is not None
+        assert "AAPL" in mark_fail_msg
+        assert "DB locked" in mark_fail_msg
+
+
+# ---------------------------------------------------------------------------
+# AlpacaClient stub-mode guard (Fix 4)
+# ---------------------------------------------------------------------------
+
+class TestAlpacaClientStubGuard:
+    def test_raises_if_alpaca_not_installed(self):
+        """AlpacaClient() should refuse to construct in stub mode by default."""
+        from executor import alpaca_client as ac_module
+
+        with patch.object(ac_module, "ALPACA_AVAILABLE", False):
+            with pytest.raises(RuntimeError, match="alpaca-py is not installed"):
+                ac_module.AlpacaClient({"environment": "paper"})
+
+    def test_stub_ok_bypasses_guard(self):
+        """stub_ok=True lets tests/backtests construct the client in stub mode."""
+        from executor import alpaca_client as ac_module
+
+        with patch.object(ac_module, "ALPACA_AVAILABLE", False):
+            # Must not raise
+            client = ac_module.AlpacaClient({"environment": "paper"}, stub_ok=True)
+            assert client is not None

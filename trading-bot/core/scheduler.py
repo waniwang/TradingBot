@@ -66,8 +66,13 @@ def _tracked_strategy_job(job_id, handler, config, client, db_engine, notify):
             short_err = str(exc)[:200]
             try:
                 notify(f"JOB FAILED: {label}\n{short_err}")
-            except Exception:
-                logger.debug("Failed to send failure notification for %s", job_id)
+            except Exception as notify_err:
+                # Last-line-of-defense failure — ERROR, not debug, so the log at
+                # least captures that the operator won't see the failure alert.
+                logger.error(
+                    "Telegram notify FAILED for %s — operator may be unaware of job failure: %s",
+                    job_id, notify_err, exc_info=True,
+                )
         raise
     finally:
         if row_id is not None:
