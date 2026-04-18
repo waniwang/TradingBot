@@ -251,6 +251,29 @@ class TestExecuteIsDBDriven:
         assert "No entries" in (result or "")
         mock_client.place_limit_order.assert_not_called()
 
+    def test_replay_does_not_double_submit(self, db_engine, mock_client, patch_main):
+        """Guard against `job_execute` running twice before the first run's
+        `mark_triggered` lands. The first run places the order and writes an Order
+        row; if the row stays `ready` (e.g. mark_triggered failed or we crashed
+        between the two writes), the second run must detect the recent Order and
+        skip rather than double-submit."""
+        from db.models import Order
+        _seed_ready(db_engine, ticker="AU", ep_strategy="C", entry_price=22.0)
+
+        # Simulate prior run: Order already submitted; Watchlist not yet flipped
+        # to `triggered` (the exact window we're protecting against).
+        with get_session(db_engine) as session:
+            session.add(Order(
+                ticker="AU", side="buy", order_type="limit", qty=100, price=22.0,
+                status="submitted", broker_order_id="prior-run-id",
+                created_at=datetime.utcnow(),
+            ))
+            session.commit()
+
+        EPNewsPlugin().job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
+
+        mock_client.place_limit_order.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # End-to-end regression

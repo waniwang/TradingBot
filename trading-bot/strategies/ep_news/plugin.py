@@ -181,7 +181,8 @@ class EPNewsPlugin:
         from main import is_trading_day, _execute_entry, _compute_current_daily_pnl, _compute_current_weekly_pnl
         from signals.base import SignalResult
         from risk.manager import RiskManager
-        from db.models import Position, Watchlist, get_session
+        from db.models import Order, Position, Watchlist, get_session
+        from datetime import timedelta
 
         if not is_trading_day(client):
             return "Skipped — not a trading day"
@@ -223,13 +224,28 @@ class EPNewsPlugin:
             # If both A+B, use Strategy A entry (tighter stop)
             entry = next((e for e in ticker_entries if e["ep_strategy"] == "A"), ticker_entries[0])
 
-            # Check if we already have an open position
+            # Idempotency guards:
+            #   1. An open Position exists → we're already in this trade, skip.
+            #   2. A recent non-terminal Order exists → a prior job_execute run (or crashed
+            #      mid-flight) already submitted the order. Skip to avoid double-entry
+            #      in the replay window between place_limit_order and mark_triggered.
             with get_session(db_engine) as session:
                 existing = session.query(Position).filter_by(
                     ticker=ticker, is_open=True
                 ).first()
                 if existing:
                     logger.info("EP news: %s already has open position, skipping", ticker)
+                    continue
+                recent_order = session.query(Order).filter(
+                    Order.ticker == ticker,
+                    Order.status.in_(["pending", "submitted", "filled", "partially_filled"]),
+                    Order.created_at >= datetime.utcnow() - timedelta(minutes=10),
+                ).first()
+                if recent_order is not None:
+                    logger.warning(
+                        "EP news: %s has recent order (id=%s status=%s) — job_execute replay detected, skipping",
+                        ticker, recent_order.id, recent_order.status,
+                    )
                     continue
 
             # Risk manager checks
