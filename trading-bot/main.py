@@ -42,6 +42,7 @@ from scanner.watchlist_manager import (
     persist_candidates,
     expire_stale_active,
     get_active_watchlist,
+    purge_disabled_strategies,
     run_nightly_scan,
 )
 from signals.base import compute_sma
@@ -257,8 +258,9 @@ def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=Non
             logger.error("%s premarket scan failed: %s", plugin.display_name, e)
             errors.append(f"{plugin.display_name} scan failed: {e}")
 
-    # 5. Load unified active watchlist from DB
-    _watchlist = get_active_watchlist(db_engine)[:20]
+    # 5. Load unified active watchlist from DB (filtered to enabled strategies)
+    enabled_names = list(plugins.keys())
+    _watchlist = get_active_watchlist(db_engine, enabled=enabled_names)[:20]
     _set_phase("watchlist_ready")
     logger.info("=== PRE-MARKET SCAN DONE: %d candidates ===", len(_watchlist))
     for c in _watchlist:
@@ -1342,6 +1344,16 @@ def main():
     # Database
     db_engine = init_db(config["database"]["url"])
 
+    # Self-heal: drop Watchlist rows for strategies that are no longer enabled.
+    # Keeps the dashboard and _watchlist restore honest when a strategy is
+    # toggled off in config.yaml.
+    try:
+        purged = purge_disabled_strategies(enabled, db_engine)
+        if purged:
+            logger.info("Startup cleanup: purged %d watchlist rows for disabled strategies", purged)
+    except Exception as e:
+        logger.warning("Startup watchlist purge failed: %s", e)
+
     # Notifier (constructed first so AlpacaClient can use it for stream alerts)
     notify = make_notifier(config)
 
@@ -1361,7 +1373,7 @@ def main():
     # Restore watchlist from DB (active entries survive restarts with full data)
     global _watchlist
     try:
-        _watchlist = get_active_watchlist(db_engine)
+        _watchlist = get_active_watchlist(db_engine, enabled=enabled)
         if _watchlist:
             _set_phase("watchlist_ready")
             logger.info("Restored watchlist from DB: %d active candidates", len(_watchlist))

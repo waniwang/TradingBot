@@ -18,7 +18,10 @@ watching → ready → active → triggered / expired / failed
 - `promote_ready_to_active(scan_date, db_engine)` — move breakout ready → active
 - `expire_stale_active(today, db_engine, plugins)` — expire or demote based on plugin's `watchlist_persist_days`
 - `run_nightly_scan(config, client, db_engine, progress_cb)` — orchestrate ranking + consolidation analysis
-- `get_active_watchlist(db_engine)` — return all stage='active' entries
+- `get_active_watchlist(db_engine, enabled=None)` — return stage='active' entries; pass `enabled` to filter to only loaded strategies
+- `purge_disabled_strategies(enabled, db_engine)` — DELETE every row whose `setup_type` is not in `enabled`. Called on bot startup so toggling a strategy off in `config.yaml` is self-healing: stale rows disappear on the next restart
+
+**Timestamps on every row:** each `Watchlist` row carries three columns — `added_at` (first inserted), `stage_changed_at` (current stage set), `updated_at` (any field touched). The `/api/watchlist` endpoint exposes all three and the dashboard renders Added + Stage Changed as relative time.
 
 ## consolidation.py — Consolidation Pattern Detection
 

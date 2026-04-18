@@ -63,6 +63,12 @@ export interface WatchlistCandidate {
   setup_raw: string;
   stage: string;
   scan_date: string;
+  /** ISO-8601 UTC — when this row first appeared on the watchlist. */
+  added_at: string | null;
+  /** ISO-8601 UTC — when the row entered its current stage. */
+  stage_changed_at: string | null;
+  /** ISO-8601 UTC — last time any field on the row changed. */
+  updated_at: string | null;
   gap_pct: number | null;
   pre_mkt_rvol: number | null;
   consolidation_days: number | null;

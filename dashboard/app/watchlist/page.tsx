@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/table";
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
+import { formatRelativeTime } from "@/lib/utils";
 import type { BotStatus, WatchlistData, WatchlistCandidate } from "@/lib/types";
 
 export default function WatchlistPage() {
@@ -108,6 +109,8 @@ function CandidateTable({ candidates }: { candidates: WatchlistCandidate[] }) {
             <TableHead>Ticker</TableHead>
             <TableHead>Setup</TableHead>
             <TableHead>Stage</TableHead>
+            <TableHead>Added</TableHead>
+            <TableHead>Stage Changed</TableHead>
             <TableHead className="text-right">Gap %</TableHead>
             <TableHead className="text-right">RVOL</TableHead>
             <TableHead className="text-right">Consol Days</TableHead>
@@ -136,6 +139,8 @@ function CandidateTable({ candidates }: { candidates: WatchlistCandidate[] }) {
                   {c.stage}
                 </Badge>
               </TableCell>
+              <TimestampCell iso={c.added_at} />
+              <TimestampCell iso={c.stage_changed_at} />
               <TableCell className="text-right tabular-nums">
                 {c.gap_pct != null ? `${c.gap_pct}%` : "-"}
               </TableCell>
@@ -169,5 +174,18 @@ function CandidateTable({ candidates }: { candidates: WatchlistCandidate[] }) {
         </TableBody>
       </Table>
     </div>
+  );
+}
+
+function TimestampCell({ iso }: { iso: string | null }) {
+  if (!iso) {
+    return <TableCell className="text-xs text-muted-foreground">-</TableCell>;
+  }
+  const relative = formatRelativeTime(iso);
+  const absolute = new Date(iso).toLocaleString();
+  return (
+    <TableCell className="whitespace-nowrap text-xs text-muted-foreground" title={absolute}>
+      {relative}
+    </TableCell>
   );
 }

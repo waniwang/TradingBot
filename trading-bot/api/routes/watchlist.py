@@ -5,9 +5,18 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from db.models import Watchlist, get_session
-from api.deps import get_db_engine
+from api.deps import get_db_engine, get_enabled_strategies
 
 router = APIRouter()
+
+
+def _iso(dt) -> str | None:
+    """Serialize a naive-UTC datetime as an ISO string with a 'Z' suffix so JS
+    clients parse it as UTC rather than local time."""
+    if dt is None:
+        return None
+    s = dt.isoformat()
+    return s if s.endswith("Z") or "+" in s[10:] else s + "Z"
 
 
 def _format_candidate(row: Watchlist) -> dict:
@@ -19,6 +28,9 @@ def _format_candidate(row: Watchlist) -> dict:
         "setup_raw": row.setup_type,
         "stage": row.stage.upper(),
         "scan_date": str(row.scan_date),
+        "added_at": _iso(row.added_at),
+        "stage_changed_at": _iso(row.stage_changed_at),
+        "updated_at": _iso(row.updated_at),
     }
 
     if row.setup_type in ("episodic_pivot", "ep_earnings", "ep_news"):
@@ -63,11 +75,21 @@ def _format_candidate(row: Watchlist) -> dict:
 @router.get("/watchlist")
 def get_watchlist():
     engine = get_db_engine()
+    enabled = get_enabled_strategies()
 
     with get_session(engine) as session:
-        active = session.query(Watchlist).filter_by(stage="active").all()
-        ready = session.query(Watchlist).filter_by(stage="ready").all()
-        watching = session.query(Watchlist).filter_by(stage="watching").all()
+        q = session.query(Watchlist).filter(Watchlist.setup_type.in_(tuple(enabled)))
+        active = q.filter(Watchlist.stage == "active").all()
+        ready = (
+            session.query(Watchlist)
+            .filter(Watchlist.setup_type.in_(tuple(enabled)), Watchlist.stage == "ready")
+            .all()
+        )
+        watching = (
+            session.query(Watchlist)
+            .filter(Watchlist.setup_type.in_(tuple(enabled)), Watchlist.stage == "watching")
+            .all()
+        )
 
     # Deduplicate: active takes priority
     active_tickers = {r.ticker for r in active}

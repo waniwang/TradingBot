@@ -180,15 +180,40 @@ def expire_stale_active(today: date, db_engine, plugins=None) -> int:
     return count
 
 
-def get_active_watchlist(db_engine) -> list[dict]:
-    """Return all stage='active' entries as list[dict] via to_dict()."""
+def get_active_watchlist(db_engine, enabled: list[str] | None = None) -> list[dict]:
+    """Return all stage='active' entries as list[dict] via to_dict().
+
+    If `enabled` is provided, only rows whose setup_type is in that list are returned.
+    """
     with get_session(db_engine) as session:
-        rows = (
-            session.query(Watchlist)
-            .filter_by(stage="active")
-            .all()
-        )
-        return [row.to_dict() for row in rows]
+        query = session.query(Watchlist).filter_by(stage="active")
+        if enabled is not None:
+            query = query.filter(Watchlist.setup_type.in_(list(enabled)))
+        return [row.to_dict() for row in query.all()]
+
+
+def purge_disabled_strategies(enabled: list[str], db_engine) -> int:
+    """Delete every Watchlist row whose setup_type is not in `enabled`.
+
+    Called on startup so toggling a strategy off in config.yaml is self-healing:
+    on the next bot restart, stale rows from the disabled strategy disappear.
+
+    Returns the number of rows deleted.
+    """
+    enabled_set = set(enabled)
+    with get_session(db_engine) as session:
+        rows = session.query(Watchlist).filter(
+            ~Watchlist.setup_type.in_(enabled_set)
+        ).all() if enabled_set else session.query(Watchlist).all()
+        count = len(rows)
+        if count:
+            by_type: dict[str, int] = {}
+            for r in rows:
+                by_type[r.setup_type] = by_type.get(r.setup_type, 0) + 1
+                session.delete(r)
+            session.commit()
+            logger.info("Purged %d watchlist rows for disabled strategies: %s", count, by_type)
+    return count
 
 
 # ---------------------------------------------------------------------------
