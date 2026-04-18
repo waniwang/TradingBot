@@ -22,10 +22,9 @@ from strategies.ep_earnings.strategy import (
 
 
 # ---------------------------------------------------------------------------
-# scan_broad_gaps mock — Phase A pre-screen now uses yfinance directly via
-# scanner/gap_screen.py. We replace it per-test with a controlled list so the
-# suite stays offline. Helpers below also seed legacy
-# `client.get_market_movers_gainers` for any code path that still references it.
+# scan_snapshot_gaps mock — Phase A pre-screen uses Alpaca snapshots via
+# scanner/gap_screen.py::scan_snapshot_gaps. We replace it per-test with a
+# controlled list so the suite stays offline.
 # ---------------------------------------------------------------------------
 
 _GAP_MOVERS: list = []
@@ -35,10 +34,10 @@ _GAP_MOVERS: list = []
 def _mock_gap_screen():
     _GAP_MOVERS.clear()
 
-    def fake_scan(**_):
+    def fake_scan(*_args, **_kwargs):
         return list(_GAP_MOVERS)
 
-    with patch("scanner.gap_screen.scan_broad_gaps", side_effect=fake_scan):
+    with patch("scanner.gap_screen.scan_snapshot_gaps", side_effect=fake_scan):
         yield
 
 

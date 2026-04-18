@@ -581,43 +581,37 @@ class AlpacaClient:
             logger.error("get_market_movers_gainers failed: %s", e)
             return []
 
-    def get_snapshots(self, tickers: list[str]) -> dict[str, dict]:
+    def get_snapshots(self, tickers: list[str], batch_size: int = 1000) -> dict[str, dict]:
         """
-        Get snapshot data (prev_close, latest_price, daily_volume) for multiple tickers.
+        Snapshot data for multiple tickers, batched to avoid overly large requests.
 
-        Returns {symbol: {prev_close, latest_price, daily_volume}}.
+        Returns {symbol: {prev_close, prev_high, latest_price, daily_volume, open, today_high, today_low}}.
+        Raises on API failure (per no-silent-swallow policy).
         """
         if not ALPACA_AVAILABLE or not tickers:
             return {}
 
-        try:
-            req = StockSnapshotRequest(symbol_or_symbols=tickers, feed=DataFeed.IEX)
+        result: dict[str, dict] = {}
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i : i + batch_size]
+            req = StockSnapshotRequest(symbol_or_symbols=batch, feed=DataFeed.IEX)
             snapshots = self._data.get_stock_snapshot(req)
-            result = {}
             for sym, snap in snapshots.items():
-                try:
-                    prev_close = float(snap.previous_daily_bar.close) if snap.previous_daily_bar else 0
-                    latest_price = float(snap.latest_trade.price) if snap.latest_trade else 0
-                    daily_volume = int(snap.daily_bar.volume) if snap.daily_bar else 0
-                    prev_high = float(snap.previous_daily_bar.high) if snap.previous_daily_bar else 0
-                    today_open = float(snap.daily_bar.open) if snap.daily_bar else 0
-                    today_high = float(snap.daily_bar.high) if snap.daily_bar else 0
-                    today_low = float(snap.daily_bar.low) if snap.daily_bar else 0
-                    result[sym] = {
-                        "prev_close": prev_close,
-                        "prev_high": prev_high,
-                        "latest_price": latest_price,
-                        "daily_volume": daily_volume,
-                        "open": today_open,
-                        "today_high": today_high,
-                        "today_low": today_low,
-                    }
-                except (AttributeError, TypeError):
+                if snap is None:
                     continue
-            return result
-        except Exception as e:
-            logger.error("get_snapshots failed: %s", e)
-            return {}
+                prev_bar = snap.previous_daily_bar
+                day_bar = snap.daily_bar
+                last_trade = snap.latest_trade
+                result[sym] = {
+                    "prev_close": float(prev_bar.close) if prev_bar else 0,
+                    "prev_high": float(prev_bar.high) if prev_bar else 0,
+                    "latest_price": float(last_trade.price) if last_trade else 0,
+                    "daily_volume": int(day_bar.volume) if day_bar else 0,
+                    "open": float(day_bar.open) if day_bar else 0,
+                    "today_high": float(day_bar.high) if day_bar else 0,
+                    "today_low": float(day_bar.low) if day_bar else 0,
+                }
+        return result
 
     def get_tradable_universe(self) -> list[str]:
         """

@@ -6,12 +6,11 @@ Applies Spikeet-derived scanner filters as the universe/pre-filter layer.
 Strategy entry filters (CHG-OPEN%, close_in_range, etc.) are applied separately.
 
 Filters (in order):
-  Phase A (broad universe via yfinance, then broker snapshots):
-    1. Broad-universe gap pre-screen (yfinance): gap% >= 8%, prev_close >= $3
-    2. Security class heuristic (alpha symbols <= 5 chars)
-    3. Broker snapshot refresh (real-time prev_close/open/volume)
-    4. Gap% >= 8% (actual Open vs prev Close)
-    5. Open > yesterday's high
+  Phase A (Alpaca snapshot — full universe in ~5s):
+    1. Gap% >= 8% (today_open vs prev_close, computed from Alpaca snapshots)
+    2. prev_close >= $3
+    3. Security class heuristic (alpha symbols <= 5 chars, filtered inside snapshot scan)
+    4. Open > yesterday's high (re-checked here from the same snapshot payload)
 
   Phase B (yfinance daily bars, batch):
     5. Open > 200-day SMA
@@ -65,31 +64,23 @@ def scan_ep_earnings(
     require_above_200d_sma = bool(sig_cfg.get("ep_earnings_require_above_200d_sma", True))
 
     # ---------------------------------------------------------------
-    # Phase A: broad-universe gap pre-screen (yfinance) + snapshot filters
+    # Phase A: Alpaca snapshot gap pre-screen (full tradable universe in ~5s)
     # ---------------------------------------------------------------
-    from scanner.gap_screen import scan_broad_gaps
+    from scanner.gap_screen import scan_snapshot_gaps
 
-    # Pull fresh active-tradable universe from Alpaca so delisted tickers
-    # (AL, HOLX, GLDD, ...) don't waste yfinance retries. Falls back to the
-    # static broad_universe.txt if Alpaca is unavailable.
-    universe = client.get_tradable_universe() or None
-    movers = scan_broad_gaps(min_gap_pct=min_gap_pct, min_price=min_price, universe=universe)
+    universe = client.get_tradable_universe()
+    movers = scan_snapshot_gaps(
+        client,
+        min_gap_pct=min_gap_pct,
+        min_price=min_price,
+        universe=universe,
+    )
     if not movers:
-        logger.warning("EP Earnings scan: no broad-universe gap candidates")
+        logger.warning("EP Earnings scan: no gap candidates from snapshot scan")
         return []
 
-    # Symbol validation
-    symbols = []
-    for m in movers:
-        sym = m["symbol"]
-        if len(sym) <= 5 and sym.isalpha():
-            symbols.append(sym)
-
-    if not symbols:
-        logger.info("EP Earnings scan: no valid symbols after initial filter")
-        return []
-
-    # Fetch snapshots (includes prev_close, prev_high, open, daily_volume)
+    symbols = [m["symbol"] for m in movers]
+    # Reuse the same snapshot data for downstream filters (prev_high, today volumes, etc.)
     snapshots = client.get_snapshots(symbols)
 
     candidates = []

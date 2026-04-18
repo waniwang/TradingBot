@@ -173,3 +173,84 @@ class TestFiltering:
                 batch_size=10, sleep_fn=MagicMock(),
             )
         assert [r["symbol"] for r in results] == ["B", "C", "A"]
+
+
+# ---------------------------------------------------------------------------
+# scan_snapshot_gaps — Alpaca-snapshot-based scanner (fast path for 3 PM scans)
+# ---------------------------------------------------------------------------
+
+def _snap(prev_close, open_p, prev_high=None):
+    return {
+        "prev_close": prev_close,
+        "prev_high": prev_high if prev_high is not None else prev_close * 1.01,
+        "open": open_p,
+        "latest_price": open_p,
+        "daily_volume": 1_000_000,
+        "today_high": open_p * 1.01,
+        "today_low": open_p * 0.99,
+    }
+
+
+def _mock_client(snapshots: dict, universe: list[str] | None = None):
+    client = MagicMock()
+    client.get_tradable_universe.return_value = universe or list(snapshots.keys())
+    client.get_snapshots.return_value = snapshots
+    return client
+
+
+class TestScanSnapshotGaps:
+    def test_filters_gap_below_threshold(self):
+        client = _mock_client({
+            "AAA": _snap(100, 110),   # 10% gap — passes
+            "BBB": _snap(100, 103),   # 3%  gap — rejected
+        })
+        results = gap_screen.scan_snapshot_gaps(client, min_gap_pct=8.0, min_price=3.0)
+        assert [r["symbol"] for r in results] == ["AAA"]
+
+    def test_filters_low_price(self):
+        client = _mock_client({
+            "CHEAP": _snap(2, 3),     # prev_close=$2 → rejected
+            "OK":    _snap(5, 6),     # prev_close=$5, gap 20% → pass
+        })
+        results = gap_screen.scan_snapshot_gaps(client, min_gap_pct=8.0, min_price=3.0)
+        assert [r["symbol"] for r in results] == ["OK"]
+
+    def test_drops_non_equity_symbols(self):
+        """Warrants (len>5) and non-alpha symbols shouldn't reach the snapshot call."""
+        all_snaps = {
+            "REAL": _snap(100, 115),
+            "LONGSYM9": _snap(100, 115),
+            "VACI.WS":  _snap(100, 115),
+        }
+        client = MagicMock()
+        client.get_tradable_universe.return_value = ["REAL", "LONGSYM9", "VACI.WS"]
+        # Return only what the scanner actually asks for (realistic Alpaca behaviour)
+        client.get_snapshots.side_effect = lambda syms: {s: all_snaps[s] for s in syms if s in all_snaps}
+
+        results = gap_screen.scan_snapshot_gaps(client, min_gap_pct=8.0, min_price=3.0)
+
+        called_with = client.get_snapshots.call_args[0][0]
+        assert set(called_with) == {"REAL"}
+        assert [r["symbol"] for r in results] == ["REAL"]
+
+    def test_sorted_by_gap_desc(self):
+        client = _mock_client({
+            "A": _snap(100, 110),   # 10%
+            "B": _snap(100, 130),   # 30%
+            "C": _snap(100, 120),   # 20%
+        })
+        results = gap_screen.scan_snapshot_gaps(client, min_gap_pct=8.0, min_price=3.0)
+        assert [r["symbol"] for r in results] == ["B", "C", "A"]
+
+    def test_empty_universe_returns_empty(self):
+        client = _mock_client({}, universe=[])
+        results = gap_screen.scan_snapshot_gaps(client)
+        assert results == []
+
+    def test_snapshot_error_propagates(self):
+        """Per no-silent-swallow policy, API failures fail the scan rather than return []."""
+        client = MagicMock()
+        client.get_tradable_universe.return_value = ["AAA"]
+        client.get_snapshots.side_effect = RuntimeError("alpaca down")
+        with pytest.raises(RuntimeError, match="alpaca down"):
+            gap_screen.scan_snapshot_gaps(client)

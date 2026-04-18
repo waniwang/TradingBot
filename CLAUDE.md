@@ -56,7 +56,7 @@ Strategy Scanners (premarket)     Strategy Signals (market open)    Monitor (int
                                      15% max position)
 ```
 
-**Data sources:** Alpaca screener/snapshots for scanning, yfinance for daily bars (Alpaca free tier IEX covers ~2% of stocks), Alpaca 1m candles for intraday signals.
+**Data sources:** Alpaca snapshots for gap scanning (IEX daily-snapshot coverage is ~99.7% — the "~2%" figure applies only to realtime intraday trade streams), yfinance for fundamentals (market cap, quoteType, earnings calendar), Alpaca 1m candles for intraday signals. Full Alpaca capability + quirks cheat sheet: [docs/alpaca-api.md](docs/alpaca-api.md).
 
 **Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 9:25 AM finalize watchlist → 9:30 AM intraday monitor → 3:00 PM EP earnings scan + strategy eval → 3:05 PM EP news scan + strategy eval → 3:50 PM EP earnings/news execute → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
 
@@ -224,6 +224,7 @@ All filters require the gap day to complete. Entry = Close on gap day (~3:50 PM 
 | `docs/daily-verification.md` | Daily verification playbook, diagnostics, parameter tuning reference |
 | `docs/risks-and-mitigations.md` | Known risks and how they're handled |
 | `docs/implementation-plan.md` | Phase-by-phase build plan with checklists |
+| `docs/alpaca-api.md` | Alpaca API cheat sheet — endpoints we use, endpoints tested & rejected, measured perf, tier quirks |
 
 ### Strategy & Module Docs
 

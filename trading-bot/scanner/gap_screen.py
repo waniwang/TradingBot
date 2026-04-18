@@ -156,3 +156,59 @@ def scan_broad_gaps(
         len(results), len(tickers), min_gap_pct, min_price,
     )
     return results
+
+
+def scan_snapshot_gaps(
+    client,
+    *,
+    min_gap_pct: float = 8.0,
+    min_price: float = 3.0,
+    universe: list[str] | None = None,
+) -> list[dict]:
+    """
+    Fast gap screen using Alpaca's snapshot endpoint (no yfinance).
+
+    Replaces scan_broad_gaps for the 3 PM scan window. A single snapshot
+    call returns prev_close + today's open for the entire universe in
+    seconds (vs 30+ min to bulk-download daily bars via yfinance), and
+    delisted/invalid tickers are silently omitted — no retry loops.
+
+    Args:
+        client: AlpacaClient with a populated data client.
+        min_gap_pct: filter gap% >= this value.
+        min_price: filter prev_close >= this value.
+        universe: list of symbols; defaults to client.get_tradable_universe().
+
+    Returns: [{symbol, percent_change, price}] sorted by gap% desc.
+    Raises on Alpaca API failure (fails job per no-silent-swallow policy).
+    """
+    if universe is None:
+        universe = client.get_tradable_universe()
+    # Drop non-equity-looking symbols (preferred shares, warrants) before the call
+    tickers = [s for s in (universe or []) if len(s) <= 5 and s.isalpha()]
+    if not tickers:
+        return []
+
+    snaps = client.get_snapshots(tickers)
+
+    results: list[dict] = []
+    for sym, snap in snaps.items():
+        prev_close = snap.get("prev_close", 0)
+        open_price = snap.get("open", 0)
+        if prev_close <= 0 or open_price <= 0 or prev_close < min_price:
+            continue
+        gap = (open_price - prev_close) / prev_close * 100
+        if gap < min_gap_pct:
+            continue
+        results.append({
+            "symbol": sym,
+            "percent_change": round(gap, 2),
+            "price": round(open_price, 2),
+        })
+
+    results.sort(key=lambda x: -x["percent_change"])
+    logger.info(
+        "snapshot_gap_screen: %d candidates from %d-ticker universe (gap>=%.1f%%, price>=$%.1f)",
+        len(results), len(tickers), min_gap_pct, min_price,
+    )
+    return results

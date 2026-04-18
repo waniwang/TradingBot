@@ -21,8 +21,8 @@ from strategies.ep_news.strategy import (
 )
 
 
-# Phase A pre-screen now uses yfinance via scanner/gap_screen.py — patch it
-# per-test to keep the suite offline. Helpers seed `_GAP_MOVERS` to control output.
+# Phase A pre-screen uses Alpaca snapshots via scanner/gap_screen.py::scan_snapshot_gaps
+# — patch it per-test to keep the suite offline. Helpers seed `_GAP_MOVERS`.
 
 _GAP_MOVERS: list = []
 
@@ -31,10 +31,10 @@ _GAP_MOVERS: list = []
 def _mock_gap_screen():
     _GAP_MOVERS.clear()
 
-    def fake_scan(**_):
+    def fake_scan(*_args, **_kwargs):
         return list(_GAP_MOVERS)
 
-    with patch("scanner.gap_screen.scan_broad_gaps", side_effect=fake_scan):
+    with patch("scanner.gap_screen.scan_snapshot_gaps", side_effect=fake_scan):
         yield
 
 
