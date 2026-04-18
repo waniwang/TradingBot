@@ -319,13 +319,13 @@ class TestConfirmNoEarnings:
             result = _confirm_no_earnings("NVDA", today)
         assert result is True
 
-    def test_api_exception_returns_false(self):
-        """API failure → can't confirm → skip conservatively."""
+    def test_api_exception_propagates(self):
+        """Per error-handling policy: yfinance errors must not be swallowed — they propagate so the job fails and a Telegram alert fires."""
         with patch("strategies.ep_news.scanner.yf") as mock_yf:
             mock_yf.Ticker.side_effect = Exception("yfinance down")
 
-            result = _confirm_no_earnings("NVDA", date(2026, 4, 4))
-        assert result is False
+            with pytest.raises(Exception, match="yfinance down"):
+                _confirm_no_earnings("NVDA", date(2026, 4, 4))
 
     def test_none_response_returns_true(self):
         """API returns None (no data) → confirmed no earnings."""

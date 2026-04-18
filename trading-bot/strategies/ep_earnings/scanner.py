@@ -242,40 +242,23 @@ def scan_ep_earnings(
 
 
 def _get_ticker_info(ticker: str) -> tuple[float, str]:
-    """
-    Return (market_cap, quote_type) from yfinance.
-
-    Returns (0.0, "") on failure.
-    """
-    try:
-        info = yf.Ticker(ticker).info
-        return (
-            float(info.get("marketCap", 0) or 0),
-            str(info.get("quoteType", "") or ""),
-        )
-    except Exception:
-        logger.debug("%s: failed to fetch ticker info", ticker)
-        return (0.0, "")
+    """Return (market_cap, quote_type) from yfinance. Raises on API failure."""
+    info = yf.Ticker(ticker).info
+    return (
+        float(info.get("marketCap", 0) or 0),
+        str(info.get("quoteType", "") or ""),
+    )
 
 
 def _check_earnings_today(ticker: str, today: date) -> bool:
-    """
-    Check if ticker had earnings reported today or last evening (yesterday).
-
-    Uses yfinance earnings calendar. Returns False on failure (conservative).
-    """
-    try:
-        t = yf.Ticker(ticker)
-        dates = t.get_earnings_dates(limit=4)
-        if dates is None or (hasattr(dates, "empty") and dates.empty):
-            return False
-
-        yesterday = today - timedelta(days=1)
-        for dt in dates.index:
-            d = dt.date() if hasattr(dt, "date") else dt
-            if d in (today, yesterday):
-                return True
+    """Return True if ticker reported earnings today or yesterday. Raises on API failure."""
+    dates = yf.Ticker(ticker).get_earnings_dates(limit=4)
+    if dates is None or (hasattr(dates, "empty") and dates.empty):
         return False
-    except Exception:
-        logger.debug("%s: failed to fetch earnings dates", ticker)
-        return False
+
+    yesterday = today - timedelta(days=1)
+    for dt in dates.index:
+        d = dt.date() if hasattr(dt, "date") else dt
+        if d in (today, yesterday):
+            return True
+    return False

@@ -419,10 +419,11 @@ class TestCheckEarningsToday:
         assert _check_earnings_today("NVDA", today) is False
 
     @patch("strategies.ep_earnings.scanner.yf")
-    def test_exception_returns_false(self, mock_yf):
-        """Returns False on yfinance exception."""
+    def test_exception_propagates(self, mock_yf):
+        """Per error-handling policy: yfinance errors must not be swallowed — they propagate so the job fails and a Telegram alert fires."""
         mock_yf.Ticker.side_effect = Exception("network error")
-        assert _check_earnings_today("NVDA", date(2026, 3, 27)) is False
+        with pytest.raises(Exception, match="network error"):
+            _check_earnings_today("NVDA", date(2026, 3, 27))
 
 
 class TestGetTickerInfo:
@@ -437,12 +438,11 @@ class TestGetTickerInfo:
         assert qtype == "EQUITY"
 
     @patch("strategies.ep_earnings.scanner.yf")
-    def test_exception_returns_defaults(self, mock_yf):
+    def test_exception_propagates(self, mock_yf):
+        """Per error-handling policy: yfinance errors must not be swallowed."""
         mock_yf.Ticker.side_effect = Exception("error")
-
-        mcap, qtype = _get_ticker_info("NVDA")
-        assert mcap == 0.0
-        assert qtype == ""
+        with pytest.raises(Exception, match="error"):
+            _get_ticker_info("NVDA")
 
 
 # ===========================================================================

@@ -24,7 +24,7 @@ Same three-phase filter as EP Earnings, with differences:
 | Market cap | >= $800M | >= $1B |
 | Earnings | Required | Excluded |
 
-**Earnings exclusion safety:** Uses `_confirm_no_earnings()` which returns `True` only on a successful yfinance API response confirming no earnings. If the API fails, the stock is conservatively skipped (unlike EP Earnings where failure = skip is already the safe direction). This prevents accidentally entering earnings-driven gaps as "news" when yfinance is down.
+**Earnings exclusion:** `_confirm_no_earnings()` returns `True` when the yfinance earnings calendar confirms no earnings today/yesterday. API failures are **not** swallowed — they propagate up, the scan fails, and a Telegram alert fires (per project error-handling policy). That way we never enter earnings-driven gaps as "news" due to a stale fallback.
 
 ## Strategy A (NEWS-Tight) — stop -7%
 

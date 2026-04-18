@@ -88,12 +88,14 @@ On every push to `main`, `.github/workflows/deploy.yml` SSHs into the Linode ser
 
 ## Conventions
 
+- **No silent error swallowing**: Errors must fail the pipeline and trigger a Telegram alert — never return a default value (0.0, False, `{}`, hardcoded fallbacks) from a `try/except`. The `_track_job` context manager in `main.py` already marks jobs `failed` in the DB and sends `"JOB FAILED: <label>"` via Telegram on any uncaught exception, so the correct pattern is to let exceptions propagate. If a retry is truly warranted, add it at a proper retry layer — not with a silent `except Exception: return default`. Specifically forbidden: `except Exception: return False/0.0/None/{}`, hardcoded fallback portfolio values, swallowed yfinance/Alpaca API errors. Rule of thumb: if removing the `except` would surface a real bug sooner, remove it
 - **Docs first**: Write/update docs before implementing code changes. After any code change, update the relevant README.md (strategy, module, or `docs/`) to keep docs in sync with code
 - **Dashboard param descriptions**: Descriptions + phase/variation tags for `config.yaml` `signals:` keys live in `trading-bot/api/param_meta.py`. Update there when adding a new strategy config key, or the Strategies page shows an empty description. A/B/C variation badges on signals/positions/trades are resolved at read time from `Watchlist.meta["ep_strategy"]` via `trading-bot/api/variation.py`
 - **Plain pandas**: SMA/ATR use `pandas.rolling()` — no pandas-ta (incompatible with Python 3.14)
 - **Python 3.14**: numba-dependent libraries (pandas-ta, vectorbt) won't work
 - **Alpaca BarSet**: use `bars.data` dict, NOT `bars.get()` (BarSet lacks `.get`)
 - **yfinance batch**: 1500 tickers ~14 min in batches of 500
+- **lxml required**: `yfinance.Ticker.get_earnings_dates()` scrapes HTML via `pandas.read_html()` which requires `lxml`. Listed in `pyproject.toml`; must be present in any venv (local + server)
 - **Strategy plugins**: Each strategy lives in `strategies/<name>/` with `plugin.py`, `config.yaml`, scanner, signal/strategy modules
 - **Tests**: `cd trading-bot && .venv/bin/pytest tests/ -v`
 
