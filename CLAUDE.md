@@ -12,11 +12,10 @@ Automated momentum trading bot inspired by Kristjan Kullamagi's setups: **Breako
 | Documentation | `docs/` (7 docs — read these for deep context) |
 | Entry point | `trading-bot/main.py` — APScheduler orchestrator |
 | Config | `trading-bot/config.yaml` (env vars override: `ALPACA_API_KEY`, etc.) |
-| Tests | `trading-bot/tests/` — 345 tests across 9 files |
+| Tests | `trading-bot/tests/` — 15 test files |
 | Backtest | `trading-bot/backtest/` + `trading-bot/run_backtest.py` |
 | Dashboard (FE) | `dashboard/` — Next.js + Tailwind + shadcn/ui (deploys to Vercel) |
 | Dashboard API | `trading-bot/api/` — FastAPI (runs on Linode alongside bot) |
-| Legacy dashboard | `trading-bot/dashboard_legacy/app.py` (Streamlit, deprecated) |
 | Health check | `trading-bot/api/routes/doctor.py` — `/api/doctor` endpoint (no auth required) |
 | Verification | `trading-bot/verify_day.py` — daily execution verification |
 | Operations | `trading-bot/bot.sh` — start/stop/deploy/logs/status/verify |
@@ -78,9 +77,11 @@ On every push to `main`, `.github/workflows/deploy.yml` SSHs into the Linode ser
 | `risk/manager.py` | `calculate_position_size()`, `check_exposure()`, `check_daily_loss()`, `check_weekly_loss()` |
 | `executor/alpaca_client.py` | `place_limit_order()`, `place_stop_order()`, `close_position()`, `get_candles_1m()`, `run_screener()`, `get_snapshots()` |
 | `strategies/ep_earnings/scanner.py` | `scan_ep_earnings()` — universe filters: gap >8%, prev close >$3, mcap >$800M, open > prev high, open > 200d SMA, RVOL >1 |
-| `strategies/ep_earnings/strategy.py` | `evaluate_ep_earnings_strategies()`, `evaluate_strategy_a()`, `evaluate_strategy_b()`, `compute_features()` — Strategy A+B entry filters |
+| `strategies/ep_earnings/strategy.py` | `evaluate_ep_earnings_strategies()`, `evaluate_strategy_a()`, `evaluate_strategy_b()`, `compute_features()` — A/B mutually exclusive (A wins on both) |
+| `strategies/ep_earnings/plugin.py` | `job_scan`, `job_day2_confirm`, `job_execute` — DB-driven A/B/C scheduled lifecycle |
 | `strategies/ep_news/scanner.py` | EP news gap scanner |
-| `strategies/ep_news/strategy.py` | News gap swing strategy evaluation |
+| `strategies/ep_news/strategy.py` | News gap swing strategy evaluation — A/B mutually exclusive (A wins on both) |
+| `strategies/ep_news/plugin.py` | `job_scan`, `job_day2_confirm`, `job_execute` — DB-driven A/B/C scheduled lifecycle |
 | `monitor/position_tracker.py` | Stop checks, partial exits, trailing MA close (daily close not intraday), parabolic profit targets, max hold period exit (50d for EP earnings) |
 | `db/models.py` | `Signal`, `Order`, `Position`, `Watchlist`, `DailyPnl`, `JobExecution` — exit reasons: `stop_hit`, `trailing_stop`, `trailing_ma_close`, `parabolic_target`, `max_hold_period`, `manual`, `daily_loss_limit` |
 | `backtest/runner.py` | `BacktestConfig`, `BacktestRunner.run()` — daily bar-by-bar simulation |

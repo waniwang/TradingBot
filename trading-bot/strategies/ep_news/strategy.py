@@ -2,7 +2,9 @@
 EP News swing strategy filters.
 
 Evaluates scanner candidates against Strategy A, B, and C rules.
-All strategies are evaluated independently so we can track performance separately.
+A and B are mutually exclusive per ticker — A wins if both pass (tighter -7% stop
+vs B's -10%) so we never double-stake the same idea. C is day-2 gated and can
+coexist with A/B.
 
 Strategy A (NEWS-Tight): 65% WR, +18.31% avg, PF 9.13
   1. CHG-OPEN% between 2% and 10%
@@ -274,9 +276,11 @@ def evaluate_ep_news_strategies(
     """
     Evaluate scanner candidates against Strategy A, B, and C.
 
-    For each candidate that passes any strategy, creates an entry dict
-    with strategy tag and computed features. A single stock can produce
-    multiple entries if it passes multiple strategies.
+    A and B are mutually exclusive per ticker — if A passes, B is skipped.
+    A has the tighter stop (-7% vs B's -10%), so picking A when both pass
+    gives the lower-risk entry and prevents the same idea from consuming
+    two position slots. Strategy C runs independently and can coexist
+    with A/B because it enters on day 2, not the gap day.
 
     Strategy C entries are tagged with day2_confirm=True; they should NOT
     be executed on gap day but held for day-2 confirmation by the plugin.
@@ -335,8 +339,12 @@ def evaluate_ep_news_strategies(
             **features,
         }
 
-        # Evaluate Strategy A
-        if evaluate_strategy_a(c, features, config):
+        # Evaluate Strategy A and B — A wins if both pass (tighter stop, tighter filters).
+        # Only one of A/B can produce an entry per ticker so we never double-stake the same
+        # idea across position slots or risk budget. C is independent and day-2 gated, so
+        # it can still coexist with A/B (different entry day).
+        passed_a = evaluate_strategy_a(c, features, config)
+        if passed_a:
             stop_price_a = round(entry_price * (1 - stop_a / 100), 2)
             entry_a = {**base, "ep_strategy": "A", "stop_price": stop_price_a, "stop_loss_pct": stop_a}
             entries.append(entry_a)
@@ -347,9 +355,7 @@ def evaluate_ep_news_strategies(
                 features["downside_from_open"], features["prev_10d_change_pct"],
                 features["atr_pct"], c.get("today_volume", 0) / 1e6,
             )
-
-        # Evaluate Strategy B
-        if evaluate_strategy_b(c, features, config):
+        elif evaluate_strategy_b(c, features, config):
             stop_price_b = round(entry_price * (1 - stop_b / 100), 2)
             entry_b = {**base, "ep_strategy": "B", "stop_price": stop_price_b, "stop_loss_pct": stop_b}
             entries.append(entry_b)

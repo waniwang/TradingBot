@@ -303,6 +303,7 @@ class EPNewsPlugin:
         today = datetime.now(ET).date()
 
         confirmed = []
+        failures: list[tuple[str, str]] = []  # (ticker, reason) — must never be silent
         with get_session(db_engine) as session:
             pending = session.query(Watchlist).filter(
                 Watchlist.setup_type == "ep_news",
@@ -315,6 +316,7 @@ class EPNewsPlugin:
                 return "No pending candidates"
 
             logger.info("EP news day-2 confirm: %d pending candidates", len(pending))
+            attempted = 0
 
             for wl in pending:
                 meta = wl.meta or {}
@@ -323,6 +325,7 @@ class EPNewsPlugin:
 
                 ticker = wl.ticker
                 gap_day_close = meta.get("gap_day_close", 0)
+                attempted += 1
 
                 try:
                     snapshot = client.get_snapshots([ticker])
@@ -332,12 +335,14 @@ class EPNewsPlugin:
                     elif snap and hasattr(snap, "minute_bar") and snap.minute_bar:
                         current_price = float(snap.minute_bar.close)
                     else:
-                        logger.warning("EP news day-2: no price data for %s, skipping", ticker)
+                        logger.error("EP news day-2: no price data for %s", ticker)
                         wl.stage = "expired"
+                        failures.append((ticker, "no price data"))
                         continue
                 except Exception as e:
-                    logger.warning("EP news day-2: failed to get price for %s: %s", ticker, e)
+                    logger.error("EP news day-2: failed to get price for %s: %s", ticker, e)
                     wl.stage = "expired"
+                    failures.append((ticker, f"snapshot error: {e}"))
                     continue
 
                 if current_price > gap_day_close:
@@ -384,7 +389,18 @@ class EPNewsPlugin:
                 )
             notify("\n".join(lines))
 
-        return f"{len(confirmed)} confirmed from {len(pending)} pending"
+        if failures:
+            msg_lines = [f"EP NEWS DAY-2 CONFIRM: {len(failures)}/{attempted} failed"]
+            msg_lines.extend(f"  {t}: {reason}" for t, reason in failures)
+            msg = "\n".join(msg_lines)
+            if notify:
+                notify(msg)
+            # Batch-wide failure → escalate: likely an Alpaca outage, not per-ticker noise.
+            # _track_job turns RuntimeError into a JOB FAILED alert.
+            if attempted > 0 and len(failures) == attempted:
+                raise RuntimeError(msg)
+
+        return f"{len(confirmed)} confirmed from {len(pending)} pending ({len(failures)} failed)"
 
     def _persist_pending_day2(self, entry: dict, scan_date, db_engine):
         """Persist a Strategy C candidate as pending day-2 confirmation."""

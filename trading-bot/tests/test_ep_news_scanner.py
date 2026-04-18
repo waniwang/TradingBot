@@ -705,12 +705,17 @@ class TestNewsStrategyB:
 
 class TestEvaluateEpNewsStrategies:
     def test_passes_strategy_b(self):
-        """Stock passing B produces entry with -10% stop."""
+        """Stock that passes only B (fails A's tighter volume filter) gets -10% stop.
+
+        A and B are now mutually exclusive — A wins if both pass — so to exercise
+        B's branch we build a candidate that fails one of A's tighter thresholds.
+        Volume of 4M trips A's <3M limit while staying under B's <5M.
+        """
         config = _make_strategy_config()
         candidate = _make_candidate(
             open_price=100.0, current_price=105.0,
             today_high=107.0, today_low=98.0,
-            today_volume=2_000_000,
+            today_volume=4_000_000,  # fails A's <3M, passes B's <5M
         )
         df = _make_strategy_daily_df(recent_selloff=True, atr_range=4.0)
         daily_bars = {"NVDA": df}
@@ -718,10 +723,10 @@ class TestEvaluateEpNewsStrategies:
         entries = evaluate_ep_news_strategies([candidate], daily_bars, config)
 
         b_entries = [e for e in entries if e["ep_strategy"] == "B"]
-        assert len(b_entries) >= 1
-        for e in b_entries:
-            assert e["stop_price"] == round(105.0 * 0.90, 2)  # -10% stop
-            assert e["setup_type"] == "ep_news"
+        assert len(b_entries) == 1
+        assert not any(e["ep_strategy"] == "A" for e in entries)  # A must be skipped
+        assert b_entries[0]["stop_price"] == round(105.0 * 0.90, 2)  # -10% stop
+        assert b_entries[0]["setup_type"] == "ep_news"
 
     def test_strategy_a_gets_7pct_stop(self):
         """Strategy A entries use -7% stop."""

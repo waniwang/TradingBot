@@ -2,7 +2,8 @@
 EP Earnings swing strategy filters.
 
 Evaluates scanner candidates against Strategy A, B, and C rules.
-All strategies are evaluated independently so we can track performance separately.
+A and B are mutually exclusive per ticker — A wins if both pass (tighter filter set)
+so we never double-stake the same idea. C is day-2 gated and can coexist with A/B.
 
 Strategy A (Tight Filters): 69% WR, +9.18% avg, PF 5.68
   1. CHG-OPEN% > 0 (closed above open)
@@ -235,9 +236,11 @@ def evaluate_ep_earnings_strategies(
     """
     Evaluate scanner candidates against Strategy A, B, and C.
 
-    For each candidate that passes any strategy, creates an entry dict
-    with strategy tag and computed features. A single stock can produce
-    multiple entries if it passes multiple strategies.
+    A and B are mutually exclusive per ticker — if A passes, B is skipped.
+    A is the tighter filter set, so picking A when both pass gives the
+    stronger signal and prevents the same idea from consuming two position
+    slots / doubling the risk budget. Strategy C runs independently and
+    can coexist with A/B because it enters on day 2, not the gap day.
 
     Strategy C entries are tagged with day2_confirm=True; they should NOT
     be executed on gap day but held for day-2 confirmation by the plugin.
@@ -298,8 +301,12 @@ def evaluate_ep_earnings_strategies(
             **features,
         }
 
-        # Evaluate Strategy A
-        if evaluate_strategy_a(c, features, config):
+        # Evaluate Strategy A and B — A wins if both pass (A is the tighter filter set).
+        # Only one of A/B can produce an entry per ticker so we never double-stake the same
+        # idea across position slots or risk budget. C is independent and day-2 gated, so
+        # it can still coexist with A/B (different entry day).
+        passed_a = evaluate_strategy_a(c, features, config)
+        if passed_a:
             entry_a = {**base, "ep_strategy": "A"}
             entries.append(entry_a)
             logger.info(
@@ -307,9 +314,7 @@ def evaluate_ep_earnings_strategies(
                 ticker, features["chg_open_pct"], features["close_in_range"],
                 features["downside_from_open"], features["prev_10d_change_pct"],
             )
-
-        # Evaluate Strategy B
-        if evaluate_strategy_b(c, features, config):
+        elif evaluate_strategy_b(c, features, config):
             entry_b = {**base, "ep_strategy": "B"}
             entries.append(entry_b)
             logger.info(

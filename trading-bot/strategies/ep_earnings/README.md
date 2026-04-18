@@ -55,6 +55,9 @@ Three-phase filter:
 | Prev 10D change | < -10% |
 | Stop | -7% |
 
+If both A and B pass, Strategy A is used — A is the tighter filter set and we
+never stake the same idea twice across position slots.
+
 ## Strategy C (Bear Market / Day-2 Confirm) -- ~48% WR, PF ~3.3
 
 Designed for bear market regimes where "strong gap day" filters (A/B) select stocks that get sold off hardest. Uses minimal filters + day-2 confirmation to filter out immediate reversals.

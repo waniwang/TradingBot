@@ -188,16 +188,48 @@ class TestDay2Confirm:
             assert wl.stage == "expired"
             assert "entry_price" not in wl.meta
 
-    def test_expires_on_snapshot_failure(self, db_engine, mock_client, patch_main):
+    def test_total_snapshot_failure_raises_and_expires(self, db_engine, mock_client, patch_main):
+        """Every ticker fails → raise so _track_job alerts on Telegram. Stage is also
+        flipped to expired so a stale 'watching' row doesn't get retried in a wrong
+        day-2 window tomorrow."""
         plugin = EPEarningsPlugin()
         _seed_pending_c(db_engine, ticker="LEVI", gap_day_close=20.0)
         mock_client.get_snapshots.side_effect = RuntimeError("API down")
+        sent: list[str] = []
 
-        plugin.job_day2_confirm(_config(), mock_client, db_engine, notify=lambda m: None)
+        with pytest.raises(RuntimeError, match="DAY-2 CONFIRM"):
+            plugin.job_day2_confirm(_config(), mock_client, db_engine, notify=sent.append)
 
         with get_session(db_engine) as session:
             wl = session.query(Watchlist).filter_by(ticker="LEVI").first()
             assert wl.stage == "expired"
+        assert any("LEVI" in m and "snapshot error" in m for m in sent), sent
+
+    def test_partial_failure_notifies_but_continues(self, db_engine, mock_client, patch_main):
+        """One ticker fails, another succeeds → no raise (not a systemic outage),
+        but the failure is surfaced via notify. CLAUDE.md: never silent."""
+        plugin = EPEarningsPlugin()
+        _seed_pending_c(db_engine, ticker="LEVI", gap_day_close=20.0)
+        _seed_pending_c(db_engine, ticker="GOOD", gap_day_close=10.0)
+        call_results = {"LEVI": RuntimeError("transient"), "GOOD": {"GOOD": _snap(11.0)}}
+
+        def _snap_side_effect(tickers):
+            result = call_results[tickers[0]]
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        mock_client.get_snapshots.side_effect = _snap_side_effect
+        sent: list[str] = []
+
+        plugin.job_day2_confirm(_config(), mock_client, db_engine, notify=sent.append)
+
+        with get_session(db_engine) as session:
+            levi = session.query(Watchlist).filter_by(ticker="LEVI").first()
+            good = session.query(Watchlist).filter_by(ticker="GOOD").first()
+            assert levi.stage == "expired"
+            assert good.stage == "ready"
+        assert any("LEVI" in m for m in sent), sent
 
     def test_skips_today_pending(self, db_engine, mock_client, patch_main):
         """A Strategy C row scanned today is not eligible for day-2 confirm until tomorrow."""
