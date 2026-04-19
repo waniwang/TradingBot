@@ -114,6 +114,8 @@ export interface PipelineJob {
   job_id: string;
   label: string;
   time: string;
+  /** For window jobs (intraday monitor, retry loops); null for point-in-time jobs. */
+  end_time: string | null;
   category: "scan" | "trade" | "monitor" | "system";
   phase: string;
   description: string;
@@ -157,6 +159,8 @@ export interface MergedPipelineJob {
   phase: string;
   description: string;
   scheduled_time: string;
+  /** For window jobs (intraday monitor, retry loops); null for point-in-time jobs. */
+  end_time: string | null;
   category: string;
   display_day_offset: number;
   strategy: string | null;
@@ -200,6 +204,7 @@ export type SelectedPipelineJob = {
   description?: string;
   date?: string;
   scheduled_time?: string;
+  end_time?: string | null;
   strategy?: string | null;
 };
 

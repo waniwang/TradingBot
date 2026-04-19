@@ -32,8 +32,10 @@ export function PipelineDayDetail({
   });
 
   const successCount = filteredJobs.filter((j) => j.status === "success").length;
-  const failedCount = filteredJobs.filter((j) => j.status === "failed").length;
-  const missedCount = filteredJobs.filter((j) => j.status === "missed").length;
+  // Missed = scheduled but never ran. Treat as failure — same severity, same color.
+  const failedCount = filteredJobs.filter(
+    (j) => j.status === "failed" || j.status === "missed",
+  ).length;
   const total = filteredJobs.length;
 
   // Group jobs by phase
@@ -54,9 +56,6 @@ export function PipelineDayDetail({
         )}
         {failedCount > 0 && (
           <span className="text-loss tabular-nums">• {failedCount} failed</span>
-        )}
-        {missedCount > 0 && (
-          <span className="text-yellow-500 tabular-nums">• {missedCount} missed</span>
         )}
       </div>
 
@@ -91,6 +90,7 @@ export function PipelineDayDetail({
                       phase: job.phase,
                       description: job.description,
                       scheduled_time: job.scheduled_time,
+                      end_time: job.end_time,
                       date: day.date,
                       strategy: job.strategy,
                     })

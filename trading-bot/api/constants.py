@@ -2,6 +2,8 @@
 
 # Pipeline schedule — rich definition of all daily jobs, ordered by execution time.
 # display_day_offset=1 means the job visually belongs to the *next* trading day's pipeline.
+# end_time is set for jobs that run as a window (long-running monitor, retry loops);
+# it is displayed on the timeline as "start – end". Omit for point-in-time jobs.
 PIPELINE_SCHEDULE = [
     {
         "job_id": "breakout_nightly_scan",
@@ -9,7 +11,10 @@ PIPELINE_SCHEDULE = [
         "time": "17:00",
         "category": "scan",
         "phase": "overnight",
-        "description": "Scans all US equities for breakout consolidation patterns. Feeds tomorrow's watchlist.",
+        "description": (
+            "Ranks every US equity on relative strength and consolidation tightness. "
+            "Feeds tomorrow's breakout watchlist and takes ~15 minutes on a batch of ~1,500 tickers."
+        ),
         "display_day_offset": 1,
     },
     {
@@ -18,7 +23,10 @@ PIPELINE_SCHEDULE = [
         "time": "06:00",
         "category": "scan",
         "phase": "premarket",
-        "description": "Re-scans watchlist candidates with fresh pre-market price and volume data.",
+        "description": (
+            "Refreshes daily bars for all watchlist tickers and gathers pre-market gap/RVOL. "
+            "Promotes breakout candidates to active and seeds the Episodic Pivot gap list."
+        ),
         "display_day_offset": 0,
     },
     {
@@ -27,16 +35,24 @@ PIPELINE_SCHEDULE = [
         "time": "09:25",
         "category": "system",
         "phase": "premarket",
-        "description": "Subscribes to real-time quotes for all active watchlist tickers before the bell.",
+        "description": (
+            "Opens the Alpaca 1-minute-bar WebSocket stream for every active watchlist ticker. "
+            "Required before any intraday signal can fire."
+        ),
         "display_day_offset": 0,
     },
     {
         "job_id": "intraday_monitor",
         "label": "Intraday Monitor",
         "time": "09:30",
+        "end_time": "16:00",
         "category": "monitor",
         "phase": "market_open",
-        "description": "Activates the live trading stream. Evaluates entry signals on each 1-minute bar.",
+        "description": (
+            "Drives live trading from 9:30 AM to 4:00 PM ET. On every 1-minute bar: evaluates "
+            "entry signals (ORH/ORB), checks stops, takes a 40% partial exit at +15%, updates "
+            "trailing stops, and enforces the 10-day-MA trailing-close rule at the end of the day."
+        ),
         "display_day_offset": 0,
     },
     {
@@ -45,7 +61,11 @@ PIPELINE_SCHEDULE = [
         "time": "15:00",
         "category": "scan",
         "phase": "afternoon",
-        "description": "Scans for earnings gap-up stocks meeting EP Strategy A/B entry filters.",
+        "description": (
+            "Scans earnings-driven gap-ups (>8% gap, prev close >$3, mcap >$800M, open above "
+            "prev high + 200-day SMA, RVOL >1). Saves approved A/B candidates for 3:50 PM entry "
+            "and parks Strategy C candidates for day-2 confirmation."
+        ),
         "display_day_offset": 0,
     },
     {
@@ -54,25 +74,62 @@ PIPELINE_SCHEDULE = [
         "time": "15:05",
         "category": "scan",
         "phase": "afternoon",
-        "description": "Scans for news-driven gap-up stocks meeting EP swing entry filters.",
+        "description": (
+            "Same filter stack as the earnings scan but for non-earnings catalysts (news-driven "
+            "gaps). Saves approved A/B candidates for 3:50 PM entry and parks C for day-2 confirm."
+        ),
+        "display_day_offset": 0,
+    },
+    {
+        "job_id": "ep_earnings_day2_confirm",
+        "label": "EP Earnings Day-2 Confirm",
+        "time": "15:45",
+        "category": "scan",
+        "phase": "afternoon",
+        "description": (
+            "Checks yesterday's Strategy C earnings candidates against today's price. Promotes "
+            "to ready (for the 3:50 execute) if price > gap-day close; expires the row otherwise."
+        ),
+        "display_day_offset": 0,
+    },
+    {
+        "job_id": "ep_news_day2_confirm",
+        "label": "EP News Day-2 Confirm",
+        "time": "15:45",
+        "category": "scan",
+        "phase": "afternoon",
+        "description": (
+            "Checks yesterday's Strategy C news candidates against today's price. Promotes to "
+            "ready (for the 3:50 execute) if price > gap-day close; expires the row otherwise."
+        ),
         "display_day_offset": 0,
     },
     {
         "job_id": "ep_earnings_execute",
         "label": "EP Earnings Execute",
         "time": "15:50",
+        "end_time": "15:59",
         "category": "trade",
         "phase": "afternoon",
-        "description": "Places limit orders for approved EP earnings swing setups near the close.",
+        "description": (
+            "Places limit orders for every approved EP earnings candidate (A/B/C). Fires once "
+            "per minute from 3:50 to 3:59 — each run is idempotent (skips tickers already "
+            "traded today), so retries cover transient broker/network errors."
+        ),
         "display_day_offset": 0,
     },
     {
         "job_id": "ep_news_execute",
         "label": "EP News Execute",
         "time": "15:50",
+        "end_time": "15:59",
         "category": "trade",
         "phase": "afternoon",
-        "description": "Places limit orders for approved EP news swing setups near the close.",
+        "description": (
+            "Places limit orders for every approved EP news candidate (A/B/C). Fires once per "
+            "minute from 3:50 to 3:59 — each run is idempotent, so retries cover transient "
+            "broker/network errors."
+        ),
         "display_day_offset": 0,
     },
     {
@@ -81,7 +138,11 @@ PIPELINE_SCHEDULE = [
         "time": "15:55",
         "category": "system",
         "phase": "close",
-        "description": "Records daily P&L, expires stale watchlist entries, sends Telegram summary.",
+        "description": (
+            "Applies max-hold-period exits (50 days for A/B, 20 for C) and the 10-day-MA "
+            "trailing-close exit for positions past partial. Records daily P&L, expires stale "
+            "watchlist rows, resets the daily-loss halt, and sends the Telegram summary."
+        ),
         "display_day_offset": 0,
     },
 ]
@@ -95,15 +156,15 @@ JOB_LABELS["heartbeat"] = "Heartbeat"
 PHASE_META = {
     "overnight": {"label": "Overnight", "time_range": "5:00 PM"},
     "premarket": {"label": "Pre-Market", "time_range": "6:00 \u2013 9:25 AM"},
-    "market_open": {"label": "Market Open", "time_range": "9:30 AM"},
-    "afternoon": {"label": "Afternoon Swing", "time_range": "3:00 \u2013 3:50 PM"},
+    "market_open": {"label": "Market Open", "time_range": "9:30 AM \u2013 4:00 PM"},
+    "afternoon": {"label": "Afternoon Swing", "time_range": "3:00 \u2013 3:59 PM"},
     "close": {"label": "Close", "time_range": "3:55 PM"},
 }
 
 # Ordered list of phases for consistent display
 PHASE_ORDER = ["overnight", "premarket", "market_open", "afternoon", "close"]
 
-# ── Strategy ↔ job mapping ───────────────────────────────────��──────
+# ── Strategy ↔ job mapping ─────────────────────────────────────────
 
 # Per-job ownership:
 #   frozenset({slug}):          strategy-owned, shows under that strategy's tab
@@ -149,11 +210,10 @@ STRATEGY_META = {
     },
 }
 
-# Extra job_ids that are in plugins but not in PIPELINE_SCHEDULE
-STRATEGY_EXTRA_JOBS = {
-    "ep_earnings": ["ep_earnings_day2_confirm"],
-    "ep_news": ["ep_news_day2_confirm"],
-}
+# Extra job_ids that were historically registered by plugins but not in PIPELINE_SCHEDULE.
+# day2_confirm jobs have since moved into PIPELINE_SCHEDULE, so this map is now empty —
+# kept to preserve the API surface for callers that still consult it.
+STRATEGY_EXTRA_JOBS: dict[str, list[str]] = {}
 
 
 def job_owners(job_id: str) -> frozenset[str] | None:

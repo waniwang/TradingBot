@@ -31,7 +31,9 @@ export const STATUS_TEXT_COLORS: Record<string, string> = {
   success: "text-profit",
   running: "text-blue-400 animate-pulse",
   failed: "text-loss",
-  missed: "text-yellow-400",
+  // A missed job (scheduled but never produced a JobExecution row) is a failure
+  // as far as the operator is concerned — same color, distinct label.
+  missed: "text-loss",
   upcoming: "text-muted-foreground",
   skipped: "text-muted-foreground",
   next: "text-blue-400 animate-pulse",

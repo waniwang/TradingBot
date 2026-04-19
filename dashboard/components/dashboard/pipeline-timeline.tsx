@@ -10,6 +10,7 @@ export interface TimelineStep {
   job_id: string;
   label: string;
   time: string;
+  end_time: string | null;
   category: string;
   phase: string;
   description: string;
@@ -161,10 +162,11 @@ export const STATUS_STYLES: Record<StepStatus, { dot: string; line: string; text
     line: "bg-border",
     text: "text-muted-foreground",
   },
+  // Missed = scheduled but no execution row. Rendered identically to failed.
   missed: {
-    dot: "bg-transparent border-muted-foreground/40",
+    dot: "bg-loss border-loss",
     line: "bg-border",
-    text: "text-muted-foreground",
+    text: "text-foreground",
   },
 };
 
@@ -233,7 +235,9 @@ export function PipelineTimeline({
   });
 
   const completedCount = steps.filter((s) => s.status === "success").length;
-  const failedCount = steps.filter((s) => s.status === "failed").length;
+  const failedCount = steps.filter(
+    (s) => s.status === "failed" || s.status === "missed",
+  ).length;
 
   // Group steps by phase, preserving order
   const phases = data.phase_order || ["overnight", "premarket", "market_open", "afternoon", "close"];
@@ -369,15 +373,22 @@ export function PipelineTimeline({
                             category: step.category,
                             phase: step.phase,
                             description: step.description,
+                            scheduled_time: step.time,
+                            end_time: step.end_time,
                             strategy: step.strategy,
                           })
                         }
                       >
-                        {/* Time column */}
-                        <div className="w-16 shrink-0 pt-0.5 text-right">
-                          <span className="text-[11px] tabular-nums text-muted-foreground">
+                        {/* Time column — shows start time and, when set, an end time on the line below */}
+                        <div className="w-16 shrink-0 pt-0.5 text-right leading-tight">
+                          <div className="text-[11px] tabular-nums text-muted-foreground">
                             {formatTime(step.time)}
-                          </span>
+                          </div>
+                          {step.end_time && (
+                            <div className="text-[10px] tabular-nums text-muted-foreground/60">
+                              – {formatTime(step.end_time)}
+                            </div>
+                          )}
                         </div>
 
                         {/* Dot + line column */}

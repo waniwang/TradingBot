@@ -57,7 +57,9 @@ Strategy Scanners (premarket)     Strategy Signals (market open)    Monitor (int
 
 **Data sources:** Alpaca snapshots for gap scanning (IEX daily-snapshot coverage is ~99.7% — the "~2%" figure applies only to realtime intraday trade streams), yfinance for fundamentals (market cap, quoteType, earnings calendar), Alpaca 1m candles for intraday signals. Full Alpaca capability + quirks cheat sheet: [docs/alpaca-api.md](docs/alpaca-api.md).
 
-**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 9:25 AM finalize watchlist → 9:30 AM intraday monitor → 3:00 PM EP earnings scan + strategy eval → 3:05 PM EP news scan + strategy eval → 3:50–3:59 PM EP earnings/news execute (retries every minute, idempotent) → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
+**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 9:25 AM finalize watchlist → 9:30 AM–4:00 PM intraday monitor (long-running window driven by the Alpaca 1-min bar stream registered at 9:25) → 3:00 PM EP earnings scan + strategy eval → 3:05 PM EP news scan + strategy eval → 3:45 PM EP earnings/news day-2 confirm → 3:50–3:59 PM EP earnings/news execute (retries every minute, idempotent) → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
+
+Pipeline job metadata (descriptions, categories, `time`/`end_time` window, phase) lives exclusively in `api/constants.py::PIPELINE_SCHEDULE`. Edit entries there to change what the dashboard Pipeline page displays. `end_time` is set on jobs that run as a window (intraday monitor, execute retry loops); omit it for point-in-time jobs.
 
 **Pipeline job visibility (dashboard):** jobs are only scheduled/displayed if an enabled strategy needs them. `premarket_scan` and `subscribe_watchlist` are owned by `breakout` + `episodic_pivot`; if neither is enabled, they don't register. `intraday_monitor` and `eod_tasks` are always-on. Ownership lives in `api/constants.py::JOB_OWNERS`; dashboard tabs: **All** / per-strategy / **Shared** (multi-owner + always-on).
 

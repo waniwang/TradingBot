@@ -153,6 +153,7 @@ def _build_schedule_dicts() -> list[dict]:
             "job_id": job["job_id"],
             "label": job["label"],
             "time": job["time"],
+            "end_time": job.get("end_time"),
             "category": job["category"],
             "phase": job["phase"],
             "description": job["description"],
@@ -182,16 +183,20 @@ def _merge_schedule_with_executions(
 
         strategy = job_to_strategy(job_id)
 
+        base = {
+            "job_id": job_id,
+            "label": job["label"],
+            "phase": job["phase"],
+            "description": job["description"],
+            "scheduled_time": job["time"],
+            "end_time": job.get("end_time"),
+            "category": job["category"],
+            "display_day_offset": job["display_day_offset"],
+            "strategy": strategy,
+        }
         if exec_data:
             row = {
-                "job_id": job_id,
-                "label": job["label"],
-                "phase": job["phase"],
-                "description": job["description"],
-                "scheduled_time": job["time"],
-                "category": job["category"],
-                "display_day_offset": job["display_day_offset"],
-                "strategy": strategy,
+                **base,
                 "status": exec_data["status"],
                 "failure_reason": exec_data.get("failure_reason"),
                 "started_at": exec_data.get("started_at"),
@@ -202,14 +207,7 @@ def _merge_schedule_with_executions(
             }
         else:
             row = {
-                "job_id": job_id,
-                "label": job["label"],
-                "phase": job["phase"],
-                "description": job["description"],
-                "scheduled_time": job["time"],
-                "category": job["category"],
-                "display_day_offset": job["display_day_offset"],
-                "strategy": strategy,
+                **base,
                 "status": "missed" if is_past else "upcoming",
                 "failure_reason": None,
                 "started_at": None,
@@ -224,13 +222,17 @@ def _merge_schedule_with_executions(
 
 
 def _compute_day_summary(jobs: list[dict]) -> str:
-    """Compute a summary status for a day based on its merged jobs."""
+    """Compute a summary status for a day based on its merged jobs.
+
+    Missed jobs are treated as failures — a scheduled job that never produced a
+    JobExecution row is indistinguishable from a failure to the operator.
+    """
     statuses = [j["status"] for j in jobs]
     if all(s == "success" for s in statuses):
         return "all_passed"
-    if any(s == "failed" for s in statuses):
+    if any(s in ("failed", "missed") for s in statuses):
         return "failures"
-    if any(s in ("missed", "skipped") for s in statuses):
+    if any(s == "skipped" for s in statuses):
         return "some_issues"
     if any(s in ("running", "upcoming") for s in statuses):
         return "in_progress"
@@ -320,7 +322,7 @@ def get_pipeline_history(days: int = Query(14, ge=1, le=30)):
             session.query(JobExecution)
             .filter(JobExecution.job_id.in_(scheduled_job_ids))
             .order_by(JobExecution.trade_date.desc(), JobExecution.started_at)
-            .limit(days * 10)
+            .limit(days * 40)  # 11 scheduled jobs + up to 10× retries per execute job
             .all()
         )
 

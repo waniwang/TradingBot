@@ -271,7 +271,7 @@ export function PipelineJobDetailModal({
         <DialogHeader>
           <div className="flex items-center gap-2 flex-wrap">
             <DialogTitle>{job.label}</DialogTitle>
-            {!["missed", "upcoming"].includes(job.status) && (
+            {job.status !== "upcoming" && (
               <span className={`text-xs font-medium ${getStatusTextClass(job.status)}`}>
                 {getStatusLabel(job.status, job.failure_reason)}
               </span>
@@ -310,7 +310,11 @@ export function PipelineJobDetailModal({
             <DetailRow label="Date">{job.date}</DetailRow>
           )}
           {job.scheduled_time && (
-            <DetailRow label="Scheduled">{job.scheduled_time}</DetailRow>
+            <DetailRow label="Scheduled">
+              {job.end_time
+                ? `${job.scheduled_time} – ${job.end_time} ET`
+                : `${job.scheduled_time} ET`}
+            </DetailRow>
           )}
           {hasExecution && (
             <>
@@ -353,7 +357,7 @@ export function PipelineJobDetailModal({
             {job.status === "upcoming"
               ? "This job has not run yet."
               : job.status === "missed"
-                ? "This job has not run yet."
+                ? "This job was scheduled but never produced an execution record. Treated as a failure — check logs or Telegram alerts for the underlying cause."
                 : job.status === "skipped"
                   ? "This job was skipped."
                   : null}

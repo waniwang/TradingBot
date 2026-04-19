@@ -125,7 +125,19 @@ export default function PipelinePage() {
         >
           <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-auto">
             <DialogHeader>
-              <DialogTitle>{selectedDay?.date}</DialogTitle>
+              <DialogTitle>
+                {selectedDay
+                  ? new Date(selectedDay.date + "T12:00:00").toLocaleDateString(
+                      "en-US",
+                      {
+                        weekday: "long",
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      },
+                    )
+                  : ""}
+              </DialogTitle>
             </DialogHeader>
             <PipelineDayDetail
               day={selectedDay}
