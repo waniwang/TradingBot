@@ -45,8 +45,8 @@ export function PipelineHistoryCalendar({
     );
   }
 
-  // Show days in chronological order (oldest first) so the most recent day sits on the right.
-  const sorted = [...days].sort((a, b) => a.date.localeCompare(b.date));
+  // Reverse chronological — most recent day on the left.
+  const sorted = [...days].sort((a, b) => b.date.localeCompare(a.date));
 
   return (
     <div className="grid grid-cols-7 gap-1.5 md:grid-cols-14">
