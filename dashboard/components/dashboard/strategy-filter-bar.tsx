@@ -20,7 +20,7 @@ export function StrategyFilterBar({ value, onChange, strategies }: StrategyFilte
     }
   }
 
-  pills.push({ value: "system", label: "System" });
+  pills.push({ value: "shared", label: "Shared" });
 
   return (
     <div className="flex gap-1.5 overflow-x-auto pb-1 mb-3">

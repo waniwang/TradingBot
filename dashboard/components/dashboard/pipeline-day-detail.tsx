@@ -27,8 +27,8 @@ export function PipelineDayDetail({
     if (strategyFilter === "all") {
       return strat === null || !disabledStrategySlugs?.has(strat);
     }
-    if (strategyFilter === "system") return strat === null;
-    return strat === strategyFilter || strat === null;
+    if (strategyFilter === "shared") return strat === null;
+    return strat === strategyFilter;
   });
 
   const successCount = filteredJobs.filter((j) => j.status === "success").length;

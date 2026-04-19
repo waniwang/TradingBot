@@ -105,12 +105,25 @@ PHASE_ORDER = ["overnight", "premarket", "market_open", "afternoon", "close"]
 
 # ── Strategy ↔ job mapping ───────────────────────────────────��──────
 
-# Job IDs with no associated strategy
-SYSTEM_JOB_IDS = frozenset({
-    "premarket_scan", "subscribe_watchlist",
-    "intraday_monitor", "eod_tasks",
-    "reconcile_positions", "heartbeat",
-})
+# Per-job ownership:
+#   frozenset({slug}):          strategy-owned, shows under that strategy's tab
+#   frozenset({slug1, slug2}):  multi-owner, shows under "Shared" if any owner enabled
+#   None:                       always-on, shows under "Shared" unconditionally
+JOB_OWNERS: dict[str, frozenset[str] | None] = {
+    "breakout_nightly_scan": frozenset({"breakout"}),
+    "premarket_scan": frozenset({"breakout", "episodic_pivot"}),
+    "subscribe_watchlist": frozenset({"breakout", "episodic_pivot"}),
+    "intraday_monitor": None,
+    "ep_earnings_scan": frozenset({"ep_earnings"}),
+    "ep_news_scan": frozenset({"ep_news"}),
+    "ep_earnings_execute": frozenset({"ep_earnings"}),
+    "ep_news_execute": frozenset({"ep_news"}),
+    "ep_earnings_day2_confirm": frozenset({"ep_earnings"}),
+    "ep_news_day2_confirm": frozenset({"ep_news"}),
+    "eod_tasks": None,
+    "reconcile_positions": None,
+    "heartbeat": None,
+}
 
 # All known strategies with display names and descriptions
 STRATEGY_META = {
@@ -143,11 +156,34 @@ STRATEGY_EXTRA_JOBS = {
 }
 
 
-def job_to_strategy(job_id: str) -> str | None:
-    """Return strategy slug for a job_id, or None for system jobs."""
-    if job_id in SYSTEM_JOB_IDS:
-        return None
+def job_owners(job_id: str) -> frozenset[str] | None:
+    """Return the set of strategies that own/need a job, or None if always-on.
+
+    Falls back to prefix-match against STRATEGY_META for unregistered job_ids.
+    """
+    if job_id in JOB_OWNERS:
+        return JOB_OWNERS[job_id]
     for slug in STRATEGY_META:
         if job_id.startswith(slug):
-            return slug
+            return frozenset({slug})
     return None
+
+
+def job_to_strategy(job_id: str) -> str | None:
+    """Return the single owning strategy slug, or None for shared/always-on jobs.
+
+    Multi-owner jobs (e.g. premarket_scan, which serves breakout + episodic_pivot)
+    return None — these belong under the "Shared" tab.
+    """
+    owners = job_owners(job_id)
+    if owners is None or len(owners) != 1:
+        return None
+    return next(iter(owners))
+
+
+def is_job_active(job_id: str, enabled_slugs) -> bool:
+    """Return True if the job should be scheduled/displayed given enabled strategies."""
+    owners = job_owners(job_id)
+    if owners is None:
+        return True
+    return bool(owners & set(enabled_slugs))

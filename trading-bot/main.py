@@ -236,27 +236,23 @@ def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=Non
     _clear_daily_caches()
 
     today = datetime.now(ET).date()
-    errors = []
     plugins = get_registry()
 
-    # 1. Expire/demote yesterday's stale entries (uses plugin.watchlist_persist_days)
-    try:
-        expire_stale_active(today, db_engine, plugins=plugins)
-    except Exception as e:
-        logger.error("Failed to expire stale active entries: %s", e)
+    # 1. Expire/demote yesterday's stale entries (uses plugin.watchlist_persist_days).
+    # Let exceptions propagate — a failure here means tomorrow's watchlist state
+    # is suspect and the operator must know.
+    expire_stale_active(today, db_engine, plugins=plugins)
 
-    # 2. Run premarket scan for each enabled strategy
+    # 2. Run premarket scan for each enabled strategy. Any plugin raising here
+    # fails the whole job so _track_job fires "JOB FAILED" via Telegram. We'd
+    # rather lose one scan-cycle than ship bad watchlist state silently.
     for plugin in plugins.values():
         _set_progress(f"Scanning {plugin.display_name}")
-        try:
-            candidates = plugin.premarket_scan(config, client, db_engine, notify)
-            count = len(candidates) if isinstance(candidates, list) else 0
-            if isinstance(candidates, list) and candidates:
-                persist_candidates(candidates, plugin.name, "active", today, db_engine)
-            logger.info("%s premarket scan: %d candidates", plugin.display_name, count)
-        except Exception as e:
-            logger.error("%s premarket scan failed: %s", plugin.display_name, e)
-            errors.append(f"{plugin.display_name} scan failed: {e}")
+        candidates = plugin.premarket_scan(config, client, db_engine, notify)
+        count = len(candidates) if isinstance(candidates, list) else 0
+        if isinstance(candidates, list) and candidates:
+            persist_candidates(candidates, plugin.name, "active", today, db_engine)
+        logger.info("%s premarket scan: %d candidates", plugin.display_name, count)
 
     # 5. Load unified active watchlist from DB (filtered to enabled strategies)
     enabled_names = list(plugins.keys())
@@ -276,8 +272,6 @@ def job_premarket_scan(config: dict, client: AlpacaClient, db_engine, notify=Non
     # Send Telegram notifications
     if notify:
         notify(_format_watchlist_notification(_watchlist))
-        if errors:
-            notify("SCAN ERRORS:\n" + "\n".join(errors))
 
     # Return summary for job tracking
     by_setup: dict[str, int] = {}
@@ -1061,17 +1055,10 @@ class _track_job:
                     row.result_summary = (self.summary or "")[:500] or None
                     session.commit()
             # Notify via Telegram on uncaught job failures
-            if exc_type is not None and _notify_fn:
-                short_err = str(exc_val)[:200]
-                try:
-                    _notify_fn(f"JOB FAILED: {self.label}\n{short_err}")
-                except Exception as notify_err:
-                    # Last-line-of-defense failure — elevate to ERROR and tag the DB row
-                    # so the dashboard / doctor endpoint can surface the alert gap.
-                    logger.error(
-                        "Telegram notify FAILED for %s — operator may be unaware of failure: %s",
-                        self.job_id, notify_err, exc_info=True,
-                    )
+            if exc_type is not None:
+                from core.alerts import notify_job_failure
+                sent = notify_job_failure(self.label, exc_val, _notify_fn, self.job_id)
+                if not sent:
                     try:
                         with get_session(_db_engine) as session:
                             row = session.get(JobExecution, self._row_id)
@@ -1436,20 +1423,28 @@ def main():
     # Register strategy-declared cron jobs (e.g. breakout nightly scan)
     register_strategy_jobs(scheduler, plugins, config, client, db_engine, notify)
 
-    scheduler.add_job(
-        _tracked,
-        CronTrigger(hour=6, minute=0, day_of_week="mon-fri", timezone=ET),
-        args=["premarket_scan", job_premarket_scan, config, client, db_engine, notify],
-        id="premarket_scan",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _tracked,
-        CronTrigger(hour=9, minute=25, day_of_week="mon-fri", timezone=ET),
-        args=["subscribe_watchlist", job_subscribe_watchlist, client, config, tracker, risk, db_engine, notify],
-        id="subscribe_watchlist",
-        replace_existing=True,
-    )
+    # Only schedule premarket_scan / subscribe_watchlist if a strategy that uses them
+    # is enabled. With only EP swing strategies enabled these jobs would no-op,
+    # so they'd just add noise to the pipeline. Keep the ownership list in sync
+    # with api/constants.py::JOB_OWNERS.
+    intraday_owners = {"breakout", "episodic_pivot"}
+    needs_intraday_plumbing = bool(set(plugins.keys()) & intraday_owners)
+
+    if needs_intraday_plumbing:
+        scheduler.add_job(
+            _tracked,
+            CronTrigger(hour=6, minute=0, day_of_week="mon-fri", timezone=ET),
+            args=["premarket_scan", job_premarket_scan, config, client, db_engine, notify],
+            id="premarket_scan",
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            _tracked,
+            CronTrigger(hour=9, minute=25, day_of_week="mon-fri", timezone=ET),
+            args=["subscribe_watchlist", job_subscribe_watchlist, client, config, tracker, risk, db_engine, notify],
+            id="subscribe_watchlist",
+            replace_existing=True,
+        )
     scheduler.add_job(
         _tracked,
         CronTrigger(hour=9, minute=30, day_of_week="mon-fri", timezone=ET),

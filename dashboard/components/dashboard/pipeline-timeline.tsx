@@ -224,11 +224,12 @@ export function PipelineTimeline({
       // Hide disabled strategy jobs
       return strat === null || !disabledSlugs.has(strat);
     }
-    if (strategyFilter === "system") {
+    if (strategyFilter === "shared") {
       return strat === null;
     }
-    // Specific strategy: show its jobs + system jobs
-    return strat === strategyFilter || strat === null;
+    // Specific strategy tab: show only that strategy's jobs.
+    // Shared jobs (intraday_monitor, eod_tasks, etc.) live under the "Shared" tab.
+    return strat === strategyFilter;
   });
 
   const completedCount = steps.filter((s) => s.status === "success").length;

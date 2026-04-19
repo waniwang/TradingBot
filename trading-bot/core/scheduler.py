@@ -59,20 +59,11 @@ def _tracked_strategy_job(job_id, handler, config, client, db_engine, notify):
             summary = f"Ready: {ready}, Watching: {watching}, New: {new}"
     except Exception as exc:
         import traceback as _tb
+        from core.alerts import notify_job_failure
+
         status = "failed"
         error_text = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))[:2000]
-        # Notify via Telegram so failures are visible immediately
-        if notify:
-            short_err = str(exc)[:200]
-            try:
-                notify(f"JOB FAILED: {label}\n{short_err}")
-            except Exception as notify_err:
-                # Last-line-of-defense failure — ERROR, not debug, so the log at
-                # least captures that the operator won't see the failure alert.
-                logger.error(
-                    "Telegram notify FAILED for %s — operator may be unaware of job failure: %s",
-                    job_id, notify_err, exc_info=True,
-                )
+        notify_job_failure(label, exc, notify, job_id)
         raise
     finally:
         if row_id is not None:
@@ -106,6 +97,9 @@ def register_strategy_jobs(scheduler, plugins, config, client, db_engine, notify
                 id=entry.job_id,
                 args=[entry.job_id, entry.handler, config, client, db_engine, notify],
                 replace_existing=True,
+                # Tolerate up to 60s of fire lag so a briefly-delayed bot still runs
+                # a scheduled fire instead of silently skipping it.
+                misfire_grace_time=60,
             )
             logger.info(
                 "Registered job '%s' for strategy '%s'",

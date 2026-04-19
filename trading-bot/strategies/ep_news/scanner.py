@@ -140,11 +140,9 @@ def scan_ep_news(
     from signals.base import compute_sma
 
     tickers_to_check = [c["ticker"] for c in candidates]
-    try:
-        bars = client.get_daily_bars_batch(tickers_to_check, days=300)
-    except Exception as e:
-        logger.warning("EP News scan: failed to fetch daily bars: %s", e)
-        bars = {}
+    # Let fetch errors propagate — falling back to bars={} silently drops the whole
+    # universe and the outer job would report "0 candidates" as a success.
+    bars = client.get_daily_bars_batch(tickers_to_check, days=300)
 
     filtered_b = []
     for c in candidates:

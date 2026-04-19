@@ -101,11 +101,9 @@ def get_premarket_gappers(
     prior_rally_max = float(_cfg.get("prior_rally_max_pct", 50.0))
     if candidates:
         tickers_to_check = [c["ticker"] for c in candidates]
-        try:
-            bars_6m = client.get_daily_bars_batch(tickers_to_check, days=130)
-        except Exception as e:
-            logger.warning("Failed to fetch 6m bars for EP rally filter: %s", e)
-            bars_6m = {}
+        # Let fetch errors propagate — a fallback to {} silently keeps every
+        # candidate (rally filter becomes a no-op) without the operator knowing.
+        bars_6m = client.get_daily_bars_batch(tickers_to_check, days=130)
         filtered = []
         for c in candidates:
             df = bars_6m.get(c["ticker"])

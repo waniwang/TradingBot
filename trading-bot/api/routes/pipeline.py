@@ -12,7 +12,14 @@ from fastapi import APIRouter, Query
 
 from fastapi import HTTPException
 
-from api.constants import PIPELINE_SCHEDULE, JOB_LABELS, PHASE_META, PHASE_ORDER, job_to_strategy
+from api.constants import (
+    PIPELINE_SCHEDULE,
+    JOB_LABELS,
+    PHASE_META,
+    PHASE_ORDER,
+    job_to_strategy,
+    is_job_active,
+)
 from api.deps import get_enabled_strategies
 from api.variation import resolve_variations_batch
 from db.models import (
@@ -129,15 +136,14 @@ def _serialize_execution(r: JobExecution, include_error: bool = True) -> dict:
 
 
 def _active_schedule() -> list[dict]:
-    """PIPELINE_SCHEDULE filtered to jobs whose strategy is currently enabled.
+    """PIPELINE_SCHEDULE filtered to jobs needed by currently enabled strategies.
 
-    System jobs (no associated strategy) are always included.
+    Always-on jobs (intraday_monitor, eod_tasks) are included unconditionally.
+    Multi-owner jobs (premarket_scan, subscribe_watchlist) are included if ANY
+    of their owners is enabled.
     """
-    enabled = get_enabled_strategies()
-    return [
-        job for job in PIPELINE_SCHEDULE
-        if job_to_strategy(job["job_id"]) in (None, *enabled)
-    ]
+    enabled = set(get_enabled_strategies())
+    return [job for job in PIPELINE_SCHEDULE if is_job_active(job["job_id"], enabled)]
 
 
 def _build_schedule_dicts() -> list[dict]:
