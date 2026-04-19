@@ -56,9 +56,9 @@ export function deriveSteps(data: PipelineData): TimelineStep[] {
         status = exec.status as StepStatus;
       }
     } else {
-      // No execution row — check if job time has passed
-      if (job.display_day_offset === 1) {
-        // Overnight job (ran previous day) — no execution means missed or upcoming
+      // No execution row. On non-trading days the scheduler never fires, so
+      // nothing can be "missed" — the whole day is muted/upcoming.
+      if (!data.is_trading_day || job.display_day_offset === 1) {
         status = "upcoming";
       } else {
         const [h, m] = job.time.split(":").map(Number);
