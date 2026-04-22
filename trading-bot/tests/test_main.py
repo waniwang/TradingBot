@@ -9,11 +9,11 @@ from unittest.mock import MagicMock, patch
 
 from main import (
     _format_watchlist_notification,
-    _wait_for_fill,
     _clear_daily_caches,
     _prefetch_daily_bars,
     job_reconcile_positions,
 )
+from core.execution import _wait_for_fill
 
 
 # ---------------------------------------------------------------------------
@@ -576,7 +576,7 @@ class TestMarkTriggeredFailure:
             gap_pct=10.0,
         )
 
-        with patch("main.mark_triggered", side_effect=RuntimeError("DB locked")):
+        with patch("core.execution.mark_triggered", side_effect=RuntimeError("DB locked")):
             # Should NOT raise — order already placed. Background fill thread spawned then exits cleanly.
             _execute_entry(
                 ticker="AAPL",

@@ -86,7 +86,7 @@ class EPEarningsPlugin:
 
     def job_scan(self, config, client, db_engine, notify):
         """3:00 PM ET — EOD scan for EP earnings gap-up candidates."""
-        from main import is_trading_day
+        from core.execution import is_trading_day
         from strategies.ep_earnings.scanner import scan_ep_earnings
         from strategies.ep_earnings.strategy import evaluate_ep_earnings_strategies
         from scanner.watchlist_manager import persist_candidates, get_active_watchlist
@@ -180,7 +180,7 @@ class EPEarningsPlugin:
         crash-safe — a process restart between scan/confirm and execute is recoverable
         because nothing is held in memory.
         """
-        from main import is_trading_day, _execute_entry, _compute_current_daily_pnl, _compute_current_weekly_pnl
+        from core.execution import is_trading_day, _execute_entry, _compute_current_daily_pnl, _compute_current_weekly_pnl
         from signals.base import SignalResult
         from risk.manager import RiskManager
         from db.models import Order, Position, Watchlist, get_session
@@ -307,7 +307,7 @@ class EPEarningsPlugin:
 
     def job_day2_confirm(self, config, client, db_engine, notify):
         """3:45 PM ET — check yesterday's Strategy C candidates for day-2 confirmation."""
-        from main import is_trading_day
+        from core.execution import is_trading_day
         from db.models import Watchlist, get_session
 
         if not is_trading_day(client):

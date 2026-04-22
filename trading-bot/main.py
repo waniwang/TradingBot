@@ -32,6 +32,12 @@ from apscheduler.triggers.cron import CronTrigger
 from core.loader import load_strategies, get_registry, get_plugin
 from core.scheduler import register_strategy_jobs
 from core import data_cache
+from core.execution import (
+    is_trading_day,
+    execute_entry as _execute_entry,
+    _compute_current_daily_pnl,
+    _compute_current_weekly_pnl,
+)
 from db.models import init_db, get_session, JobExecution
 from executor.alpaca_client import AlpacaClient
 from monitor.position_tracker import PositionTracker
@@ -168,18 +174,7 @@ def make_notifier(config: dict):
 # Market calendar helpers
 # ---------------------------------------------------------------------------
 
-def is_trading_day(client=None) -> bool:
-    """
-    Return True if today is a US equity trading day.
-
-    Uses Alpaca's calendar API when a client is available — correctly handles
-    weekends, federal holidays, and early-close days (e.g. day after Thanksgiving).
-    Falls back to a simple weekday check if no client is passed.
-    """
-    if client is not None:
-        return client.is_trading_day()
-    # Fallback: weekday only (no holiday awareness)
-    return datetime.now(ET).weekday() < 5
+# is_trading_day is now imported from core.execution (shared with main_ib.py)
 
 
 # ---------------------------------------------------------------------------
@@ -554,245 +549,8 @@ def _validate_signal(ticker: str, sig) -> bool:
     return True
 
 
-def _wait_for_fill(client, broker_order_id: str, timeout_secs: int = 60) -> dict | None:
-    """
-    Poll broker until order fills, hits a terminal state, or times out.
-
-    Returns fill dict on success, None if cancelled/expired/timed-out.
-    """
-    import time
-    TERMINAL = {"filled", "cancelled", "expired", "rejected", "replaced", "done_for_day"}
-    deadline = time.time() + timeout_secs
-    last_info = None
-    while time.time() < deadline:
-        try:
-            info = client.get_order_status(broker_order_id)
-            status = info.get("status", "")
-            if status == "filled":
-                return info
-            if status == "partially_filled":
-                logger.info("Order %s partially filled (%s shares)", broker_order_id, info.get("filled_qty"))
-                last_info = info
-            if status in TERMINAL:
-                logger.info("Order %s ended with status: %s", broker_order_id, status)
-                return None
-        except Exception as e:
-            logger.warning("Error polling order %s: %s", broker_order_id, e)
-        time.sleep(2)
-
-    # On timeout, accept partial fill if any shares were filled
-    if last_info and last_info.get("filled_qty", 0) > 0:
-        logger.info("Order %s timed out but has partial fill of %s shares — accepting",
-                     broker_order_id, last_info["filled_qty"])
-        # Cancel the remaining unfilled quantity to prevent orphaned fills
-        try:
-            client.cancel_order(broker_order_id)
-            logger.info("Cancelled remainder of partially filled order %s", broker_order_id)
-        except Exception as e:
-            logger.warning("Failed to cancel remainder of order %s: %s — "
-                           "orphaned qty may fill later", broker_order_id, e)
-        return last_info
-
-    logger.info("Order %s did not fill within %ds", broker_order_id, timeout_secs)
-    return None
-
-
-def _await_fill_and_setup_stop(
-    ticker, signal, shares, broker_order_id, order_db_id, client, db_engine, notify
-):
-    """
-    Runs in a background thread after an entry order is submitted.
-
-    Waits for fill confirmation, then:
-      - Updates the Order record with actual fill price
-      - Creates the Position record
-      - Places a GTC stop order with the broker
-    """
-    from db.models import Order, Position
-
-    fill = _wait_for_fill(client, broker_order_id, timeout_secs=60)
-
-    if fill is None:
-        # Order didn't fill — cancel it and clean up
-        logger.info("Entry order for %s did not fill within timeout — cancelling", ticker)
-        try:
-            client.cancel_order(broker_order_id)
-        except Exception as e:
-            logger.warning("Failed to cancel unfilled order %s: %s", broker_order_id, e)
-        with get_session(db_engine) as session:
-            order = session.query(Order).filter_by(id=order_db_id).first()
-            if order:
-                order.status = "cancelled"
-                session.commit()
-        notify(f"ENTRY NOT FILLED: {ticker} order cancelled (timed out)")
-        return
-
-    # Order filled — extract actual fill details
-    actual_price = fill.get("filled_avg_price") or signal.entry_price
-    filled_qty = fill.get("filled_qty")
-    if filled_qty is None:
-        filled_qty = shares
-    is_partial = filled_qty < shares
-
-    # Update order record
-    with get_session(db_engine) as session:
-        order = session.query(Order).filter_by(id=order_db_id).first()
-        if order:
-            order.status = "partially_filled" if is_partial else "filled"
-            order.filled_qty = filled_qty
-            order.filled_avg_price = actual_price
-            session.commit()
-
-    # Create position record IMMEDIATELY so the position tracker can monitor it
-    # (stop_order_id will be updated after stop placement)
-    with get_session(db_engine) as session:
-        pos = Position(
-            ticker=ticker,
-            setup_type=signal.setup_type,
-            side=signal.side,
-            entry_order_id=order_db_id,
-            stop_order_id=None,  # will be set after stop placement
-            shares=filled_qty,
-            entry_price=actual_price,
-            stop_price=signal.stop_price,
-            initial_stop_price=signal.stop_price,
-        )
-        session.add(pos)
-        session.commit()
-        pos_db_id = pos.id
-
-    logger.info(
-        "Position opened: %s %s %d @ %.2f stop=%.2f (placing stop order...)",
-        signal.side, ticker, filled_qty, actual_price, signal.stop_price,
-    )
-    notify(
-        f"ENTRY FILLED: {ticker} ({signal.setup_type})\n"
-        f"Side: {signal.side.upper()} {filled_qty} shares @ ${actual_price:.2f}\n"
-        f"Stop: ${signal.stop_price:.2f} (placing broker stop...)\n"
-        f"Risk/share: ${signal.risk_per_share:.2f}"
-    )
-
-    # Place GTC stop order with broker — retry up to 3 times
-    stop_side = "sell" if signal.side == "long" else "buy_to_cover"
-    broker_stop_id = None
-    for attempt in range(1, 4):
-        try:
-            broker_stop_id = client.place_stop_order(
-                ticker, stop_side, filled_qty, signal.stop_price
-            )
-            break
-        except Exception as e:
-            logger.error("Stop order attempt %d/3 failed for %s: %s", attempt, ticker, e)
-            if attempt < 3:
-                time.sleep(2 ** attempt)  # 2s, 4s backoff
-    if broker_stop_id is None:
-        logger.critical("UNPROTECTED POSITION: %s %d shares @ %.2f — stop order failed",
-                        ticker, filled_qty, actual_price)
-        notify(
-            f"CRITICAL — UNPROTECTED POSITION\n"
-            f"{ticker}: {filled_qty} shares @ ${actual_price:.2f}\n"
-            f"Stop order FAILED after 3 attempts.\n"
-            f"Manually place stop at ${signal.stop_price:.2f} NOW."
-        )
-    else:
-        # Update position with the broker stop order ID
-        with get_session(db_engine) as session:
-            pos = session.query(Position).filter_by(id=pos_db_id).first()
-            if pos:
-                pos.stop_order_id = broker_stop_id
-                session.commit()
-        logger.info("Stop order placed for %s: %s", ticker, broker_stop_id)
-
-
-def _execute_entry(ticker, signal, shares, client, db_engine, notify, watchlist_setup_type=None):
-    """Place the entry limit order, record to DB, then wait for fill in background.
-
-    `watchlist_setup_type` lets callers flip a Watchlist row whose setup_type differs from
-    the Signal's (e.g. Strategy C executes as `ep_earnings_c` but the Watchlist row was
-    persisted as `ep_earnings`). Defaults to `signal.setup_type`.
-    """
-    import threading
-    from db.models import Signal as DbSignal, Order
-
-    order_side = "buy" if signal.side == "long" else "sell_short"
-    try:
-        broker_order_id = client.place_limit_order(
-            ticker, order_side, shares, signal.entry_price
-        )
-    except Exception as e:
-        # Loud failure — don't swallow. Telegram fires via caller's _track_job.
-        logger.error("Entry order failed for %s: %s", ticker, e, exc_info=True)
-        if notify:
-            notify(
-                f"ORDER FAILED: {ticker} {order_side} {shares} @ ${signal.entry_price:.2f}\n"
-                f"{type(e).__name__}: {e}"
-            )
-        raise
-
-    # Persist signal + order immediately (position created after fill confirmation)
-    with get_session(db_engine) as session:
-        db_signal = DbSignal(
-            ticker=ticker,
-            setup_type=signal.setup_type,
-            entry_price=signal.entry_price,
-            stop_price=signal.stop_price,
-            gap_pct=signal.gap_pct,
-            orh=signal.orh,
-            orb_low=signal.orb_low,
-            acted_on=True,
-        )
-        session.add(db_signal)
-        session.flush()
-
-        db_order = Order(
-            signal_id=db_signal.id,
-            broker_order_id=broker_order_id,
-            ticker=ticker,
-            side=order_side,
-            order_type="limit",
-            qty=shares,
-            price=signal.entry_price,
-            status="submitted",
-        )
-        session.add(db_order)
-        session.commit()
-        order_db_id = db_order.id
-
-    # Mark watchlist entry as triggered (all setup types)
-    if _db_engine is not None:
-        try:
-            mark_triggered(
-                ticker, _db_engine,
-                setup_type=watchlist_setup_type or signal.setup_type,
-            )
-        except Exception as e:
-            # Order succeeded; DB state drift is recoverable but needs operator attention.
-            logger.error("Failed to mark %s as triggered in watchlist: %s", ticker, e, exc_info=True)
-            if notify:
-                notify(
-                    f"ORDER PLACED but watchlist state NOT updated for {ticker} "
-                    f"({watchlist_setup_type or signal.setup_type}): "
-                    f"{type(e).__name__}: {e}\n"
-                    f"Row may re-trigger on restart — manual fix required."
-                )
-
-    notify(
-        f"ENTRY ORDER PLACED: {ticker} ({signal.setup_type})\n"
-        f"Side: {signal.side.upper()} {shares} shares @ ${signal.entry_price:.2f}\n"
-        f"Stop: ${signal.stop_price:.2f} | Waiting for fill..."
-    )
-    logger.info(
-        "Entry order placed: %s %s %d @ %.2f stop=%.2f broker_id=%s",
-        order_side, ticker, shares, signal.entry_price, signal.stop_price, broker_order_id,
-    )
-
-    # Wait for fill and place stop in background (doesn't block the stream callback)
-    t = threading.Thread(
-        target=_await_fill_and_setup_stop,
-        args=(ticker, signal, shares, broker_order_id, order_db_id, client, db_engine, notify),
-        daemon=True,
-    )
-    t.start()
+# _wait_for_fill, _await_fill_and_setup_stop, _execute_entry now live in
+# core/execution.py and are imported at the top of this file.
 
 
 def job_eod_tasks(
@@ -912,53 +670,8 @@ def job_nightly_watchlist_scan(config: dict, client: AlpacaClient, db_engine, no
     return f"Ready: {summary.get('ready', 0)}, Watching: {summary.get('watching', 0)}"
 
 
-# ---------------------------------------------------------------------------
-# P&L helpers
-# ---------------------------------------------------------------------------
-
-def _safe_pnl_sum(positions) -> float:
-    """Sum realized_pnl, skipping any NaN/None values with a warning."""
-    total = 0.0
-    for p in positions:
-        val = p.realized_pnl
-        if val is None:
-            continue
-        if math.isnan(val):
-            logger.error("NaN realized_pnl on position id=%s ticker=%s — excluded from P&L", p.id, p.ticker)
-            continue
-        total += val
-    return total
-
-
-def _compute_current_daily_pnl(db_engine) -> float:
-    from db.models import Position
-    today = datetime.now(ET).date()
-    with get_session(db_engine) as session:
-        closed = (
-            session.query(Position)
-            .filter(
-                Position.is_open == False,
-                Position.closed_at >= datetime.combine(today, datetime.min.time()),
-            )
-            .all()
-        )
-    return _safe_pnl_sum(closed)
-
-
-def _compute_current_weekly_pnl(db_engine) -> float:
-    from db.models import Position
-    today = datetime.now(ET).date()
-    week_start = today - timedelta(days=today.weekday())
-    with get_session(db_engine) as session:
-        closed = (
-            session.query(Position)
-            .filter(
-                Position.is_open == False,
-                Position.closed_at >= datetime.combine(week_start, datetime.min.time()),
-            )
-            .all()
-        )
-    return _safe_pnl_sum(closed)
+# P&L helpers (_compute_current_daily_pnl, _compute_current_weekly_pnl, _safe_pnl_sum)
+# now live in core/execution.py and are imported at the top of this file.
 
 
 # ---------------------------------------------------------------------------

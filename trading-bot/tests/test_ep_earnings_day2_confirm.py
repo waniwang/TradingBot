@@ -49,10 +49,10 @@ def patch_main(db_engine):
     """Patch main module helpers so _execute_entry can run without a broker or threads."""
     import main as main_mod
     main_mod._db_engine = db_engine
-    with patch("main.is_trading_day", return_value=True), \
-         patch("main._compute_current_daily_pnl", return_value=0.0), \
-         patch("main._compute_current_weekly_pnl", return_value=0.0), \
-         patch("main._await_fill_and_setup_stop"), \
+    with patch("core.execution.is_trading_day", return_value=True), \
+         patch("core.execution._compute_current_daily_pnl", return_value=0.0), \
+         patch("core.execution._compute_current_weekly_pnl", return_value=0.0), \
+         patch("core.execution._await_fill_and_setup_stop"), \
          patch.object(RiskManager, "check_trading_window", return_value=True):
         yield
 

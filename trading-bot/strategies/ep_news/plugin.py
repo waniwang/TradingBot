@@ -87,7 +87,7 @@ class EPNewsPlugin:
 
     def job_scan(self, config, client, db_engine, notify):
         """3:00 PM ET — EOD scan for EP news gap-up candidates."""
-        from main import is_trading_day
+        from core.execution import is_trading_day
         from strategies.ep_news.scanner import scan_ep_news
         from strategies.ep_news.strategy import evaluate_ep_news_strategies
         from scanner.watchlist_manager import persist_candidates
@@ -180,7 +180,7 @@ class EPNewsPlugin:
         flagged stage='ready' with the execution payload in metadata_json. Crash-safe:
         nothing is held in memory between scan/confirm and execute.
         """
-        from main import is_trading_day, _execute_entry, _compute_current_daily_pnl, _compute_current_weekly_pnl
+        from core.execution import is_trading_day, _execute_entry, _compute_current_daily_pnl, _compute_current_weekly_pnl
         from signals.base import SignalResult
         from risk.manager import RiskManager
         from db.models import Order, Position, Watchlist, get_session
@@ -310,7 +310,7 @@ class EPNewsPlugin:
 
     def job_day2_confirm(self, config, client, db_engine, notify):
         """3:45 PM ET — check yesterday's Strategy C candidates for day-2 confirmation."""
-        from main import is_trading_day
+        from core.execution import is_trading_day
         from db.models import Watchlist, get_session
 
         if not is_trading_day(client):

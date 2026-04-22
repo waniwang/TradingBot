@@ -23,6 +23,19 @@ Converts plugin-declared schedule entries into APScheduler cron jobs.
 
 - `register_strategy_jobs(scheduler, plugins, config, client, db_engine, notify)` — registers each plugin's `schedule` list as CronTrigger jobs
 
+## execution.py — Shared Trade-Path Helpers
+
+Trade-path functions extracted from `main.py` so both the Alpaca bot (`main.py`) and the IBKR bot (`main_ib.py`, Phase 3 of the IB migration) can share them. Strategy plugins also import from here.
+
+**Public API:**
+- `is_trading_day(client)` — US equity trading-day check via Alpaca calendar, with weekday fallback
+- `execute_entry(...)` — place entry limit order, persist Signal/Order rows, mark watchlist triggered, spawn background fill-wait thread (exposed as `_execute_entry` alias for backwards compatibility)
+- `_compute_current_daily_pnl(db_engine)` / `_compute_current_weekly_pnl(db_engine)` — realized P&L for risk checks
+
+**Internal helpers:** `_wait_for_fill`, `_await_fill_and_setup_stop`, `_safe_pnl_sum`.
+
+All trade-path functions follow the no-silent-failure rule (see `CLAUDE.md`): exceptions propagate to `_track_job`, or `notify()` fires before logging.
+
 ## data_cache.py — Shared Daily Bar Cache
 
 Thread-safe global caches to avoid per-ticker REST calls during intraday trading. Pre-fetches 130 days of daily bars for the watchlist via yfinance.
