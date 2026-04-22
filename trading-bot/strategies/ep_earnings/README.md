@@ -78,6 +78,12 @@ Designed for bear market regimes where "strong gap day" filters (A/B) select sto
 - Prev 10D > 0% (ran up into earnings): 31% WR, -7.4% mean
 - CHG-OPEN% < 0 AND close_in_range < 50: 40% WR
 
+## Error handling
+
+Feature computation (`compute_features`, `_compute_atr_pct`) **raises** when daily bars are missing or short (< 11 rows). The evaluator catches the error per ticker and records it in `rejections` with `is_data_error=True`. The Telegram summary labels these distinctly (`DATA ERROR`) so the operator can tell a real filter miss apart from a yfinance fetch failure.
+
+If *every* candidate in a scan fails with a data error, `job_scan` raises `RuntimeError` so `_track_job` fires `JOB FAILED` — a batch-wide yfinance outage is a bug, not silent "0 passed filters".
+
 ## Backtesting
 
 Uses spreadsheet-based backtest with pre-computed gap-day features and forward return checkpoints.

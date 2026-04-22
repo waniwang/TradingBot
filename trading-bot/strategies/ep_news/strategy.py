@@ -87,15 +87,22 @@ def compute_features(
     # downside_from_open = (Open - Low) / Open * 100
     downside_from_open = (open_price - today_low) / open_price * 100 if open_price > 0 else 0
 
-    # Prev 10D change% (from daily closes, exclude today)
-    if len(daily_closes) >= 11:
-        close_10d_ago = daily_closes[-11]
-        close_yesterday = daily_closes[-1]
-        prev_10d_change_pct = (close_yesterday - close_10d_ago) / close_10d_ago * 100
-    else:
-        prev_10d_change_pct = 0.0
+    # Prev 10D change% (from daily closes, exclude today).
+    # Raise on insufficient data — silent fallback would zero the value and
+    # cause every P10D-based filter (A, B, C) to fail silently, making
+    # yfinance fetch misses look like strategy rejections.
+    if len(daily_closes) < 11:
+        raise ValueError(
+            f"{candidate['ticker']}: only {len(daily_closes)} daily closes, "
+            f"need >=11 to compute prev_10d_change"
+        )
+    close_10d_ago = daily_closes[-11]
+    close_yesterday = daily_closes[-1]
+    if close_10d_ago == 0:
+        raise ValueError(f"{candidate['ticker']}: close 10 days ago is 0")
+    prev_10d_change_pct = (close_yesterday - close_10d_ago) / close_10d_ago * 100
 
-    # ATR% = 10D ATR / current_price * 100
+    # ATR% = 10D ATR / current_price * 100 (raises on insufficient data)
     atr_pct = _compute_atr_pct(daily_highs, daily_lows, daily_closes, current_price, period=10)
 
     return {
@@ -272,7 +279,7 @@ def evaluate_ep_news_strategies(
     candidates: list[dict],
     daily_bars: dict,
     config: dict,
-) -> list[dict]:
+) -> tuple[list[dict], list[dict]]:
     """
     Evaluate scanner candidates against Strategy A, B, and C.
 
@@ -291,7 +298,13 @@ def evaluate_ep_news_strategies(
         config: full app config dict
 
     Returns:
-        List of entry dicts ready for persistence/execution.
+        Tuple of (entries, rejections).
+        - entries: list of entry dicts ready for persistence/execution.
+        - rejections: list of {"ticker", "reason", "is_data_error"} dicts for
+          every candidate that did not produce an entry. `is_data_error=True`
+          means missing/short daily bars (a bug to investigate, not a normal
+          filter miss); `False` means the ticker was evaluated and its feature
+          values did not satisfy any of A/B/C.
     """
     cfg = config.get("signals", {})
     stop_a = float(cfg.get("ep_news_a_stop_loss_pct", 7.0))
@@ -300,21 +313,35 @@ def evaluate_ep_news_strategies(
     max_hold_days = int(cfg.get("ep_news_max_hold_days", 50))
     max_hold_c = int(cfg.get("ep_news_c_max_hold_days", 20))
 
-    entries = []
+    entries: list[dict] = []
+    rejections: list[dict] = []
 
     for c in candidates:
         ticker = c["ticker"]
         df = daily_bars.get(ticker)
         if df is None or (hasattr(df, "empty") and df.empty):
-            logger.debug("%s: no daily bars for strategy evaluation, skipping", ticker)
+            logger.error("%s: no daily bars returned — data error, not a filter miss", ticker)
+            rejections.append({
+                "ticker": ticker,
+                "reason": "no daily bars returned (likely yfinance batch failure)",
+                "is_data_error": True,
+            })
             continue
 
         daily_closes = list(df["close"].values) if hasattr(df, "values") else list(df["close"])
         daily_highs = list(df["high"].values) if hasattr(df, "values") else list(df["high"])
         daily_lows = list(df["low"].values) if hasattr(df, "values") else list(df["low"])
 
-        # Compute strategy features
-        features = compute_features(c, daily_closes, daily_highs, daily_lows)
+        try:
+            features = compute_features(c, daily_closes, daily_highs, daily_lows)
+        except ValueError as e:
+            logger.error("%s: feature computation failed — %s", ticker, e)
+            rejections.append({
+                "ticker": ticker,
+                "reason": f"insufficient daily bars: {e}",
+                "is_data_error": True,
+            })
+            continue
 
         entry_price = c["current_price"]
 
@@ -344,6 +371,7 @@ def evaluate_ep_news_strategies(
         # idea across position slots or risk budget. C is independent and day-2 gated, so
         # it can still coexist with A/B (different entry day).
         passed_a = evaluate_strategy_a(c, features, config)
+        passed_b = False
         if passed_a:
             stop_price_a = round(entry_price * (1 - stop_a / 100), 2)
             entry_a = {**base, "ep_strategy": "A", "stop_price": stop_price_a, "stop_loss_pct": stop_a}
@@ -355,20 +383,23 @@ def evaluate_ep_news_strategies(
                 features["downside_from_open"], features["prev_10d_change_pct"],
                 features["atr_pct"], c.get("today_volume", 0) / 1e6,
             )
-        elif evaluate_strategy_b(c, features, config):
-            stop_price_b = round(entry_price * (1 - stop_b / 100), 2)
-            entry_b = {**base, "ep_strategy": "B", "stop_price": stop_price_b, "stop_loss_pct": stop_b}
-            entries.append(entry_b)
-            logger.info(
-                "%s: PASSES News Strategy B (CHG-OPEN=%.1f%%, CIR=%.0f, DS=%.1f%%, "
-                "P10D=%.1f%%, ATR=%.1f%%, Vol=%.1fM)",
-                ticker, features["chg_open_pct"], features["close_in_range"],
-                features["downside_from_open"], features["prev_10d_change_pct"],
-                features["atr_pct"], c.get("today_volume", 0) / 1e6,
-            )
+        else:
+            passed_b = evaluate_strategy_b(c, features, config)
+            if passed_b:
+                stop_price_b = round(entry_price * (1 - stop_b / 100), 2)
+                entry_b = {**base, "ep_strategy": "B", "stop_price": stop_price_b, "stop_loss_pct": stop_b}
+                entries.append(entry_b)
+                logger.info(
+                    "%s: PASSES News Strategy B (CHG-OPEN=%.1f%%, CIR=%.0f, DS=%.1f%%, "
+                    "P10D=%.1f%%, ATR=%.1f%%, Vol=%.1fM)",
+                    ticker, features["chg_open_pct"], features["close_in_range"],
+                    features["downside_from_open"], features["prev_10d_change_pct"],
+                    features["atr_pct"], c.get("today_volume", 0) / 1e6,
+                )
 
         # Evaluate Strategy C (day-2 confirmation required)
-        if evaluate_strategy_c(c, features, config):
+        passed_c = evaluate_strategy_c(c, features, config)
+        if passed_c:
             stop_price_c = round(entry_price * (1 - stop_c / 100), 2)
             entry_c = {
                 **base,
@@ -385,14 +416,32 @@ def evaluate_ep_news_strategies(
                 ticker, features["prev_10d_change_pct"], features["atr_pct"],
             )
 
+        if not (passed_a or passed_b or passed_c):
+            rejections.append({
+                "ticker": ticker,
+                "reason": (
+                    f"no strategy passed "
+                    f"(CHG {features['chg_open_pct']:+.1f}% "
+                    f"CIR {features['close_in_range']:.0f} "
+                    f"DS {features['downside_from_open']:.1f}% "
+                    f"ATR {features['atr_pct']:.1f}% "
+                    f"P10D {features['prev_10d_change_pct']:+.1f}% "
+                    f"Vol {c.get('today_volume', 0) / 1e6:.1f}M)"
+                ),
+                "is_data_error": False,
+            })
+
     a_count = sum(1 for e in entries if e["ep_strategy"] == "A")
     b_count = sum(1 for e in entries if e["ep_strategy"] == "B")
     c_count = sum(1 for e in entries if e["ep_strategy"] == "C")
+    data_err_count = sum(1 for r in rejections if r["is_data_error"])
     logger.info(
-        "EP News strategy evaluation: %d entries from %d candidates (A=%d, B=%d, C=%d pending)",
+        "EP News strategy evaluation: %d entries from %d candidates "
+        "(A=%d, B=%d, C=%d pending; %d data errors, %d filter misses)",
         len(entries), len(candidates), a_count, b_count, c_count,
+        data_err_count, len(rejections) - data_err_count,
     )
-    return entries
+    return entries, rejections
 
 
 def _compute_atr_pct(
@@ -407,10 +456,17 @@ def _compute_atr_pct(
 
     Uses Wilder's smoothing (same as standard ATR).
     """
+    # Raise on insufficient data — silent 0.0 fallback would fail A/B/C's
+    # ATR-range filters and misattribute a data error as a strategy rejection.
     if len(highs) < period + 1 or len(lows) < period + 1 or len(closes) < period + 1:
-        return 0.0
+        raise ValueError(
+            f"insufficient bars for ATR(period={period}): "
+            f"highs={len(highs)} lows={len(lows)} closes={len(closes)}, need >={period + 1}"
+        )
+    if current_price <= 0:
+        raise ValueError(f"current_price must be positive, got {current_price}")
 
-    # True Range for last (period + 1) bars
+    # True Range for last (period) bars
     trs = []
     for i in range(-period, 0):
         h = highs[i]
@@ -419,11 +475,5 @@ def _compute_atr_pct(
         tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
         trs.append(tr)
 
-    if not trs:
-        return 0.0
-
     atr = float(np.mean(trs))
-    if current_price <= 0:
-        return 0.0
-
     return atr / current_price * 100

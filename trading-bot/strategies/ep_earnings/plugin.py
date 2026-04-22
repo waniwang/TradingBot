@@ -117,8 +117,16 @@ class EPEarningsPlugin:
             logger.info("Fetched daily bars for %d/%d tickers", len(daily_bars), len(tickers))
 
             # Phase 3: Evaluate Strategy A + B + C
-            entries = evaluate_ep_earnings_strategies(candidates, daily_bars, config)
-            logger.info("Strategy evaluation: %d entries from %d candidates", len(entries), len(candidates))
+            entries, rejections = evaluate_ep_earnings_strategies(candidates, daily_bars, config)
+            data_errors = [r for r in rejections if r["is_data_error"]]
+            logger.info(
+                "Strategy evaluation: %d entries from %d candidates (%d data errors)",
+                len(entries), len(candidates), len(data_errors),
+            )
+
+            # Build a ticker→reason map so we can show the actual feature values
+            # (or data-error message) per filtered-out ticker in the Telegram summary.
+            reject_by_ticker = {r["ticker"]: r for r in rejections}
 
             # Separate immediate entries (A/B) from day-2 pending (C)
             immediate = [e for e in entries if not e.get("day2_confirm")]
@@ -134,6 +142,21 @@ class EPEarningsPlugin:
             # Persist C candidates as "watching" (pending day-2 confirmation)
             for entry in pending_c:
                 self._persist_pending_day2(entry, today, db_engine)
+
+            # If every candidate failed with a data error, the batch-wide yfinance
+            # fetch is broken — fail loud so _track_job fires JOB FAILED. Returning
+            # "0 passed" here would silently hide a systemic bug.
+            if data_errors and len(data_errors) == len(candidates):
+                msg = (
+                    f"EP EARNINGS: ALL {len(candidates)} candidates failed due to "
+                    f"missing/short daily bars — likely yfinance batch fetch failure."
+                )
+                if notify:
+                    lines = [msg]
+                    for r in data_errors:
+                        lines.append(f"  {r['ticker']}: {r['reason']}")
+                    notify("\n".join(lines))
+                raise RuntimeError(msg)
 
             if immediate or pending_c:
                 a_count = sum(1 for e in entries if e["ep_strategy"] == "A")
@@ -153,6 +176,10 @@ class EPEarningsPlugin:
                             f"  {e['ticker']} (C-pending): gap {e['gap_pct']:.1f}%, "
                             f"gap close ${e['gap_day_close']:.2f} — awaiting day-2 confirm"
                         )
+                    if data_errors:
+                        lines.append(f"  WARN: {len(data_errors)} tickers had data errors:")
+                        for r in data_errors:
+                            lines.append(f"    {r['ticker']}: {r['reason']}")
                     notify("\n".join(lines))
 
                 entry_tickers = ", ".join(e["ticker"] for e in entries)
@@ -161,7 +188,14 @@ class EPEarningsPlugin:
                 if notify:
                     lines = [f"EP EARNINGS: {len(candidates)} candidates, 0 passed strategy filters"]
                     for c in candidates:
-                        lines.append(f"  {c['ticker']}: gap {c['gap_pct']:.1f}% (filtered out)")
+                        ticker = c["ticker"]
+                        rej = reject_by_ticker.get(ticker)
+                        if rej and rej["is_data_error"]:
+                            lines.append(f"  {ticker}: DATA ERROR — {rej['reason']}")
+                        elif rej:
+                            lines.append(f"  {ticker}: gap {c['gap_pct']:.1f}% — {rej['reason']}")
+                        else:
+                            lines.append(f"  {ticker}: gap {c['gap_pct']:.1f}% (no evaluation recorded)")
                     notify("\n".join(lines))
                 cand_tickers = ", ".join(c["ticker"] for c in candidates)
                 return f"{len(candidates)} scanned, 0 passed: {cand_tickers}"

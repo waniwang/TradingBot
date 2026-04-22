@@ -739,7 +739,7 @@ class TestEvaluateEpEarningsStrategies:
         df = _make_strategy_daily_df(recent_selloff=True, atr_range=4.0)
         daily_bars = {"NVDA": df}
 
-        entries = evaluate_ep_earnings_strategies([candidate], daily_bars, config)
+        entries, _ = evaluate_ep_earnings_strategies([candidate], daily_bars, config)
 
         strategies = [e["ep_strategy"] for e in entries]
         # Should have at least one entry, could be A, B, or both
@@ -763,7 +763,7 @@ class TestEvaluateEpEarningsStrategies:
         df = _make_strategy_daily_df(recent_selloff=True)
         daily_bars = {"NVDA": df}
 
-        entries = evaluate_ep_earnings_strategies([candidate], daily_bars, config)
+        entries, _ = evaluate_ep_earnings_strategies([candidate], daily_bars, config)
         ab_entries = [e for e in entries if e["ep_strategy"] in ("A", "B")]
         assert len(ab_entries) == 0
         # Strategy C may still pass (it doesn't filter on CHG-OPEN%)
@@ -778,24 +778,28 @@ class TestEvaluateEpEarningsStrategies:
         df = _make_strategy_daily_df(recent_selloff=True, atr_range=4.0)
         daily_bars = {"NVDA": df}
 
-        entries = evaluate_ep_earnings_strategies([candidate], daily_bars, config)
+        entries, _ = evaluate_ep_earnings_strategies([candidate], daily_bars, config)
         for e in entries:
             # All strategies use -7% stop
             expected_stop = round(105.0 * 0.93, 2)
             assert e["stop_price"] == expected_stop
 
     def test_empty_candidates(self):
-        """Empty candidates list returns empty entries."""
+        """Empty candidates list returns empty entries and no rejections."""
         config = _make_strategy_config()
-        entries = evaluate_ep_earnings_strategies([], {}, config)
+        entries, rejections = evaluate_ep_earnings_strategies([], {}, config)
         assert entries == []
+        assert rejections == []
 
-    def test_no_daily_bars_skips(self):
-        """Candidate without daily bars is skipped."""
+    def test_no_daily_bars_records_data_error(self):
+        """Missing daily bars must surface as a data error, not a silent skip."""
         config = _make_strategy_config()
         candidate = _make_candidate()
-        entries = evaluate_ep_earnings_strategies([candidate], {}, config)
+        entries, rejections = evaluate_ep_earnings_strategies([candidate], {}, config)
         assert entries == []
+        assert len(rejections) == 1
+        assert rejections[0]["is_data_error"] is True
+        assert rejections[0]["ticker"] == candidate["ticker"]
 
     def test_passes_a_only(self):
         """Stock with ATR outside 2-5% range passes A but not B."""
@@ -808,7 +812,7 @@ class TestEvaluateEpEarningsStrategies:
         df = _make_strategy_daily_df(recent_selloff=True, atr_range=12.0)
         daily_bars = {"NVDA": df}
 
-        entries = evaluate_ep_earnings_strategies([candidate], daily_bars, config)
+        entries, _ = evaluate_ep_earnings_strategies([candidate], daily_bars, config)
         a_entries = [e for e in entries if e["ep_strategy"] == "A"]
         b_entries = [e for e in entries if e["ep_strategy"] == "B"]
         # A should pass (no ATR filter), B should fail (ATR too high)

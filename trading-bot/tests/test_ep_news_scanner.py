@@ -720,7 +720,7 @@ class TestEvaluateEpNewsStrategies:
         df = _make_strategy_daily_df(recent_selloff=True, atr_range=4.0)
         daily_bars = {"NVDA": df}
 
-        entries = evaluate_ep_news_strategies([candidate], daily_bars, config)
+        entries, _ = evaluate_ep_news_strategies([candidate], daily_bars, config)
 
         b_entries = [e for e in entries if e["ep_strategy"] == "B"]
         assert len(b_entries) == 1
@@ -739,7 +739,7 @@ class TestEvaluateEpNewsStrategies:
         df = _make_strategy_daily_df(recent_selloff=True, atr_range=4.0)
         daily_bars = {"NVDA": df}
 
-        entries = evaluate_ep_news_strategies([candidate], daily_bars, config)
+        entries, _ = evaluate_ep_news_strategies([candidate], daily_bars, config)
 
         a_entries = [e for e in entries if e["ep_strategy"] == "A"]
         for e in a_entries:
@@ -755,21 +755,29 @@ class TestEvaluateEpNewsStrategies:
         df = _make_strategy_daily_df(recent_selloff=True)
         daily_bars = {"NVDA": df}
 
-        entries = evaluate_ep_news_strategies([candidate], daily_bars, config)
+        entries, _ = evaluate_ep_news_strategies([candidate], daily_bars, config)
         ab_entries = [e for e in entries if e["ep_strategy"] in ("A", "B")]
         assert len(ab_entries) == 0
         # Strategy C may still pass (it doesn't filter on CHG-OPEN%)
 
     def test_empty_candidates(self):
         config = _make_strategy_config()
-        entries = evaluate_ep_news_strategies([], {}, config)
+        entries, rejections = evaluate_ep_news_strategies([], {}, config)
         assert entries == []
+        assert rejections == []
 
-    def test_no_daily_bars_skips(self):
+    def test_no_daily_bars_records_data_error(self):
+        """Missing daily bars must be reported as a data error, not silently skipped.
+        This is the exact bug that caused 5+ Apr 20 Strategy C candidates to be
+        silently dropped — the 'no daily bars' path used to `continue` with no trace.
+        """
         config = _make_strategy_config()
         candidate = _make_candidate()
-        entries = evaluate_ep_news_strategies([candidate], {}, config)
+        entries, rejections = evaluate_ep_news_strategies([candidate], {}, config)
         assert entries == []
+        assert len(rejections) == 1
+        assert rejections[0]["is_data_error"] is True
+        assert rejections[0]["ticker"] == candidate["ticker"]
 
     def test_volume_filter_differentiates_a_and_b(self):
         """Stock with 4M volume fails A (< 3M) but passes B (< 5M)."""
@@ -782,7 +790,7 @@ class TestEvaluateEpNewsStrategies:
         df = _make_strategy_daily_df(recent_selloff=True, atr_range=4.0)
         daily_bars = {"NVDA": df}
 
-        entries = evaluate_ep_news_strategies([candidate], daily_bars, config)
+        entries, _ = evaluate_ep_news_strategies([candidate], daily_bars, config)
 
         strategies = [e["ep_strategy"] for e in entries]
         assert "A" not in strategies
