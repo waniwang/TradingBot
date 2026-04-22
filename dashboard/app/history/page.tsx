@@ -8,11 +8,13 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
-import type { BotStatus, ClosedPosition } from "@/lib/types";
+import { RecentSignals } from "@/components/dashboard/recent-signals";
+import type { BotStatus, ClosedPosition, SignalToday } from "@/lib/types";
 
 export default function HistoryPage() {
   const [status, setStatus] = useState<BotStatus | null>(null);
   const [trades, setTrades] = useState<ClosedPosition[]>([]);
+  const [signals, setSignals] = useState<SignalToday[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -20,12 +22,14 @@ export default function HistoryPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, t] = await Promise.all([
+      const [s, t, sig] = await Promise.all([
         fetchAPI<BotStatus>("/api/status"),
         fetchAPI<ClosedPosition[]>("/api/positions/closed?limit=100"),
+        fetchAPI<SignalToday[]>("/api/signals/history?limit=100"),
       ]);
       setStatus(s);
       setTrades(t);
+      setSignals(sig);
       setLastUpdated(new Date());
       setError(null);
     } catch (e) {
@@ -57,7 +61,21 @@ export default function HistoryPage() {
         autoRefreshPaused={paused}
         onToggleAutoRefresh={() => setPaused(!paused)}
       />
-      <main className="flex-1 space-y-6 p-6">
+      <main className="flex-1 space-y-8 p-6">
+        <section className="space-y-4">
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-lg font-semibold">Signal History</h2>
+            <div className="text-sm text-muted-foreground">
+              {signals.length} signals
+            </div>
+          </div>
+          <RecentSignals
+            signals={signals}
+            showDate
+            emptyMessage="No signals recorded yet"
+          />
+        </section>
+
         <div className="flex items-baseline justify-between">
           <h2 className="text-lg font-semibold">Trade History</h2>
           <div className="flex gap-4 text-sm text-muted-foreground">

@@ -7,11 +7,21 @@ import { Badge } from "@/components/ui/badge";
 import type { SignalToday } from "@/lib/types";
 import { VariationBadge } from "@/components/strategies/variation-badge";
 
-export function RecentSignals({ signals }: { signals: SignalToday[] }) {
+export function RecentSignals({
+  signals,
+  showDate = false,
+  emptyMessage = "No signals fired today",
+}: {
+  signals: SignalToday[];
+  /** Show fired_at date in the Time column. Use on the History page where
+   *  rows span multiple days; a bare HH:MM:SS would be misleading. */
+  showDate?: boolean;
+  emptyMessage?: string;
+}) {
   if (signals.length === 0) {
     return (
       <div className="rounded-lg border border-border p-6 text-center text-sm text-muted-foreground">
-        No signals fired today
+        {emptyMessage}
       </div>
     );
   }
@@ -21,7 +31,7 @@ export function RecentSignals({ signals }: { signals: SignalToday[] }) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Time</TableHead>
+            <TableHead>{showDate ? "When" : "Time"}</TableHead>
             <TableHead>Ticker</TableHead>
             <TableHead>Setup</TableHead>
             <TableHead className="text-right">Entry</TableHead>
@@ -33,7 +43,9 @@ export function RecentSignals({ signals }: { signals: SignalToday[] }) {
         <TableBody>
           {signals.map((s) => (
             <TableRow key={s.id}>
-              <TableCell className="tabular-nums text-muted-foreground">{s.time}</TableCell>
+              <TableCell className="tabular-nums text-muted-foreground">
+                {showDate ? formatDateTime(s.fired_at) : s.time}
+              </TableCell>
               <TableCell className="font-medium">
                 <div className="flex items-center gap-1.5">
                   {s.ticker}
@@ -98,4 +110,15 @@ function OrderStatusCell({ signal }: { signal: SignalToday }) {
       {label}
     </Badge>
   );
+}
+
+function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const time = d.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return `${date} ${time}`;
 }
