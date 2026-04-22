@@ -144,16 +144,12 @@ def evaluate_strategy_a(candidate: dict, features: dict, config: dict) -> bool:
         logger.debug("%s: Strategy A fail - downside_from_open %.2f >= %.1f", candidate["ticker"], features["downside_from_open"], max_downside)
         return False
 
-    # 4. Prev 10D change% <= -20%
-    prev_10d_max = float(cfg.get("ep_news_a_prev_10d_max", -20.0))
-    if features["prev_10d_change_pct"] > prev_10d_max:
-        logger.debug(
-            "%s: Strategy A fail - prev_10d %.2f > %.1f",
-            candidate["ticker"], features["prev_10d_change_pct"], prev_10d_max,
-        )
-        return False
+    # Prev 10D filter removed 2026-04-21 after Spikeet data column proved
+    # unreliable (sign-inverted vs yfinance on every 2026-04-20 candidate).
+    # Full 2020-2026 backtest showed PF 8.72 without it vs 9.00 with — and
+    # trade count doubles from 51 to 107. See strategies/ep_news/README.md.
 
-    # 5. ATR% between 3% and 7%
+    # ATR% between 3% and 7%
     atr_min = float(cfg.get("ep_news_a_atr_pct_min", 3.0))
     atr_max = float(cfg.get("ep_news_a_atr_pct_max", 7.0))
     if not (atr_min <= features["atr_pct"] <= atr_max):
@@ -163,7 +159,7 @@ def evaluate_strategy_a(candidate: dict, features: dict, config: dict) -> bool:
         )
         return False
 
-    # 6. Volume < 3M
+    # Volume < 3M
     max_volume_m = float(cfg.get("ep_news_a_max_volume_m", 3.0))
     today_volume_m = candidate.get("today_volume", 0) / 1e6
     if today_volume_m >= max_volume_m:
@@ -210,16 +206,9 @@ def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> bool:
         logger.debug("%s: Strategy B fail - downside_from_open %.2f >= %.1f", candidate["ticker"], features["downside_from_open"], max_downside)
         return False
 
-    # 4. Prev 10D change% <= -10%
-    prev_10d_max = float(cfg.get("ep_news_b_prev_10d_max", -10.0))
-    if features["prev_10d_change_pct"] > prev_10d_max:
-        logger.debug(
-            "%s: Strategy B fail - prev_10d %.2f > %.1f",
-            candidate["ticker"], features["prev_10d_change_pct"], prev_10d_max,
-        )
-        return False
+    # Prev 10D filter removed 2026-04-21 (see evaluate_strategy_a).
 
-    # 5. ATR% between 3% and 7%
+    # ATR% between 3% and 7%
     atr_min = float(cfg.get("ep_news_b_atr_pct_min", 3.0))
     atr_max = float(cfg.get("ep_news_b_atr_pct_max", 7.0))
     if not (atr_min <= features["atr_pct"] <= atr_max):
@@ -229,7 +218,7 @@ def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> bool:
         )
         return False
 
-    # 6. Volume < 5M
+    # Volume < 5M
     max_volume_m = float(cfg.get("ep_news_b_max_volume_m", 5.0))
     today_volume_m = candidate.get("today_volume", 0) / 1e6
     if today_volume_m >= max_volume_m:
@@ -244,23 +233,14 @@ def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> bool:
 
 def evaluate_strategy_c(candidate: dict, features: dict, config: dict) -> bool:
     """
-    Strategy C (Bear Market / Day-2 Confirm).
+    Strategy C (Day-2 Confirm).
 
-    Filters: beaten-down pre-news + moderate volatility.
-    Day-2 confirmation is handled by the plugin (not checked here).
+    Pre-news P10D filter removed 2026-04-21 (see evaluate_strategy_a).
+    C now gates only on ATR + day-2 price confirmation (handled by plugin).
 
     Returns True if candidate passes Strategy C screening rules.
     """
     cfg = config.get("signals", {})
-
-    # 1. Prev 10D change% <= -10%
-    prev_10d_max = float(cfg.get("ep_news_c_prev_10d_max", -10.0))
-    if features["prev_10d_change_pct"] > prev_10d_max:
-        logger.debug(
-            "%s: News Strategy C fail - prev_10d %.2f > %.1f",
-            candidate["ticker"], features["prev_10d_change_pct"], prev_10d_max,
-        )
-        return False
 
     # 2. ATR% between 2% and 5%
     atr_min = float(cfg.get("ep_news_c_atr_pct_min", 2.0))

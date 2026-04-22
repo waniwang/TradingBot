@@ -158,15 +158,11 @@ def evaluate_strategy_a(candidate: dict, features: dict, config: dict) -> bool:
         logger.debug("%s: Strategy A fail - downside_from_open %.2f >= %.1f", candidate["ticker"], features["downside_from_open"], max_downside)
         return False
 
-    # 4. Prev 10D change% between -30% and -10%
-    prev_10d_min = float(cfg.get("ep_earnings_a_prev_10d_min", -30.0))
-    prev_10d_max = float(cfg.get("ep_earnings_a_prev_10d_max", -10.0))
-    if not (prev_10d_min <= features["prev_10d_change_pct"] <= prev_10d_max):
-        logger.debug(
-            "%s: Strategy A fail - prev_10d %.2f not in [%.1f, %.1f]",
-            candidate["ticker"], features["prev_10d_change_pct"], prev_10d_min, prev_10d_max,
-        )
-        return False
+    # Prev 10D filter removed 2026-04-21 after Spikeet data column proved
+    # unreliable (sign-inverted vs yfinance on every 2026-04-20 candidate).
+    # Full backtest (2020-2026, 960 earnings rows) showed PF barely changes
+    # without it while trade count jumps +38%, so the filter was gating on
+    # noise. See strategies/ep_earnings/README.md "History".
 
     return True
 
@@ -200,38 +196,23 @@ def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> bool:
         )
         return False
 
-    # 4. Prev 10D change% < -10%
-    prev_10d_max = float(cfg.get("ep_earnings_b_prev_10d_max", -10.0))
-    if features["prev_10d_change_pct"] > prev_10d_max:
-        logger.debug(
-            "%s: Strategy B fail - prev_10d %.2f > %.1f",
-            candidate["ticker"], features["prev_10d_change_pct"], prev_10d_max,
-        )
-        return False
+    # Prev 10D filter removed 2026-04-21 (see evaluate_strategy_a).
 
     return True
 
 
 def evaluate_strategy_c(candidate: dict, features: dict, config: dict) -> bool:
     """
-    Strategy C (Bear Market / Day-2 Confirm).
+    Strategy C (Day-2 Confirm).
 
-    Minimal filters: only requires beaten-down pre-earnings.
-    Day-2 confirmation is handled by the plugin (not checked here).
+    The original P10D-based pre-earnings filter was removed 2026-04-21 after
+    its Spikeet backtest column proved unreliable. C now accepts every
+    scanner candidate and relies entirely on the plugin's day-2 confirmation
+    (price on day 2 > gap-day close) to gate entry — this is where the edge
+    actually comes from. Position cap + risk manager limit overall exposure.
 
-    Returns True if candidate passes Strategy C screening rules.
+    Returns True unconditionally for any scanner candidate.
     """
-    cfg = config.get("signals", {})
-
-    # 1. Prev 10D change% <= -10%
-    prev_10d_max = float(cfg.get("ep_earnings_c_prev_10d_max", -10.0))
-    if features["prev_10d_change_pct"] > prev_10d_max:
-        logger.debug(
-            "%s: Strategy C fail - prev_10d %.2f > %.1f",
-            candidate["ticker"], features["prev_10d_change_pct"], prev_10d_max,
-        )
-        return False
-
     return True
 
 

@@ -35,48 +35,42 @@ Three-phase filter:
 | C (per-ticker) | Market cap | >= $800M |
 | C | Earnings | Must have earnings on gap day |
 
-## Strategy A (Tight) — 69% WR, PF 5.68
+## Strategy A (Tight) — 48% WR, PF 2.68 (2020–2026, no-P10D)
 
 | Filter | Value |
 |--------|-------|
 | CHG-OPEN% | > 0 (positive intraday) |
 | Close in range | >= 50% (top half) |
 | Downside from open | < 3% |
-| Prev 10D change | between -30% and -10% |
 | Stop | -7% |
 
-## Strategy B (Relaxed) — 61% WR, PF 5.62
+## Strategy B (Relaxed) — 49% WR, PF 3.20 (2020–2026, no-P10D)
 
 | Filter | Value |
 |--------|-------|
 | CHG-OPEN% | > 0 |
 | Close in range | >= 50% |
 | ATR% | between 2% and 5% |
-| Prev 10D change | < -10% |
 | Stop | -7% |
 
 If both A and B pass, Strategy A is used — A is the tighter filter set and we
 never stake the same idea twice across position slots.
 
-## Strategy C (Bear Market / Day-2 Confirm) -- ~48% WR, PF ~3.3
+## Strategy C (Day-2 Confirm) — 49% WR, PF 2.06 (2020–2026, no-P10D)
 
-Designed for bear market regimes where "strong gap day" filters (A/B) select stocks that get sold off hardest. Uses minimal filters + day-2 confirmation to filter out immediate reversals.
+No gap-day filter. Every scanner candidate becomes a day-2 watch; entry only fires on day 2 if price > gap-day close. The edge is in the day-2 confirmation itself, not the pre-gap trajectory.
 
 | Filter | Value |
 |--------|-------|
-| Prev 10D change | <= -10% (beaten down pre-earnings) |
 | Day-2 confirm | 1D return > 0 (stock holds up next day) |
 | Stop | -7% |
 | Hold | 20 days (shorter than A/B's 50D) |
 
 **Entry timing:** Scanned on gap day (3:00 PM), but NOT entered until day 2 (3:50 PM) after confirming positive 1D return. Entry price = day 2 close.
 
-**Why it works:** In 2026 Q1 bear market, A/B went 0% WR while C showed 71% WR on 2026 data. The day-2 confirmation filters out stocks that gap up on earnings but immediately reverse.
+## History
 
-## Kill Zones (Avoid)
-
-- Prev 10D > 0% (ran up into earnings): 31% WR, -7.4% mean
-- CHG-OPEN% < 0 AND close_in_range < 50: 40% WR
+**2026-04-21: Prev 10D change filter removed from A, B, C.** The Spikeet data column used to tune the P10D thresholds proved unreliable — for every 2026-04-20 candidate, its sign was inverted vs. yfinance. A full 2020–2026 backtest (960 earnings rows) showed PF barely changes without the filter while trade count jumps +38% (A), +15% (B), +55% (C). The filter was gating on noise, not an edge.
 
 ## Error handling
 

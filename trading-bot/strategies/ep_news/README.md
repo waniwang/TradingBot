@@ -26,43 +26,44 @@ Same three-phase filter as EP Earnings, with differences:
 
 **Earnings exclusion:** `_confirm_no_earnings()` returns `True` when the yfinance earnings calendar confirms no earnings today/yesterday. API failures are **not** swallowed — they propagate up, the scan fails, and a Telegram alert fires (per project error-handling policy). That way we never enter earnings-driven gaps as "news" due to a stale fallback.
 
-## Strategy A (NEWS-Tight) — stop -7%
+## Strategy A (NEWS-Tight) — stop -7% | 64% WR, PF 8.72 (2020–2026)
 
 | Filter | Value |
 |--------|-------|
 | CHG-OPEN% | between 2% and 10% |
 | Close in range | >= 50% |
 | Downside from open | < 3% |
-| Prev 10D change | <= -20% |
 | ATR% | between 3% and 7% |
 | Volume | < 3M shares |
 
-## Strategy B (NEWS-Relaxed) — stop -10%
+## Strategy B (NEWS-Relaxed) — stop -10% | 60% WR, PF 5.30 (2020–2026)
 
 | Filter | Value |
 |--------|-------|
 | CHG-OPEN% | between 2% and 10% |
 | Close in range | between 30% and 80% |
 | Downside from open | < 6% |
-| Prev 10D change | <= -10% |
 | ATR% | between 3% and 7% |
 | Volume | < 5M shares |
 
 If both pass, Strategy A is used (tighter stop).
 
-## Strategy C (Bear Market / Day-2 Confirm) -- stop -7%, hold 20D
+## Strategy C (Day-2 Confirm) — stop -7%, hold 20D | 53% WR, PF 2.61 (2020–2026)
 
-Designed for bear market regimes where "strong gap day" filters (A/B) select stocks that get sold off hardest.
+Gap-day filter is just the ATR band — everything else is gated by day-2 price confirmation.
 
 | Filter | Value |
 |--------|-------|
-| Prev 10D change | <= -10% (beaten down pre-news) |
 | ATR% | between 2% and 5% |
 | Day-2 confirm | 1D return > 0 (stock holds up next day) |
 | Stop | -7% |
 | Hold | 20 days |
 
 **Entry timing:** Scanned on gap day (3:05 PM), but NOT entered until day 2 (3:50 PM) after confirming positive 1D return.
+
+## History
+
+**2026-04-21: Prev 10D change filter removed from A, B, C.** The Spikeet data column used to tune the thresholds proved unreliable (sign-inverted vs yfinance on every 2026-04-20 candidate). Full 2020–2026 backtest (4,959 news rows) showed PF barely changes while trade count roughly doubles for A (51 → 107) and grows ~20–40% for B and C. The filter was gating on noise, not an edge.
 
 ## Error handling
 

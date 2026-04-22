@@ -644,26 +644,14 @@ class TestStrategyA:
         features["downside_from_open"] = 5.0
         assert evaluate_strategy_a(_make_candidate(), features, config) is False
 
-    def test_fails_prev_10d_too_positive(self):
-        """Prev 10D > -10% (e.g. -5%) fails Strategy A."""
+    def test_prev_10d_filter_removed(self):
+        """P10D filter was removed 2026-04-21. Any P10D value should pass A."""
         config = _make_strategy_config()
-        features = self._make_passing_features()
-        features["prev_10d_change_pct"] = -5.0
-        assert evaluate_strategy_a(_make_candidate(), features, config) is False
-
-    def test_fails_prev_10d_too_negative(self):
-        """Prev 10D < -30% (e.g. -35%) fails Strategy A."""
-        config = _make_strategy_config()
-        features = self._make_passing_features()
-        features["prev_10d_change_pct"] = -35.0
-        assert evaluate_strategy_a(_make_candidate(), features, config) is False
-
-    def test_boundary_prev_10d_at_minus_10(self):
-        """Prev 10D = -10.0 exactly should pass (within range)."""
-        config = _make_strategy_config()
-        features = self._make_passing_features()
-        features["prev_10d_change_pct"] = -10.0
-        assert evaluate_strategy_a(_make_candidate(), features, config) is True
+        for p10d in [-50.0, -35.0, -5.0, 0.0, 20.0, 50.0]:
+            features = self._make_passing_features()
+            features["prev_10d_change_pct"] = p10d
+            assert evaluate_strategy_a(_make_candidate(), features, config) is True, \
+                f"P10D={p10d} should pass (filter removed)"
 
 
 class TestStrategyB:
@@ -706,19 +694,14 @@ class TestStrategyB:
         features["atr_pct"] = 6.0
         assert evaluate_strategy_b(_make_candidate(), features, config) is False
 
-    def test_fails_prev_10d_too_positive(self):
-        """Prev 10D > -10% (e.g. +5%) fails Strategy B."""
+    def test_prev_10d_filter_removed(self):
+        """P10D filter was removed 2026-04-21. Any P10D value should pass B."""
         config = _make_strategy_config()
-        features = self._make_passing_features()
-        features["prev_10d_change_pct"] = 5.0
-        assert evaluate_strategy_b(_make_candidate(), features, config) is False
-
-    def test_prev_10d_very_negative_passes(self):
-        """Prev 10D = -40% still passes B (no floor unlike A)."""
-        config = _make_strategy_config()
-        features = self._make_passing_features()
-        features["prev_10d_change_pct"] = -40.0
-        assert evaluate_strategy_b(_make_candidate(), features, config) is True
+        for p10d in [-50.0, -10.0, 5.0, 50.0]:
+            features = self._make_passing_features()
+            features["prev_10d_change_pct"] = p10d
+            assert evaluate_strategy_b(_make_candidate(), features, config) is True, \
+                f"P10D={p10d} should pass (filter removed)"
 
     def test_no_downside_filter(self):
         """Strategy B has no downside_from_open filter, so 10% dip passes."""

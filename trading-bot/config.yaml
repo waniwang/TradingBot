@@ -44,16 +44,17 @@ signals:
   # Strategy A (tight filters)
   ep_earnings_a_min_close_in_range: 50.0          # close in top half of day's range
   ep_earnings_a_max_downside_from_open: 3.0       # max dip below open on gap day
-  ep_earnings_a_prev_10d_min: -30.0               # prev 10D change% floor
-  ep_earnings_a_prev_10d_max: -10.0               # prev 10D change% ceiling
+  # prev_10d filter removed 2026-04-21 — Spikeet column unreliable, full backtest shows no edge loss. See strategy.py::evaluate_strategy_a.
+  # ep_earnings_a_prev_10d_min: -30.0
+  # ep_earnings_a_prev_10d_max: -10.0
   # Strategy B (relaxed filters)
   ep_earnings_b_min_close_in_range: 50.0          # close in top half of day's range
   ep_earnings_b_atr_pct_min: 2.0                  # ATR% floor
   ep_earnings_b_atr_pct_max: 5.0                  # ATR% ceiling
-  ep_earnings_b_prev_10d_max: -10.0               # prev 10D change% must be below this
-  # Strategy C (bear market / day-2 confirmation)
+  # ep_earnings_b_prev_10d_max: -10.0             # removed 2026-04-21 (see A)
+  # Strategy C (day-2 confirmation)
   ep_earnings_c_stop_loss_pct: 7.0                 # stop loss at -7% from entry
-  ep_earnings_c_prev_10d_max: -10.0                # prev 10D change% must be below this
+  # ep_earnings_c_prev_10d_max: -10.0             # removed 2026-04-21 — C now unconditional on gap day, gated by day-2 confirm
   ep_earnings_c_max_hold_days: 20                  # shorter hold: 20 days (vs 50 for A/B)
   ep_earnings_c_day2_confirm: true                 # only enter if 1D return > 0
 
@@ -72,7 +73,7 @@ signals:
   ep_news_a_chg_open_max: 10.0                     # CHG-OPEN% <= 10%
   ep_news_a_min_close_in_range: 50.0               # closed in top half of day's range
   ep_news_a_max_downside_from_open: 3.0            # max dip below open
-  ep_news_a_prev_10d_max: -20.0                    # prior selloff >= 20%
+  # ep_news_a_prev_10d_max: -20.0                  # removed 2026-04-21 — Spikeet column unreliable, full backtest shows PF barely changes. See strategy.py.
   ep_news_a_atr_pct_min: 3.0                       # ATR% floor
   ep_news_a_atr_pct_max: 7.0                       # ATR% ceiling
   ep_news_a_max_volume_m: 3.0                      # volume < 3M shares
@@ -83,13 +84,13 @@ signals:
   ep_news_b_min_close_in_range: 30.0               # broader range: 30-80%
   ep_news_b_max_close_in_range: 80.0
   ep_news_b_max_downside_from_open: 6.0            # relaxed: < 6%
-  ep_news_b_prev_10d_max: -10.0                    # relaxed: prior selloff >= 10%
+  # ep_news_b_prev_10d_max: -10.0                  # removed 2026-04-21 (see A)
   ep_news_b_atr_pct_min: 3.0
   ep_news_b_atr_pct_max: 7.0
   ep_news_b_max_volume_m: 5.0                      # volume < 5M shares
-  # Strategy C (bear market / day-2 confirmation)
+  # Strategy C (day-2 confirmation)
   ep_news_c_stop_loss_pct: 7.0                     # stop loss at -7% from entry
-  ep_news_c_prev_10d_max: -10.0                    # prev 10D change% must be below this
+  # ep_news_c_prev_10d_max: -10.0                  # removed 2026-04-21 (see A)
   ep_news_c_atr_pct_min: 2.0                       # ATR% floor
   ep_news_c_atr_pct_max: 5.0                       # ATR% ceiling
   ep_news_c_max_hold_days: 20                      # shorter hold: 20 days (vs 50 for A/B)

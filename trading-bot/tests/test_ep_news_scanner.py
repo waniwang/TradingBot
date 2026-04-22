@@ -591,12 +591,14 @@ class TestNewsStrategyA:
         features["downside_from_open"] = 5.0
         assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is False
 
-    def test_fails_prev_10d_not_negative_enough(self):
-        """Prev 10D = -15% fails (needs <= -20%)."""
+    def test_prev_10d_filter_removed(self):
+        """P10D filter was removed 2026-04-21. Any P10D should still pass A."""
         config = _make_strategy_config()
-        features = self._make_passing_features()
-        features["prev_10d_change_pct"] = -15.0
-        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is False
+        for p10d in [-50.0, -15.0, 0.0, 30.0]:
+            features = self._make_passing_features()
+            features["prev_10d_change_pct"] = p10d
+            assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is True, \
+                f"P10D={p10d} should pass (filter removed)"
 
     def test_fails_atr_too_low(self):
         config = _make_strategy_config()
@@ -677,12 +679,14 @@ class TestNewsStrategyB:
         features["downside_from_open"] = 7.0
         assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is False
 
-    def test_fails_prev_10d_not_negative_enough(self):
-        """Prev 10D = -5% fails (needs <= -10%)."""
+    def test_prev_10d_filter_removed(self):
+        """P10D filter was removed 2026-04-21. Any P10D should still pass B."""
         config = _make_strategy_config()
-        features = self._make_passing_features()
-        features["prev_10d_change_pct"] = -5.0
-        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is False
+        for p10d in [-50.0, -5.0, 0.0, 30.0]:
+            features = self._make_passing_features()
+            features["prev_10d_change_pct"] = p10d
+            assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is True, \
+                f"P10D={p10d} should pass (filter removed)"
 
     def test_fails_volume_too_high(self):
         """Volume >= 5M fails Strategy B."""
@@ -690,13 +694,6 @@ class TestNewsStrategyB:
         features = self._make_passing_features()
         candidate = _make_candidate(today_volume=6_000_000)
         assert evaluate_strategy_b(candidate, features, config) is False
-
-    def test_prev_10d_very_negative_passes(self):
-        """Prev 10D = -50% still passes B (no floor)."""
-        config = _make_strategy_config()
-        features = self._make_passing_features()
-        features["prev_10d_change_pct"] = -50.0
-        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is True
 
 
 # ---------------------------------------------------------------------------
