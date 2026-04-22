@@ -36,7 +36,11 @@ from db.models import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-STATUS_FILE = Path(__file__).parent.parent.parent / "bot_status.json"
+# BOT_STATUS_FILE lets the IBKR API instance read bot_status_ib.json instead of
+# the shared Alpaca bot_status.json. Falls back to bot_status.json.
+STATUS_FILE = Path(__file__).parent.parent.parent / os.environ.get(
+    "BOT_STATUS_FILE", "bot_status.json"
+)
 
 STALE_THRESHOLD_SECONDS = 10 * 60  # 10 minutes
 

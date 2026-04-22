@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,7 +13,11 @@ from api.constants import JOB_LABELS
 
 router = APIRouter()
 
-STATUS_FILE = Path(__file__).parent.parent.parent / "bot_status.json"
+# BOT_STATUS_FILE lets the IBKR API instance read bot_status_ib.json instead of
+# the shared Alpaca bot_status.json. Falls back to bot_status.json.
+STATUS_FILE = Path(__file__).parent.parent.parent / os.environ.get(
+    "BOT_STATUS_FILE", "bot_status.json"
+)
 
 
 @router.get("/status")

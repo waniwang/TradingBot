@@ -31,40 +31,58 @@ Dashboard: Vercel (frontend) + `http://172.235.216.175:8000/api` (API)
 
 Dashboard: `http://localhost:3000` (frontend) + `http://localhost:8000/api` (API)
 
-## Running a personal second instance (e.g. IBKR paper bot)
+## Running the personal IBKR paper bot (bot_ib.sh)
 
-The bot and API both read the `BOT_CONFIG` env var to decide which config file to load (default: `config.yaml`). This lets you run a second bot instance side-by-side with its own risk settings, position sizing, and database — without touching the shared `config.yaml` your partner edits.
+The IBKR bot runs alongside the shared Alpaca bot. Same codebase, but a separate process that trades EP earnings + EP news swings against an Interactive Brokers paper account. Uses `main_ib.py` as its entry point, `executor/ib_client.py` as the broker client, and its own gitignored config, DB, log, heartbeat, and API port — so nothing collides with the Alpaca bot or your partner's repo.
 
-**Setup (one-time):**
+**One-time setup:**
 
 ```bash
-# Copy the shared config as your personal starting point
-cp trading-bot/config.yaml trading-bot/config.ib.local.yaml
+# 1. Create your personal config (gitignored — never hits the shared repo)
+cd trading-bot
+cp config.yaml config.ib.local.yaml
 
-# Edit risk / share-size / database / ports in the copy
-# (any config.*.local.yaml is gitignored — it never hits the shared repo)
+# 2. Edit config.ib.local.yaml — make sure these sections are set:
+#    database:
+#      url: sqlite:///trading_bot_ib.db
+#    ibkr:
+#      host: 127.0.0.1
+#      port: 4002          # 4002 = paper, 4001 = live
+#      client_id: 2
+#    risk:                 # tweak freely without affecting the Alpaca bot
+#      per_trade_pct: 1.0
+#      max_positions: 4
+
+# 3. Install IB-specific Python deps (one-time)
+.venv/bin/pip install ib_async exchange_calendars
+
+# 4. Start IB Gateway, log into your PAPER account, enable API on 127.0.0.1:4002
 ```
 
-**Launch the personal bot + API + dashboard:**
+**Daily use:**
 
 ```bash
-# Bot process
 cd trading-bot
-BOT_CONFIG=config.ib.local.yaml .venv/bin/python main.py
+./bot_ib.sh start      # launches main_ib.py + API on :8001
+./bot_ib.sh status     # shows process state + heartbeat + next job
+./bot_ib.sh logs       # tails trading_bot_ib.log
+./bot_ib.sh stop
+./bot_ib.sh restart
+```
 
-# API (separate terminal, different port)
-BOT_CONFIG=config.ib.local.yaml \
-  .venv/bin/uvicorn api.main:app --reload --port 8001
+**Launch the personal dashboard (separate terminal):**
 
-# Dashboard (separate terminal, different port, points at :8001 API)
-cd ../dashboard
+```bash
+cd dashboard
 NEXT_PUBLIC_API_URL=http://localhost:8001/api PORT=3001 npm run dev
 ```
 
-Personal dashboard: `http://localhost:3001` → `http://localhost:8001/api` → personal DB.
-Shared Alpaca dashboard (unchanged): `http://localhost:3000` → `http://localhost:8000/api` → shared DB.
+| Instance | Dashboard URL | API URL | DB | Config |
+|---|---|---|---|---|
+| Shared Alpaca bot | `http://localhost:3000` | `:8000/api` | `trading_bot.db` | `config.yaml` (tracked) |
+| Personal IBKR bot | `http://localhost:3001` | `:8001/api` | `trading_bot_ib.db` | `config.ib.local.yaml` (gitignored) |
 
-Your personal config changes never show up in `git status` because `config.*.local.yaml` is gitignored. Code updates your partner pushes to `main` automatically flow into both instances.
+Your personal config changes never show up in `git status`. Code updates your partner pushes to `main` flow into both instances via `git pull`.
 
 ## Typical workflows
 
