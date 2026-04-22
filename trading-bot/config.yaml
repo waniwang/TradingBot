@@ -5,6 +5,8 @@ alpaca:
   secret_key: YOUR_ALPACA_SECRET_KEY
   # paper=True when environment=paper, paper=False when environment=live
   # Get keys at: https://alpaca.markets → paper account dashboard
+  # Real keys live in env vars (ALPACA_API_KEY / ALPACA_SECRET_KEY) — see api/deps.py,
+  # which prefers env over config.yaml. Do NOT paste real keys here.
 
 risk:
   risk_per_trade_pct: 1.0      # % of portfolio risked per trade
@@ -57,6 +59,16 @@ signals:
   # ep_earnings_c_prev_10d_max: -10.0             # removed 2026-04-21 — C now unconditional on gap day, gated by day-2 confirm
   ep_earnings_c_max_hold_days: 20                  # shorter hold: 20 days (vs 50 for A/B)
   ep_earnings_c_day2_confirm: true                 # only enter if 1D return > 0
+
+  # --- EP execute-time price refresh (shared by ep_earnings + ep_news) ---
+  # Scanner captures price at 3:00-3:05 PM; job_execute fires 3:50-3:59. On
+  # running names the scanner mark is stale. These knobs let the bot fetch a
+  # live mid at execute time and adjust entry + stop before placing the order.
+  # Guards protect against wide/broken quotes (today's MCRI: 28% spread).
+  # See core.execution.resolve_execution_price.
+  ep_execute_refresh_price: true                   # false → fall back to scanner price (legacy behavior)
+  ep_execute_max_price_bump_pct: 3.0               # skip if live mid > scan * (1 + this%)
+  ep_execute_max_spread_pct: 3.0                   # skip if (ask-bid)/mid > this% (quote too wide)
 
   # --- EP News (EOD scanner, runs at 3:00 PM ET) ---
   ep_news_min_gap_pct: 8.0                         # gap% = (Open - prevClose) / prevClose * 100
