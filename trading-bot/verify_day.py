@@ -543,6 +543,75 @@ def run_checks(
     else:
         results.append(CheckResult(19, "EP execution drop", "PASS"))
 
+    # ── Check 20: Unfilled limits — why didn't the order fill? ──────────
+    # For every cancelled/rejected order with 0 fill, pull 1-minute IEX bars
+    # for the fill-wait window (created_at → +90s; the executor's timeout is 60s)
+    # and check whether the stock ever traded at or below a buy-limit (or at or
+    # above a sell-limit). Surfaces today's MCRI case: limit $111.78, low-of-
+    # window $113.xx → passive limit never had a chance. Operator can then
+    # decide whether to adjust entry logic, spread tolerance, or skip next time.
+    unfilled_orders = [
+        o for o in orders
+        if o.status in ("cancelled", "rejected")
+        and (o.filled_qty or 0) == 0
+        and o.order_type == "limit"
+        and o.price is not None
+    ]
+    if not unfilled_orders:
+        results.append(CheckResult(20, "Unfilled limits", "PASS", "no cancelled/rejected limits"))
+    else:
+        postmortem_lines: list[str] = []
+        api_errors = 0
+        for o in unfilled_orders:
+            # Window: from order create → +90s (60s exec timeout + 30s slack)
+            start = o.created_at
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=pytz.UTC)
+            end = start + timedelta(seconds=90)
+
+            try:
+                bars = client.get_candles_1m_range(o.ticker, start, end)
+            except Exception as e:
+                api_errors += 1
+                postmortem_lines.append(f"{o.ticker} ${o.price:.2f} qty={o.qty}: bars fetch failed ({type(e).__name__})")
+                continue
+
+            if not bars:
+                postmortem_lines.append(f"{o.ticker} ${o.price:.2f} qty={o.qty}: no bars in window")
+                continue
+
+            win_low = min(b["low"] for b in bars)
+            win_high = max(b["high"] for b in bars)
+
+            if o.side == "buy":
+                # Buy limit fills when price <= limit
+                reached = win_low <= o.price
+                verdict = "touched limit" if reached else "NEVER touched limit"
+                postmortem_lines.append(
+                    f"{o.ticker} buy@${o.price:.2f} qty={o.qty}: window low=${win_low:.2f} high=${win_high:.2f} → {verdict}"
+                )
+            else:
+                # Sell / sell_short limit fills when price >= limit
+                reached = win_high >= o.price
+                verdict = "touched limit" if reached else "NEVER touched limit"
+                postmortem_lines.append(
+                    f"{o.ticker} {o.side}@${o.price:.2f} qty={o.qty}: window low=${win_low:.2f} high=${win_high:.2f} → {verdict}"
+                )
+
+        if api_errors == len(unfilled_orders):
+            # All calls errored — don't imply bad trades, just note we couldn't check
+            results.append(CheckResult(
+                20, "Unfilled limits", "SKIP",
+                f"{len(unfilled_orders)} unfilled, bar fetch failed for all",
+            ))
+        else:
+            # The point isn't to FAIL — unfilled limits are normal when price moves away.
+            # Surface as WARN so the operator reads the details.
+            results.append(CheckResult(
+                20, "Unfilled limits", "WARN",
+                f"{len(unfilled_orders)} cancelled/rejected: {' | '.join(postmortem_lines[:6])}",
+            ))
+
     return results
 
 

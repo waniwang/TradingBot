@@ -98,6 +98,13 @@ export interface SignalToday {
   acted: boolean;
   /** A / B / A+B / C — only set for EP strategies; null otherwise. */
   variation: string | null;
+  /** Latest Order row status — pending/submitted/filled/partially_filled/cancelled/rejected.
+   * null if no order was placed (acted=false). "acted=true + cancelled" is the "order
+   * submitted but never filled" case (e.g. limit didn't print). */
+  order_status: string | null;
+  filled_qty: number | null;
+  filled_avg_price: number | null;
+  order_qty: number | null;
 }
 
 export interface DailyPnl {

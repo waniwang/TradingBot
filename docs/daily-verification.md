@@ -56,7 +56,7 @@ AI-assisted review process for the trading bot's daily execution. Use this playb
   - Acceptable slippage: < 0.5% for liquid names, < 1% for small caps
   - Pattern of consistently bad fills suggests order type or timing issues
 - **Order timing**: Was the entry order placed promptly after signal fired? (Compare signal fired_at vs order created_at)
-- **Cancelled/rejected orders**: Check the Orders table for non-filled statuses — why did they fail?
+- **Cancelled/rejected orders**: Check 20 (`Unfilled limits`) runs a 1-minute bar postmortem for every cancelled/rejected limit — it tells you whether the stock ever touched the limit price in the 90s fill-wait window. "NEVER touched limit" means the passive limit was unreachable (strategy bought the wrong level); "touched limit" but still unfilled means a broker/timing issue worth digging into
 - **Stop orders**: Were GTC stop orders placed immediately after entry fills?
 
 ## Step 5: Review Exits

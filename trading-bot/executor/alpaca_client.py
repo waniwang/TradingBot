@@ -535,6 +535,47 @@ class AlpacaClient:
             })
         return result
 
+    def get_candles_1m_range(
+        self, ticker: str, start: datetime, end: datetime
+    ) -> list[dict]:
+        """Fetch 1-minute bars for an explicit time window (UTC datetimes).
+
+        Used by `verify_day.py`'s unfilled-limit postmortem to check whether
+        the stock ever touched a limit price during the 60-second fill-wait
+        window — the historical counterpart of `get_candles_1m`, which only
+        looks back from now.
+        """
+        if not ALPACA_AVAILABLE:
+            return []
+
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+
+        req = StockBarsRequest(
+            symbol_or_symbols=ticker,
+            timeframe=TimeFrame.Minute,
+            start=start,
+            end=end,
+            feed=DataFeed.IEX,
+        )
+        bars = self._data.get_stock_bars(req)
+        bars_data = bars.data if hasattr(bars, 'data') else bars
+        ticker_bars = bars_data.get(ticker, [])
+
+        return [
+            {
+                "time": b.timestamp,
+                "open": float(b.open),
+                "high": float(b.high),
+                "low": float(b.low),
+                "close": float(b.close),
+                "volume": int(b.volume),
+            }
+            for b in ticker_bars
+        ]
+
     def get_daily_bars(self, ticker: str, days: int = 130) -> list[dict]:
         """Get daily OHLCV bars for a ticker (used for MA / volume avg calculations)."""
         if not ALPACA_AVAILABLE:
