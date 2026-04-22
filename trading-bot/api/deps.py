@@ -24,6 +24,14 @@ def get_config() -> dict:
     cfg.setdefault("alpaca", {})["secret_key"] = (
         os.environ.get("ALPACA_SECRET_KEY") or cfg["alpaca"].get("secret_key", "")
     )
+    # Most route modules call db.models.get_engine() directly, which reads
+    # DATABASE_URL from the environment. Export the config's DB URL so those
+    # routes pick up the right database when BOT_CONFIG selects a personal
+    # config (e.g. the IBKR bot's DB). An explicit DATABASE_URL env var, if
+    # already set, still wins.
+    db_url = (cfg.get("database") or {}).get("url")
+    if db_url:
+        os.environ.setdefault("DATABASE_URL", db_url)
     return cfg
 
 

@@ -14,6 +14,12 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+# Load config eagerly so DATABASE_URL is exported into the env before any
+# route imports db.models.get_engine() (which reads DATABASE_URL). Critical
+# when BOT_CONFIG points at a personal config with a different DB URL.
+from api.deps import get_config
+get_config()
+
 from api.routes import status, portfolio, positions, watchlist, signals, performance, pipeline, risk, market, doctor, strategies
 
 API_KEY = os.environ.get("DASHBOARD_API_KEY", "dev-key")
