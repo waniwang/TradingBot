@@ -21,12 +21,22 @@ def _iso(dt) -> str | None:
 
 def _format_candidate(row: Watchlist) -> dict:
     meta = row.meta
+    # EP swing variation (A/B/A+B/C). C candidates at scan time don't have
+    # ep_strategy set yet — they're parked in stage=watching awaiting day-2
+    # confirm, which is what makes them Strategy C.
+    variation = None
+    if row.setup_type in ("ep_earnings", "ep_news"):
+        variation = meta.get("ep_strategy")
+        if variation is None and row.stage == "watching":
+            variation = "C"
+
     base = {
         "id": row.id,
         "ticker": row.ticker,
         "setup": row.setup_type.replace("_", " ").title(),
         "setup_raw": row.setup_type,
         "stage": row.stage.upper(),
+        "variation": variation,
         "scan_date": str(row.scan_date),
         "added_at": _iso(row.added_at),
         "stage_changed_at": _iso(row.stage_changed_at),

@@ -62,6 +62,8 @@ export interface WatchlistCandidate {
   setup: string;
   setup_raw: string;
   stage: string;
+  /** A / B / A+B / C — only set for EP strategies; null otherwise. */
+  variation: string | null;
   scan_date: string;
   /** ISO-8601 UTC — when this row first appeared on the watchlist. */
   added_at: string | null;

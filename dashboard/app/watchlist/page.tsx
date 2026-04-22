@@ -10,6 +10,7 @@ import {
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
 import { formatRelativeTime } from "@/lib/utils";
+import { VariationBadge } from "@/components/strategies/variation-badge";
 import type { BotStatus, WatchlistData, WatchlistCandidate } from "@/lib/types";
 
 export default function WatchlistPage() {
@@ -124,7 +125,10 @@ function CandidateTable({ candidates }: { candidates: WatchlistCandidate[] }) {
             <TableRow key={c.id}>
               <TableCell className="font-medium">{c.ticker}</TableCell>
               <TableCell>
-                <Badge variant="outline" className="text-xs">{c.setup}</Badge>
+                <div className="flex items-center gap-1.5">
+                  <Badge variant="outline" className="text-xs">{c.setup}</Badge>
+                  <VariationBadge value={c.variation} />
+                </div>
               </TableCell>
               <TableCell>
                 <Badge
