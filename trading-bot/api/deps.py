@@ -12,7 +12,11 @@ ROOT = Path(__file__).parent.parent
 
 @lru_cache
 def get_config() -> dict:
-    with open(ROOT / "config.yaml") as f:
+    # BOT_CONFIG lets a second API instance point at a personal config file
+    # (e.g. config.ib.local.yaml) without touching the shared config.yaml.
+    # Absolute paths are honored; relative paths resolve against the repo root.
+    config_path = os.environ.get("BOT_CONFIG", "config.yaml")
+    with open(ROOT / config_path) as f:
         cfg = yaml.safe_load(f)
     cfg.setdefault("alpaca", {})["api_key"] = (
         os.environ.get("ALPACA_API_KEY") or cfg["alpaca"].get("api_key", "")

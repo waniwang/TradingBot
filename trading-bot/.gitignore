@@ -4,6 +4,10 @@
 .env
 .env.*
 config.local.yaml
+# Personal per-instance configs (e.g. config.ib.local.yaml for a personal
+# IBKR paper bot with its own risk / position-sizing tweaks). Never committed
+# so they don't collide with the shared config.yaml.
+config.*.local.yaml
 
 # =============================================================================
 # Python

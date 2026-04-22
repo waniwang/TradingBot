@@ -31,6 +31,41 @@ Dashboard: Vercel (frontend) + `http://172.235.216.175:8000/api` (API)
 
 Dashboard: `http://localhost:3000` (frontend) + `http://localhost:8000/api` (API)
 
+## Running a personal second instance (e.g. IBKR paper bot)
+
+The bot and API both read the `BOT_CONFIG` env var to decide which config file to load (default: `config.yaml`). This lets you run a second bot instance side-by-side with its own risk settings, position sizing, and database — without touching the shared `config.yaml` your partner edits.
+
+**Setup (one-time):**
+
+```bash
+# Copy the shared config as your personal starting point
+cp trading-bot/config.yaml trading-bot/config.ib.local.yaml
+
+# Edit risk / share-size / database / ports in the copy
+# (any config.*.local.yaml is gitignored — it never hits the shared repo)
+```
+
+**Launch the personal bot + API + dashboard:**
+
+```bash
+# Bot process
+cd trading-bot
+BOT_CONFIG=config.ib.local.yaml .venv/bin/python main.py
+
+# API (separate terminal, different port)
+BOT_CONFIG=config.ib.local.yaml \
+  .venv/bin/uvicorn api.main:app --reload --port 8001
+
+# Dashboard (separate terminal, different port, points at :8001 API)
+cd ../dashboard
+NEXT_PUBLIC_API_URL=http://localhost:8001/api PORT=3001 npm run dev
+```
+
+Personal dashboard: `http://localhost:3001` → `http://localhost:8001/api` → personal DB.
+Shared Alpaca dashboard (unchanged): `http://localhost:3000` → `http://localhost:8000/api` → shared DB.
+
+Your personal config changes never show up in `git status` because `config.*.local.yaml` is gitignored. Code updates your partner pushes to `main` automatically flow into both instances.
+
 ## Typical workflows
 
 **Check if everything is fine:**
