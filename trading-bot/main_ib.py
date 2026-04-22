@@ -129,8 +129,9 @@ def load_config(path: str | None = None) -> dict:
 def make_notifier(config: dict):
     tg = config.get("telegram") or {}
     token = tg.get("bot_token", "")
-    chat_id = tg.get("chat_id", "")
-    if not token or not chat_id:
+    chat_id_raw = str(tg.get("chat_id", "") or "")
+    chat_ids = [c.strip() for c in chat_id_raw.split(",") if c.strip()]
+    if not token or not chat_ids:
         return lambda msg: logger.info("[Telegram stub] %s", msg)
 
     import asyncio
@@ -147,10 +148,11 @@ def make_notifier(config: dict):
         tagged = f"[IB] {message}"
 
         async def _send():
-            try:
-                await bot.send_message(chat_id=chat_id, text=tagged)
-            except Exception as e:
-                logger.warning("Telegram send failed: %s", e)
+            for cid in chat_ids:
+                try:
+                    await bot.send_message(chat_id=cid, text=tagged)
+                except Exception as e:
+                    logger.warning("Telegram send failed (chat_id=%s): %s", cid, e)
 
         asyncio.run_coroutine_threadsafe(_send(), _loop)
 

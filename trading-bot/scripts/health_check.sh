@@ -29,10 +29,15 @@ send_telegram() {
         echo "$(date '+%Y-%m-%d %H:%M:%S') [WARN] Telegram not configured — skipping alert"
         return 0
     fi
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        -d chat_id="$TELEGRAM_CHAT_ID" \
-        -d text="$message" \
-        -d parse_mode="Markdown" > /dev/null 2>&1
+    local IFS=','
+    for cid in $TELEGRAM_CHAT_ID; do
+        cid="${cid// /}"
+        [[ -z "$cid" ]] && continue
+        curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="$cid" \
+            -d text="$message" \
+            -d parse_mode="Markdown" > /dev/null 2>&1
+    done
 }
 
 # Fetch doctor endpoint

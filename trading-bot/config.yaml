@@ -121,7 +121,7 @@ exits:
 
 telegram:
   bot_token: YOUR_TELEGRAM_BOT_TOKEN
-  chat_id: YOUR_TELEGRAM_CHAT_ID
+  chat_id: YOUR_TELEGRAM_CHAT_ID   # single ID or comma-separated list (e.g. "111,222") to fan out
 
 universe:
   min_price: 5.0

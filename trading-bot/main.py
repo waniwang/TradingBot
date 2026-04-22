@@ -139,8 +139,9 @@ def _prefetch_daily_bars(client, tickers: list[str], notify=None):
 
 def make_notifier(config: dict):
     token = config["telegram"].get("bot_token", "")
-    chat_id = config["telegram"].get("chat_id", "")
-    if not token or not chat_id:
+    chat_id_raw = str(config["telegram"].get("chat_id", "") or "")
+    chat_ids = [c.strip() for c in chat_id_raw.split(",") if c.strip()]
+    if not token or not chat_ids:
         return lambda msg: logger.info("[Telegram stub] %s", msg)
 
     import asyncio
@@ -160,10 +161,11 @@ def make_notifier(config: dict):
 
     def notify(message: str):
         async def _send():
-            try:
-                await bot.send_message(chat_id=chat_id, text=message)
-            except Exception as e:
-                logger.warning("Telegram send failed: %s", e)
+            for cid in chat_ids:
+                try:
+                    await bot.send_message(chat_id=cid, text=message)
+                except Exception as e:
+                    logger.warning("Telegram send failed (chat_id=%s): %s", cid, e)
 
         asyncio.run_coroutine_threadsafe(_send(), _loop)
 
