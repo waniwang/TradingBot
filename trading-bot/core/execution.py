@@ -300,6 +300,99 @@ _execute_entry = execute_entry
 
 
 # ---------------------------------------------------------------------------
+# Execute-time price refresh (EP strategies)
+# ---------------------------------------------------------------------------
+
+def resolve_execution_price(
+    ticker: str,
+    scan_entry: float,
+    stop_pct: float,
+    side: str,
+    client,
+    config: dict,
+    notify=None,
+) -> tuple[float, float, str] | None:
+    """Pick the actual entry + stop for an EP swing order.
+
+    Scanner captures price at 3:00 PM ET, but the execute window is 3:50-3:59 —
+    a gap during which the stock often rallies past the scanner mark (today's
+    MCRI). This helper fetches a live quote at execute time and picks the entry:
+
+      - If the live mid is <= the scanner entry, use the scanner entry
+        (buy-cheaper-if-possible, also strategy-consistent).
+      - If the live mid is within `ep_execute_max_price_bump_pct` above the
+        scanner entry AND the spread is under `ep_execute_max_spread_pct`, use
+        the live mid and recompute the stop at mid * (1 - stop_pct/100).
+      - Otherwise return None — the row stays stage="ready" and next minute's
+        job_execute retry evaluates again with a fresh quote.
+
+    Stop is always computed from the actual entry used so the -7% (or other)
+    stop rule holds.
+
+    Trade-path note: client.get_realtime_quote() exceptions propagate to
+    _track_job by design (wrong-size trade is worse than no trade).
+    """
+    sig_cfg = config.get("signals") or {}
+    enabled = bool(sig_cfg.get("ep_execute_refresh_price", True))
+    if not enabled:
+        return scan_entry, round(scan_entry * (1 - stop_pct / 100), 2), "scan (refresh disabled)"
+
+    max_bump_pct = float(sig_cfg.get("ep_execute_max_price_bump_pct", 3.0))
+    max_spread_pct = float(sig_cfg.get("ep_execute_max_spread_pct", 3.0))
+
+    quote = client.get_realtime_quote(ticker)
+    bid = float(quote.get("bid") or 0)
+    ask = float(quote.get("ask") or 0)
+
+    if bid <= 0 or ask <= 0:
+        msg = f"{ticker}: invalid quote (bid={bid} ask={ask}) — skipping this attempt"
+        logger.warning(msg)
+        if notify:
+            notify(f"EP EXECUTE SKIP: {msg}")
+        return None
+
+    mid = (bid + ask) / 2
+    spread_pct = (ask - bid) / mid * 100
+
+    if spread_pct > max_spread_pct:
+        msg = (
+            f"{ticker}: spread {spread_pct:.1f}% > cap {max_spread_pct:.1f}% "
+            f"(bid=${bid:.2f} ask=${ask:.2f}) — skipping, retry next minute"
+        )
+        logger.info(msg)
+        return None
+
+    # Buy-side only (EP swing is long-only). If side is short in the future,
+    # mirror-image the logic (live mid <= scan OK, else cap below scan).
+    if side != "long":
+        # Fall back to scanner values — don't alter shorts without explicit testing.
+        return scan_entry, round(scan_entry * (1 - stop_pct / 100), 2), "scan (non-long side)"
+
+    if mid <= scan_entry:
+        # Live price at or below the scan — stay with scan entry (strategy
+        # assumes gap-day close; paying even less is fine, stop stays at the
+        # same dollar level so risk/share is unchanged).
+        return scan_entry, round(scan_entry * (1 - stop_pct / 100), 2), "scan (live <= scan)"
+
+    bump_pct = (mid - scan_entry) / scan_entry * 100
+    if bump_pct > max_bump_pct:
+        msg = (
+            f"{ticker}: live mid ${mid:.2f} is {bump_pct:.1f}% above scan ${scan_entry:.2f} "
+            f"(cap {max_bump_pct:.1f}%) — skipping, retry next minute"
+        )
+        logger.info(msg)
+        return None
+
+    refreshed_entry = round(mid, 2)
+    refreshed_stop = round(refreshed_entry * (1 - stop_pct / 100), 2)
+    logger.info(
+        "%s: refreshed entry $%.2f (scan=$%.2f, +%.2f%%) stop=$%.2f spread=%.1f%%",
+        ticker, refreshed_entry, scan_entry, bump_pct, refreshed_stop, spread_pct,
+    )
+    return refreshed_entry, refreshed_stop, f"refreshed (scan=${scan_entry:.2f}, +{bump_pct:.2f}%)"
+
+
+# ---------------------------------------------------------------------------
 # P&L helpers
 # ---------------------------------------------------------------------------
 

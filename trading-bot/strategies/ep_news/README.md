@@ -6,7 +6,7 @@ EOD long swing on news-driven (non-earnings) gap-ups. Same timing as EP Earnings
 
 1. **3:05 PM** — `scanner.py` finds news gappers (excludes earnings), `strategy.py` evaluates A/B/C filters. A/B → `Watchlist(stage="ready")`, C → `Watchlist(stage="watching", meta.day2_confirm=true)`.
 2. **3:45 PM** — `job_day2_confirm` snapshots prices for yesterday's `watching` C rows; confirmed → flips to `stage="ready"` with execution payload in `meta`; rejected → `stage="expired"`.
-3. **3:50–3:59 PM** — `job_execute` queries `Watchlist.stage="ready"` and places orders. Fires every minute (10 attempts) so a briefly-down bot or a transient Alpaca error still gets a trade in before close. **DB-driven + idempotent** — open-Position guard and <10-minute non-terminal Order guard block double-entry across retries.
+3. **3:50–3:59 PM** — `job_execute` queries `Watchlist.stage="ready"` and places orders. Fires every minute (10 attempts) so a briefly-down bot or a transient Alpaca error still gets a trade in before close. **DB-driven + idempotent** — open-Position guard and <10-minute non-terminal Order guard block double-entry across retries. **Price refresh**: each attempt calls `core.execution.resolve_execution_price` to fetch live bid/ask and pick entry/stop — mid is used when it's at or modestly above the scan price (capped by `ep_execute_max_price_bump_pct`); wide quotes (`ep_execute_max_spread_pct`) skip and retry next minute. Stop is always recomputed from the actual entry.
 4. **Ongoing** — Stop per strategy tier, max hold (50d for A/B, 20d for C).
 
 **Note:** EP News scans at 3:05 PM (offset from EP Earnings at 3:00 PM) to avoid yfinance rate limiting from simultaneous per-ticker API calls.

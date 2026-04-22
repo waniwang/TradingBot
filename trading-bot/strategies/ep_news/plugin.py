@@ -215,7 +215,11 @@ class EPNewsPlugin:
         flagged stage='ready' with the execution payload in metadata_json. Crash-safe:
         nothing is held in memory between scan/confirm and execute.
         """
-        from core.execution import is_trading_day, _execute_entry, _compute_current_daily_pnl, _compute_current_weekly_pnl
+        from core.execution import (
+            is_trading_day, _execute_entry,
+            _compute_current_daily_pnl, _compute_current_weekly_pnl,
+            resolve_execution_price,
+        )
         from signals.base import SignalResult
         from risk.manager import RiskManager
         from db.models import Order, Position, Watchlist, get_session
@@ -302,8 +306,21 @@ class EPNewsPlugin:
                     notify(f"EP NEWS BLOCKED: {ticker} ({strategy_label}) - {reason}")
                 continue
 
+            # Refresh entry against live mid — scanner captured price at 3:05 PM but
+            # execute runs at 3:50+, so the mark is ~45 min stale on a running name.
+            # Returns None to skip this attempt; next minute's retry re-evaluates.
+            # See core.execution.resolve_execution_price.
+            stop_pct = entry.get("stop_loss_pct", 7.0)
+            resolved = resolve_execution_price(
+                ticker, entry["entry_price"], stop_pct,
+                side="long", client=client, config=config, notify=notify,
+            )
+            if resolved is None:
+                continue
+            use_entry, use_stop, price_label = resolved
+
             shares = risk.calculate_position_size(
-                portfolio_value, entry["entry_price"], entry["stop_price"]
+                portfolio_value, use_entry, use_stop
             )
             if shares <= 0:
                 logger.info("EP news: %s position size = 0, skipping", ticker)
@@ -318,19 +335,19 @@ class EPNewsPlugin:
                 ticker=ticker,
                 setup_type=setup_type,
                 side="long",
-                entry_price=entry["entry_price"],
-                stop_price=entry["stop_price"],
+                entry_price=use_entry,
+                stop_price=use_stop,
                 gap_pct=entry["gap_pct"],
                 volume_ratio=entry.get("rvol"),
-                notes=f"EP News Strategy {strategy_label} | "
+                notes=f"EP News Strategy {strategy_label} | price={price_label} | "
                       f"CHG-OPEN={entry['chg_open_pct']:.1f}% CIR={entry['close_in_range']:.0f} "
                       f"DS={entry['downside_from_open']:.1f}% P10D={entry['prev_10d_change_pct']:.1f}% "
                       f"ATR={entry['atr_pct']:.1f}% Vol={entry.get('today_volume', 0)/1e6:.1f}M",
             )
 
             logger.info(
-                "EP news entry: %s (%s) %d shares @ $%.2f stop $%.2f",
-                ticker, strategy_label, shares, signal.entry_price, signal.stop_price,
+                "EP news entry: %s (%s) %d shares @ $%.2f stop $%.2f (%s)",
+                ticker, strategy_label, shares, signal.entry_price, signal.stop_price, price_label,
             )
             _execute_entry(
                 ticker, signal, shares, client, db_engine, notify,

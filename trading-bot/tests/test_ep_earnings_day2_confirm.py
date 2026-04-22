@@ -41,6 +41,14 @@ def mock_client():
     client = MagicMock()
     client.place_limit_order.return_value = "broker-id-123"
     client.get_portfolio_value.return_value = 100_000.0
+    # resolve_execution_price (added 2026-04-22) fetches a live quote before
+    # placing each order. Default stub returns a quote whose mid sits at or just
+    # below the default seeded entry ($22.0) so the helper falls back to the
+    # scan entry — keeps these tests focused on execute semantics, not price
+    # refresh. Override per-test when testing the refresh path explicitly.
+    client.get_realtime_quote.side_effect = lambda t: {
+        "ticker": t, "bid": 21.90, "ask": 22.00, "last_price": 21.95,
+    }
     return client
 
 
