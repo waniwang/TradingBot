@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/table";
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
-import { formatRelativeTime } from "@/lib/utils";
+import { formatRelativeTime, stageLabel, stageTooltip } from "@/lib/utils";
 import { VariationBadge } from "@/components/strategies/variation-badge";
 import type { BotStatus, WatchlistData, WatchlistCandidate } from "@/lib/types";
 
@@ -63,16 +63,16 @@ export default function WatchlistPage() {
         ) : (
           <Tabs defaultValue="active">
             <TabsList>
-              <TabsTrigger value="active" className="gap-2">
-                Active
+              <TabsTrigger value="active" className="gap-2" title={stageTooltip("active")}>
+                {stageLabel("active")}
                 <Badge variant="secondary" className="text-xs">{data.counts.active}</Badge>
               </TabsTrigger>
-              <TabsTrigger value="ready" className="gap-2">
-                Ready
+              <TabsTrigger value="ready" className="gap-2" title={stageTooltip("ready")}>
+                {stageLabel("ready")}
                 <Badge variant="secondary" className="text-xs">{data.counts.ready}</Badge>
               </TabsTrigger>
-              <TabsTrigger value="watching" className="gap-2">
-                Watching
+              <TabsTrigger value="watching" className="gap-2" title={stageTooltip("watching")}>
+                {stageLabel("watching")}
                 <Badge variant="secondary" className="text-xs">{data.counts.watching}</Badge>
               </TabsTrigger>
             </TabsList>
@@ -97,7 +97,7 @@ function CandidateTable({ candidates }: { candidates: WatchlistCandidate[] }) {
   if (candidates.length === 0) {
     return (
       <div className="rounded-lg border border-border p-8 text-center text-sm text-muted-foreground">
-        No candidates in this stage
+        No tickers in this stage
       </div>
     );
   }
@@ -132,6 +132,7 @@ function CandidateTable({ candidates }: { candidates: WatchlistCandidate[] }) {
               </TableCell>
               <TableCell>
                 <Badge
+                  title={stageTooltip(c.stage)}
                   className={`text-xs ${
                     c.stage === "ACTIVE"
                       ? "bg-profit/20 text-profit"
@@ -140,7 +141,7 @@ function CandidateTable({ candidates }: { candidates: WatchlistCandidate[] }) {
                       : "bg-yellow-500/20 text-yellow-400"
                   }`}
                 >
-                  {c.stage}
+                  {stageLabel(c.stage)}
                 </Badge>
               </TableCell>
               <TimestampCell iso={c.added_at} />

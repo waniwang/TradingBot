@@ -19,3 +19,35 @@ export function formatRelativeTime(iso: string | null | undefined, now: number =
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
 }
+
+/**
+ * Friendly display label for a watchlist stage.
+ *
+ * The DB stage names carry different semantics per strategy (e.g. "active"
+ * means "live today" for breakout but "scan pool snapshot" for EP swing),
+ * so the tooltip explains the actual meaning in context. See CLAUDE.md and
+ * docs/architecture.md for the full lifecycle.
+ */
+export function stageLabel(stage: string | null | undefined): string {
+  const s = (stage ?? "").toLowerCase();
+  switch (s) {
+    case "active":    return "Candidates";
+    case "ready":     return "Queued";
+    case "watching":  return "Awaiting Day-2";
+    case "triggered": return "Entered";
+    case "expired":   return "Expired";
+    default:          return stage ?? "-";
+  }
+}
+
+export function stageTooltip(stage: string | null | undefined): string {
+  const s = (stage ?? "").toLowerCase();
+  switch (s) {
+    case "active":    return "Scan pool — passed filters, awaiting execution decision";
+    case "ready":     return "Queued for the next execute window";
+    case "watching":  return "Awaiting day-2 price confirmation (EP Strategy C)";
+    case "triggered": return "Order placed with the broker";
+    case "expired":   return "No longer eligible";
+    default:          return "";
+  }
+}
