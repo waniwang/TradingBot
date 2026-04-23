@@ -95,6 +95,24 @@ def _ticker_has_position(session, ticker: str, setup_type: str) -> bool:
     ).first() is not None
 
 
+def _is_execution_row(row: Watchlist) -> bool:
+    """
+    Filter out scan-pool candidate rows from the terminal-state buckets.
+
+    EP swing scans persist two rows per A/B entry — a stage="active" candidate
+    snapshot and a stage="ready" execution row. The old mark_triggered bug
+    (fixed 2026-04-23) flipped the "active" row to "triggered", leaving
+    candidate-pool artifacts in the Filled/Cancelled views. Real execution
+    rows always have meta["ep_strategy"] set.
+
+    Non-EP strategies (breakout, episodic_pivot) don't use ep_strategy, so
+    they pass through unchanged.
+    """
+    if row.setup_type not in ("ep_earnings", "ep_news"):
+        return True
+    return (row.meta or {}).get("ep_strategy") is not None
+
+
 def _latest_order_status(session, ticker: str) -> str | None:
     """Most recent Order status for this ticker (across all signals)."""
     order = (
@@ -122,9 +140,12 @@ def get_watchlist():
         expired_all = base_query.filter(Watchlist.stage == "expired").all()
 
         # Derive filled / cancelled from triggered rows + Order/Position state.
+        # Skip candidate-pool artifacts (see _is_execution_row).
         filled: list[Watchlist] = []
         cancelled_from_triggered: list[Watchlist] = []
         for row in triggered:
+            if not _is_execution_row(row):
+                continue
             if _ticker_has_position(session, row.ticker, row.setup_type):
                 filled.append(row)
             elif _latest_order_status(session, row.ticker) in ("cancelled", "rejected"):
@@ -139,6 +160,8 @@ def get_watchlist():
         cancelled_from_expired: list[Watchlist] = []
         expired: list[Watchlist] = []
         for row in expired_all:
+            if not _is_execution_row(row):
+                continue
             notes = row.notes or ""
             if BOT_FAILURE_TAG in notes:
                 cancelled_from_expired.append(row)
