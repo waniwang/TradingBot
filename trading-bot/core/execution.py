@@ -49,6 +49,40 @@ def is_trading_day(client=None) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Snapshot lookups
+# ---------------------------------------------------------------------------
+
+def fetch_current_price(client, ticker: str, attempts: int = 3, sleep_secs: float = 2.0) -> float | None:
+    """
+    Fetch the current price for a ticker via Alpaca snapshot, with retry.
+
+    Returns latest trade price, falling back to minute_bar.close. Returns None
+    only if *every* attempt returned no price data — protects the day-2 confirm
+    jobs from transient Alpaca hiccups (2026-04-23 incident: 7 tickers missed
+    at 15:45, all available 5 min later).
+    """
+    last_err: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            snapshot = client.get_snapshots([ticker])
+            snap = snapshot.get(ticker)
+            if snap and hasattr(snap, "latest_trade") and snap.latest_trade:
+                return float(snap.latest_trade.price)
+            if snap and hasattr(snap, "minute_bar") and snap.minute_bar:
+                return float(snap.minute_bar.close)
+            logger.info("fetch_current_price: %s attempt %d/%d empty", ticker, attempt, attempts)
+        except Exception as e:
+            last_err = e
+            logger.warning("fetch_current_price: %s attempt %d/%d errored: %s",
+                           ticker, attempt, attempts, e)
+        if attempt < attempts:
+            time.sleep(sleep_secs)
+    if last_err is not None:
+        raise last_err
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Order fill tracking
 # ---------------------------------------------------------------------------
 

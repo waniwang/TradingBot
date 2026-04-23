@@ -4,7 +4,7 @@
 
 | Risk | Mitigation |
 |---|---|
-| **Alpaca free tier limited data (IEX ~2% coverage)** | Use yfinance for batch daily bars; Alpaca for real-time quotes on watchlist only |
+| **Alpaca free tier limited data (IEX ~2% for realtime quotes only)** | Alpaca IEX daily bars actually cover ~99.7%; `get_daily_bars_batch` is Alpaca-first with yfinance fallback for any ticker returning short/empty results |
 | **Slippage on ORH entries** (momentum names move fast) | Use limit orders with tolerance (entry <= ORH + 0.5%); skip if price runs away |
 | **yfinance batch download is slow** (~14 min for 1500 tickers) | Run in pre-market (6 AM); batch in groups of 500; cache with parquet files |
 | **API rate limits (Alpaca)** | Cache scan results; use bulk snapshot endpoints instead of per-symbol calls |
@@ -53,4 +53,4 @@
 
 6. **Backtest limitations**: Backtests use daily bars only (no intraday data), so entries are approximated. Results are indicative but not exact. Actual live performance may differ.
 
-7. **yfinance reliability**: yfinance scrapes Yahoo Finance and may occasionally fail or return incomplete data. Some tickers may be delisted or renamed (e.g., SQ -> XYZ). Parquet caching mitigates repeat failures.
+7. **yfinance reliability**: yfinance scrapes Yahoo Finance and may occasionally fail or return incomplete data. Some tickers may be delisted or renamed (e.g., SQ -> XYZ). Parquet caching mitigates repeat failures. For the scanner daily-bars path, `get_daily_bars_batch` now tries Alpaca first and only falls back to yfinance for symbols Alpaca can't cover — so a single-ticker yfinance outage no longer blows up the whole scan.

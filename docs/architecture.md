@@ -23,11 +23,11 @@ Order types: `LimitOrderRequest` (entries), `StopOrderRequest` (GTC stops), `Mar
 | Use case | Provider | Why |
 |---|---|---|
 | Pre-market universe scan | **Alpaca** screener/snapshots | Built-in screener API |
-| Daily bars (scanners) | **yfinance** | Free, batch download for large universes |
+| Daily bars (scanners) | **Alpaca** (primary) → **yfinance** (fallback) | Alpaca IEX covers ~99.7%; yfinance fills any gaps for the long tail |
 | Intraday 1m candles | **Alpaca** data API | Real-time bars for signal detection (IEX feed on free tier) |
 | Historical OHLCV (backtesting) | **yfinance** | 2+ years of daily bars, cached as parquet |
 
-Note: Alpaca free tier uses IEX feed (~2% of stocks). yfinance used for batch daily bars where broader coverage is needed.
+Note: Alpaca IEX daily aggregates cover ~99.7% of US equities (the "IEX covers ~2%" caveat only applies to realtime intraday quote streams — see `docs/alpaca-api.md`). `get_daily_bars_batch()` tries Alpaca first and falls back to yfinance for any symbol with short/empty results — resilient to per-ticker yfinance flakiness (2026-04-23 incident).
 
 ### Data Storage
 - **SQLite** (development / paper) / **PostgreSQL** (live / VPS)
@@ -199,7 +199,7 @@ shares = min(raw_shares, max_shares_by_notional)
 | Decision | Rationale |
 |----------|-----------|
 | Alpaca | Pure REST + WebSocket, no gateway. Free paper trading. Native Python SDK. |
-| yfinance for daily bars | Alpaca IEX feed covers ~2% of stocks. yfinance provides free daily OHLCV for full US universe. |
+| Alpaca-first daily bars, yfinance fallback | Alpaca IEX daily aggregates cover ~99.7% of US equities (the ~2% caveat only applies to realtime intraday quote streams). yfinance is kept as fallback for the long tail and as insurance against per-ticker Alpaca gaps. |
 | SQLite first | Simpler dev setup. SQLAlchemy abstracts DB; PostgreSQL = connection string change only. |
 | Plain pandas (no pandas-ta) | pandas-ta depends on numba, incompatible with Python 3.14. |
 | Custom backtest (no vectorbt) | vectorbt also has numba issues. Custom engine matches exact signal/exit logic. |

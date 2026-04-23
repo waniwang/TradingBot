@@ -394,16 +394,14 @@ class EPEarningsPlugin:
                 gap_day_close = meta.get("gap_day_close", 0)
                 attempted += 1
 
-                # Fetch current price (proxy for day 2 close at 3:45 PM)
+                # Fetch current price (proxy for day 2 close at 3:45 PM).
+                # fetch_current_price retries 3x with 2s backoff to ride out
+                # transient Alpaca snapshot hiccups (2026-04-23 incident).
+                from core.execution import fetch_current_price
                 try:
-                    snapshot = client.get_snapshots([ticker])
-                    snap = snapshot.get(ticker)
-                    if snap and hasattr(snap, "latest_trade"):
-                        current_price = float(snap.latest_trade.price)
-                    elif snap and hasattr(snap, "minute_bar") and snap.minute_bar:
-                        current_price = float(snap.minute_bar.close)
-                    else:
-                        logger.error("EP earnings day-2: no price data for %s", ticker)
+                    current_price = fetch_current_price(client, ticker)
+                    if current_price is None:
+                        logger.error("EP earnings day-2: no price data for %s (after retries)", ticker)
                         wl.stage = "expired"
                         failures.append((ticker, "no price data"))
                         continue

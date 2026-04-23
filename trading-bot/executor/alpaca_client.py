@@ -757,22 +757,101 @@ class AlpacaClient:
 
     def get_daily_bars_batch(
         self, tickers: list[str], days: int = 130, batch_size: int = 500,
-        progress_cb=None,
+        progress_cb=None, min_bars: int = 20,
     ) -> dict[str, pd.DataFrame]:
         """
-        Fetch daily OHLCV bars for multiple symbols using yfinance.
+        Fetch daily OHLCV bars for multiple symbols.
 
-        Uses yfinance (free, full US equity coverage) instead of Alpaca IEX
-        which only covers ~2% of stocks.
+        Alpaca IEX daily bars (primary): ~99.7% coverage — the "IEX covers ~2%"
+        caveat only applies to realtime intraday quote streams, not to daily
+        aggregates. See docs/alpaca-api.md.
+
+        yfinance (fallback): used for any symbol that Alpaca returned empty or
+        with fewer than `min_bars` rows. Protects against flaky single-ticker
+        yfinance fetches (2026-04-23 incident) without giving up yfinance's
+        broader long-tail coverage.
 
         Returns {symbol: DataFrame[date, open, high, low, close, volume]}.
         """
         if not tickers:
             return {}
 
+        result: dict[str, pd.DataFrame] = self._fetch_daily_bars_alpaca(
+            tickers, days, batch_size=min(batch_size, 200), progress_cb=progress_cb,
+        )
+        missing = [t for t in tickers if len(result.get(t, [])) < min_bars]
+        if missing:
+            logger.info(
+                "Alpaca returned %d/%d tickers with >=%d bars; falling back to yfinance for %d",
+                len(tickers) - len(missing), len(tickers), min_bars, len(missing),
+            )
+            yf_bars = self._fetch_daily_bars_yfinance(missing, days, batch_size)
+            result.update(yf_bars)
+
+        logger.info("Fetched daily bars for %d/%d tickers", len(result), len(tickers))
+        return result
+
+    def _fetch_daily_bars_alpaca(
+        self, tickers: list[str], days: int, batch_size: int = 200,
+        progress_cb=None,
+    ) -> dict[str, pd.DataFrame]:
+        """Fetch daily bars via Alpaca IEX feed. Best-effort per batch — on a
+        batch-level error, log and continue so the yfinance fallback can fill in."""
+        if not ALPACA_AVAILABLE or not tickers:
+            return {}
+
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=int(days * 1.6) + 10)  # calendar→trading padding
+
+        result: dict[str, pd.DataFrame] = {}
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i : i + batch_size]
+            try:
+                req = StockBarsRequest(
+                    symbol_or_symbols=batch,
+                    timeframe=TimeFrame.Day,
+                    start=start,
+                    end=end,
+                    feed=DataFeed.IEX,
+                )
+                bars = self._data.get_stock_bars(req)
+                bars_data = bars.data if hasattr(bars, "data") else bars
+                for sym, sym_bars in bars_data.items():
+                    if not sym_bars:
+                        continue
+                    df = pd.DataFrame([
+                        {
+                            "date": b.timestamp,
+                            "open": float(b.open),
+                            "high": float(b.high),
+                            "low": float(b.low),
+                            "close": float(b.close),
+                            "volume": int(b.volume),
+                        }
+                        for b in sym_bars
+                    ])
+                    if not df.empty:
+                        result[sym] = df.tail(days).reset_index(drop=True)
+            except Exception as e:
+                logger.warning(
+                    "Alpaca daily-bars batch %d failed (%d tickers): %s — will try yfinance fallback",
+                    i // batch_size + 1, len(batch), e,
+                )
+
+            if progress_cb:
+                progress_cb(min(i + batch_size, len(tickers)), len(tickers))
+
+        return result
+
+    def _fetch_daily_bars_yfinance(
+        self, tickers: list[str], days: int, batch_size: int = 500,
+    ) -> dict[str, pd.DataFrame]:
+        """Fetch daily bars via yfinance. Used as fallback when Alpaca coverage is thin."""
+        if not tickers:
+            return {}
+
         import yfinance as yf
 
-        # Convert days to yfinance period string
         if days <= 30:
             period = "1mo"
         elif days <= 90:
@@ -788,7 +867,6 @@ class AlpacaClient:
         for i in range(0, len(tickers), batch_size):
             batch = tickers[i : i + batch_size]
             try:
-                # Run yf.download in a thread with a timeout to prevent indefinite hangs
                 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
                 def _download():
@@ -816,7 +894,6 @@ class AlpacaClient:
                 if raw.empty:
                     continue
 
-                # Single ticker: columns are (Open, High, ...) not multi-level
                 if len(batch) == 1:
                     sym = batch[0]
                     df = raw[["Open", "High", "Low", "Close", "Volume"]].dropna()
@@ -828,7 +905,6 @@ class AlpacaClient:
                         df = df.reset_index().rename(columns={"Date": "date"})
                         result[sym] = df.tail(days)
                 else:
-                    # Multi-ticker: columns are (ticker, field) multi-level
                     for sym in batch:
                         try:
                             if sym not in raw.columns.get_level_values(0):
@@ -845,12 +921,8 @@ class AlpacaClient:
                         except (KeyError, TypeError):
                             continue
             except Exception as e:
-                logger.error("get_daily_bars_batch failed for batch %d: %s", i, e, exc_info=True)
+                logger.error("yfinance daily-bars batch %d failed: %s", i, e, exc_info=True)
 
-            if progress_cb:
-                progress_cb(min(i + batch_size, len(tickers)), len(tickers))
-
-        logger.info("Fetched daily bars for %d/%d tickers", len(result), len(tickers))
         return result
 
     # ------------------------------------------------------------------

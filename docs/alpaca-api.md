@@ -35,7 +35,7 @@ Historical data client (`StockHistoricalDataClient`):
 | Method | Purpose | alpaca_client.py | Notes |
 |---|---|---|---|
 | `get_stock_snapshot()` | Prev close, today's OHLCV, latest trade/quote | `get_snapshots()` :584 | **The fast path for gap scanning** — see Performance below |
-| `get_stock_bars(TimeFrame.Day)` | Daily OHLCV history | `get_daily_bars()` :528, `get_daily_bars_batch()` :713 | |
+| `get_stock_bars(TimeFrame.Day)` | Daily OHLCV history | `get_daily_bars()` :578, `get_daily_bars_batch()` :758 | Batch path is Alpaca-first with yfinance fallback for short/empty symbols |
 | `get_stock_bars(TimeFrame.Minute)` | 1-min intraday bars | `get_candles_1m()` :491 | |
 | `get_stock_latest_bar()` | Latest bar for one ticker | `get_latest_bar()` :474 | |
 | `get_stock_latest_quote()` | NBBO quote | `get_realtime_quote()` :456 | |
