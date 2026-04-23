@@ -90,22 +90,22 @@ export default function WatchlistPage() {
             </TabsList>
 
             <TabsContent value="active" className="mt-4">
-              <CandidateTable candidates={data.active} />
+              <CandidateTable candidates={data.active} bucket="active" />
             </TabsContent>
             <TabsContent value="ready" className="mt-4">
-              <CandidateTable candidates={data.ready} />
+              <CandidateTable candidates={data.ready} bucket="ready" />
             </TabsContent>
             <TabsContent value="watching" className="mt-4">
-              <CandidateTable candidates={data.watching} />
+              <CandidateTable candidates={data.watching} bucket="watching" />
             </TabsContent>
             <TabsContent value="filled" className="mt-4">
-              <CandidateTable candidates={data.filled} />
+              <CandidateTable candidates={data.filled} bucket="filled" />
             </TabsContent>
             <TabsContent value="cancelled" className="mt-4">
-              <CandidateTable candidates={data.cancelled} />
+              <CandidateTable candidates={data.cancelled} bucket="cancelled" />
             </TabsContent>
             <TabsContent value="expired" className="mt-4">
-              <CandidateTable candidates={data.expired} />
+              <CandidateTable candidates={data.expired} bucket="expired" />
             </TabsContent>
           </Tabs>
         )}
@@ -114,7 +114,38 @@ export default function WatchlistPage() {
   );
 }
 
-function CandidateTable({ candidates }: { candidates: WatchlistCandidate[] }) {
+/** Maps a bucket name (filled/cancelled/expired/...) to the Stage column
+ *  styling — overrides the underlying DB stage so rows in the Cancelled tab
+ *  read "Cancelled" (not "Entered" or "Expired" as the raw DB stage). */
+function stageBadgeClasses(bucket: string | undefined): string {
+  switch ((bucket ?? "").toLowerCase()) {
+    case "active":
+      return "bg-profit/20 text-profit";
+    case "ready":
+      return "bg-blue-500/20 text-blue-400";
+    case "watching":
+      return "bg-yellow-500/20 text-yellow-400";
+    case "filled":
+      return "bg-profit/20 text-profit";
+    case "cancelled":
+      return "bg-loss/20 text-loss";
+    case "expired":
+      return "bg-muted text-muted-foreground";
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
+
+function CandidateTable({
+  candidates,
+  bucket,
+}: {
+  candidates: WatchlistCandidate[];
+  /** Display label for the Stage column — tab name the rows came from.
+   *  Overrides the underlying DB stage so e.g. a triggered-but-order-cancelled
+   *  row in the Cancelled tab reads "Cancelled" rather than "Entered". */
+  bucket?: string;
+}) {
   if (candidates.length === 0) {
     return (
       <div className="rounded-lg border border-border p-8 text-center text-sm text-muted-foreground">
@@ -122,6 +153,8 @@ function CandidateTable({ candidates }: { candidates: WatchlistCandidate[] }) {
       </div>
     );
   }
+
+  const displayStage = bucket ?? null;
 
   return (
     <div className="rounded-lg border border-border">
@@ -153,16 +186,10 @@ function CandidateTable({ candidates }: { candidates: WatchlistCandidate[] }) {
               </TableCell>
               <TableCell>
                 <Badge
-                  title={stageTooltip(c.stage)}
-                  className={`text-xs ${
-                    c.stage === "ACTIVE"
-                      ? "bg-profit/20 text-profit"
-                      : c.stage === "READY"
-                      ? "bg-blue-500/20 text-blue-400"
-                      : "bg-yellow-500/20 text-yellow-400"
-                  }`}
+                  title={stageTooltip(displayStage ?? c.stage)}
+                  className={`text-xs ${stageBadgeClasses(displayStage ?? c.stage)}`}
                 >
-                  {stageLabel(c.stage)}
+                  {stageLabel(displayStage ?? c.stage)}
                 </Badge>
               </TableCell>
               <TimestampCell iso={c.added_at} />
