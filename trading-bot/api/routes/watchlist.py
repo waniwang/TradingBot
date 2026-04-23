@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from db.models import Watchlist, get_session
+from db.models import Order, Position, Watchlist, get_session
 from api.deps import get_db_engine, get_enabled_strategies
 
 router = APIRouter()
+
+# Tag written into Watchlist.notes by day2_confirm when the snapshot fetch errors
+# or returns no data. Lets the dashboard split expired rows into "Expired"
+# (legitimate price rejection) vs "Cancelled" (bot/broker failure).
+BOT_FAILURE_TAG = "[bot-failure]"
 
 
 def _iso(dt) -> str | None:
@@ -82,26 +87,69 @@ def _format_candidate(row: Watchlist) -> dict:
     return base
 
 
+def _ticker_has_position(session, ticker: str, setup_type: str) -> bool:
+    """True if a Position ever existed for this ticker+setup (open or closed)."""
+    return session.query(Position).filter(
+        Position.ticker == ticker,
+        Position.setup_type == setup_type,
+    ).first() is not None
+
+
+def _latest_order_status(session, ticker: str) -> str | None:
+    """Most recent Order status for this ticker (across all signals)."""
+    order = (
+        session.query(Order)
+        .filter(Order.ticker == ticker)
+        .order_by(Order.created_at.desc())
+        .first()
+    )
+    return order.status if order else None
+
+
 @router.get("/watchlist")
 def get_watchlist():
     engine = get_db_engine()
     enabled = get_enabled_strategies()
 
     with get_session(engine) as session:
-        q = session.query(Watchlist).filter(Watchlist.setup_type.in_(tuple(enabled)))
-        active = q.filter(Watchlist.stage == "active").all()
-        ready = (
-            session.query(Watchlist)
-            .filter(Watchlist.setup_type.in_(tuple(enabled)), Watchlist.stage == "ready")
-            .all()
-        )
-        watching = (
-            session.query(Watchlist)
-            .filter(Watchlist.setup_type.in_(tuple(enabled)), Watchlist.stage == "watching")
-            .all()
-        )
+        enabled_tuple = tuple(enabled)
+        base_query = session.query(Watchlist).filter(Watchlist.setup_type.in_(enabled_tuple))
 
-    # Deduplicate: active takes priority
+        active = base_query.filter(Watchlist.stage == "active").all()
+        ready = base_query.filter(Watchlist.stage == "ready").all()
+        watching = base_query.filter(Watchlist.stage == "watching").all()
+        triggered = base_query.filter(Watchlist.stage == "triggered").all()
+        expired_all = base_query.filter(Watchlist.stage == "expired").all()
+
+        # Derive filled / cancelled from triggered rows + Order/Position state.
+        filled: list[Watchlist] = []
+        cancelled_from_triggered: list[Watchlist] = []
+        for row in triggered:
+            if _ticker_has_position(session, row.ticker, row.setup_type):
+                filled.append(row)
+            elif _latest_order_status(session, row.ticker) in ("cancelled", "rejected"):
+                cancelled_from_triggered.append(row)
+            else:
+                # Triggered + no position + no terminal-failure order = in-flight
+                # (submitted/pending). Show in Filled optimistically; it'll flip
+                # once the fill comes through (or to Cancelled on timeout).
+                filled.append(row)
+
+        # Split expired: [bot-failure] tag → Cancelled; everything else → Expired.
+        cancelled_from_expired: list[Watchlist] = []
+        expired: list[Watchlist] = []
+        for row in expired_all:
+            notes = row.notes or ""
+            if BOT_FAILURE_TAG in notes:
+                cancelled_from_expired.append(row)
+            else:
+                expired.append(row)
+
+        cancelled = cancelled_from_triggered + cancelled_from_expired
+
+    # Existing dedup: active wins, then ready, then watching. Applies only to the
+    # forward pipeline — filled/cancelled/expired are terminal states and are
+    # returned without dedup so a full history is visible.
     active_tickers = {r.ticker for r in active}
     ready_filtered = [r for r in ready if r.ticker not in active_tickers]
     shown_tickers = active_tickers | {r.ticker for r in ready}
@@ -112,8 +160,14 @@ def get_watchlist():
             "active": len(active),
             "ready": len(ready_filtered),
             "watching": len(watching_filtered),
+            "filled": len(filled),
+            "cancelled": len(cancelled),
+            "expired": len(expired),
         },
         "active": [_format_candidate(r) for r in active],
         "ready": [_format_candidate(r) for r in ready_filtered],
         "watching": [_format_candidate(r) for r in watching_filtered],
+        "filled": [_format_candidate(r) for r in filled],
+        "cancelled": [_format_candidate(r) for r in cancelled],
+        "expired": [_format_candidate(r) for r in expired],
     }

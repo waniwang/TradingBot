@@ -80,10 +80,24 @@ export interface WatchlistCandidate {
 }
 
 export interface WatchlistData {
-  counts: { active: number; ready: number; watching: number };
+  counts: {
+    active: number;
+    ready: number;
+    watching: number;
+    filled: number;
+    cancelled: number;
+    expired: number;
+  };
   active: WatchlistCandidate[];
   ready: WatchlistCandidate[];
   watching: WatchlistCandidate[];
+  /** Triggered rows with a Position (open or closed) — order actually filled. */
+  filled: WatchlistCandidate[];
+  /** Triggered rows whose latest Order is cancelled/rejected, OR expired rows
+   * tagged [bot-failure] in notes (snapshot/fetch errors at day-2 confirm). */
+  cancelled: WatchlistCandidate[];
+  /** Expired rows from legitimate day-2 rejection (price <= gap-day close). */
+  expired: WatchlistCandidate[];
 }
 
 export interface SignalToday {

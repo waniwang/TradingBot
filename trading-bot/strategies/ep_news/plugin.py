@@ -405,11 +405,15 @@ class EPNewsPlugin:
                     if current_price is None:
                         logger.error("EP news day-2: no price data for %s (after retries)", ticker)
                         wl.stage = "expired"
+                        # [bot-failure] tag lets the dashboard bucket snapshot-error
+                        # rows as "Cancelled" instead of "Expired" (legitimate rejection).
+                        wl.notes = f"{wl.notes or ''} [bot-failure]".strip()
                         failures.append((ticker, "no price data"))
                         continue
                 except Exception as e:
                     logger.error("EP news day-2: failed to get price for %s: %s", ticker, e)
                     wl.stage = "expired"
+                    wl.notes = f"{wl.notes or ''} [bot-failure]".strip()
                     failures.append((ticker, f"snapshot error: {e}"))
                     continue
 

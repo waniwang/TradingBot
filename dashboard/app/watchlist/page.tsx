@@ -75,6 +75,18 @@ export default function WatchlistPage() {
                 {stageLabel("watching")}
                 <Badge variant="secondary" className="text-xs">{data.counts.watching}</Badge>
               </TabsTrigger>
+              <TabsTrigger value="filled" className="gap-2" title={stageTooltip("filled")}>
+                {stageLabel("filled")}
+                <Badge variant="secondary" className="text-xs">{data.counts.filled}</Badge>
+              </TabsTrigger>
+              <TabsTrigger value="cancelled" className="gap-2" title={stageTooltip("cancelled")}>
+                {stageLabel("cancelled")}
+                <Badge variant="secondary" className="text-xs">{data.counts.cancelled}</Badge>
+              </TabsTrigger>
+              <TabsTrigger value="expired" className="gap-2" title={stageTooltip("expired")}>
+                {stageLabel("expired")}
+                <Badge variant="secondary" className="text-xs">{data.counts.expired}</Badge>
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="active" className="mt-4">
@@ -85,6 +97,15 @@ export default function WatchlistPage() {
             </TabsContent>
             <TabsContent value="watching" className="mt-4">
               <CandidateTable candidates={data.watching} />
+            </TabsContent>
+            <TabsContent value="filled" className="mt-4">
+              <CandidateTable candidates={data.filled} />
+            </TabsContent>
+            <TabsContent value="cancelled" className="mt-4">
+              <CandidateTable candidates={data.cancelled} />
+            </TabsContent>
+            <TabsContent value="expired" className="mt-4">
+              <CandidateTable candidates={data.expired} />
             </TabsContent>
           </Tabs>
         )}

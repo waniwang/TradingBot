@@ -35,6 +35,8 @@ export function stageLabel(stage: string | null | undefined): string {
     case "ready":     return "Queued";
     case "watching":  return "Awaiting Day-2";
     case "triggered": return "Entered";
+    case "filled":    return "Filled";
+    case "cancelled": return "Cancelled";
     case "expired":   return "Expired";
     default:          return stage ?? "-";
   }
@@ -47,7 +49,9 @@ export function stageTooltip(stage: string | null | undefined): string {
     case "ready":     return "Queued for the next execute window";
     case "watching":  return "Awaiting day-2 price confirmation (EP Strategy C)";
     case "triggered": return "Order placed with the broker";
-    case "expired":   return "No longer eligible";
+    case "filled":    return "Order filled — position opened";
+    case "cancelled": return "Order cancelled/rejected, or bot failed to trigger (e.g. snapshot error at day-2 confirm)";
+    case "expired":   return "Day-2 price did not confirm (price <= gap-day close)";
     default:          return "";
   }
 }
