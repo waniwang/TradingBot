@@ -469,6 +469,14 @@ def mark_triggered(ticker: str, db_engine, setup_type: str | None = None) -> boo
 
     Works for ALL setup types. Optionally filter by setup_type.
     Returns True if a row was updated, False if no matching entry found.
+
+    Tie-breaking: EP swing scans persist two rows per A/B entry — a
+    stage="active" candidate-pool snapshot AND a stage="ready" execution
+    row. Execute wants to flip the "ready" row. `Watchlist.stage.desc()`
+    orders "ready" before "active" alphabetically, so the .first() hits
+    the execution row. Without this, a stale "ready" row lingers after
+    entry — it's harmless (idempotency guards skip re-entry) but
+    clutters the dashboard and breaks the `verify_day.py` drop check.
     """
     now = datetime.utcnow()
     with get_session(db_engine) as session:
@@ -478,7 +486,7 @@ def mark_triggered(ticker: str, db_engine, setup_type: str | None = None) -> boo
         )
         if setup_type:
             query = query.filter(Watchlist.setup_type == setup_type)
-        row = query.first()
+        row = query.order_by(Watchlist.stage.desc()).first()
         if row is None:
             return False
         row.stage = "triggered"

@@ -615,6 +615,41 @@ class TestMarkTriggered:
             row = session.query(Watchlist).filter_by(ticker="LEVI2").first()
             assert row.stage == "ready"
 
+    def test_prefers_ready_over_active_for_same_ticker(self, db_engine):
+        """Regression for the 2026-04-23 bug: EP swing scans persist TWO rows per
+        A/B entry — stage='active' (candidate pool, inserted first) AND
+        stage='ready' (execution row, inserted second). The execute path wants
+        to flip the 'ready' row, but the pre-fix `.first()` without ordering
+        returned the 'active' row (lower PK) and left a stale 'ready' row
+        behind forever."""
+        with get_session(db_engine) as session:
+            # Active row is inserted FIRST (lower PK), mirroring production
+            session.add(Watchlist(
+                ticker="TWIN", setup_type="ep_earnings", stage="active",
+                scan_date=date.today(),
+                added_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+                stage_changed_at=datetime.utcnow(),
+            ))
+            session.flush()
+            session.add(Watchlist(
+                ticker="TWIN", setup_type="ep_earnings", stage="ready",
+                scan_date=date.today(),
+                added_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+                stage_changed_at=datetime.utcnow(),
+            ))
+            session.commit()
+
+        result = mark_triggered("TWIN", db_engine, setup_type="ep_earnings")
+        assert result is True
+
+        with get_session(db_engine) as session:
+            rows = session.query(Watchlist).filter_by(ticker="TWIN").order_by(Watchlist.stage).all()
+            stages = [r.stage for r in rows]
+            # 'active' row stays (scan history), 'ready' row flips to 'triggered'
+            assert "triggered" in stages, f"execution row not flipped, got {stages}"
+            assert "active" in stages, f"candidate-pool row shouldn't be touched, got {stages}"
+            assert "ready" not in stages, f"stale ready row lingering, got {stages}"
+
 
 # ---------------------------------------------------------------------------
 # get_pipeline_counts tests
