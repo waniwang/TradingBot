@@ -180,6 +180,26 @@ def expire_stale_active(today: date, db_engine, plugins=None) -> int:
     return count
 
 
+def get_watching_tickers(db_engine, enabled: list[str] | None = None) -> list[str]:
+    """Return distinct tickers in stage='watching' from previous days.
+
+    These are Strategy C candidates awaiting day-2 confirmation. They need to
+    be subscribed to the real-time stream at 9:25 AM so their prices are cached
+    by on_bar throughout the day, making fetch_current_price at 3:35 PM a cache
+    hit instead of a cold REST snapshot call.
+    """
+    from datetime import date
+    today = date.today()
+    with get_session(db_engine) as session:
+        query = session.query(Watchlist.ticker).filter(
+            Watchlist.stage == "watching",
+            Watchlist.scan_date < today,
+        )
+        if enabled is not None:
+            query = query.filter(Watchlist.setup_type.in_(list(enabled)))
+        return [r[0] for r in query.distinct().all()]
+
+
 def get_active_watchlist(db_engine, enabled: list[str] | None = None) -> list[dict]:
     """Return all stage='active' entries as list[dict] via to_dict().
 

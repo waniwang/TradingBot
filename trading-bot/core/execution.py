@@ -54,13 +54,20 @@ def is_trading_day(client=None) -> bool:
 
 def fetch_current_price(client, ticker: str, attempts: int = 3, sleep_secs: float = 2.0) -> float | None:
     """
-    Fetch the current price for a ticker via Alpaca snapshot, with retry.
+    Return the current price for a ticker.
 
-    Returns latest trade price, falling back to minute_bar.close. Returns None
-    only if *every* attempt returned no price data — protects the day-2 confirm
-    jobs from transient Alpaca hiccups (2026-04-23 incident: 7 tickers missed
-    at 15:45, all available 5 min later).
+    Checks the intraday stream cache first — on_bar populates this throughout
+    the trading day, so day2_confirm at 3:35 PM gets a cache hit and never
+    touches the Alpaca snapshot REST endpoint (which is congested near close).
+    Falls back to REST snapshot with retry only if the cache is cold (e.g. the
+    ticker was added to the watchlist after stream subscription).
     """
+    from core import data_cache
+    cached = data_cache.get_intraday_price(ticker)
+    if cached is not None:
+        logger.debug("fetch_current_price: %s stream cache $%.2f", ticker, cached)
+        return cached
+
     last_err: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:

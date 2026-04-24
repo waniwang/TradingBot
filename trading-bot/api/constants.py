@@ -83,37 +83,39 @@ PIPELINE_SCHEDULE = [
     {
         "job_id": "ep_earnings_day2_confirm",
         "label": "EP Earnings Day-2 Confirm",
-        "time": "15:45",
+        "time": "15:35",
         "category": "scan",
         "phase": "afternoon",
         "description": (
             "Checks yesterday's Strategy C earnings candidates against today's price. Promotes "
-            "to ready (for the 3:50 execute) if price > gap-day close; expires the row otherwise."
+            "to ready (for the 3:37 execute) if price > gap-day close; expires the row otherwise. "
+            "Price is read from the intraday stream cache — no REST snapshot call needed."
         ),
         "display_day_offset": 0,
     },
     {
         "job_id": "ep_news_day2_confirm",
         "label": "EP News Day-2 Confirm",
-        "time": "15:45",
+        "time": "15:35",
         "category": "scan",
         "phase": "afternoon",
         "description": (
             "Checks yesterday's Strategy C news candidates against today's price. Promotes to "
-            "ready (for the 3:50 execute) if price > gap-day close; expires the row otherwise."
+            "ready (for the 3:37 execute) if price > gap-day close; expires the row otherwise. "
+            "Price is read from the intraday stream cache — no REST snapshot call needed."
         ),
         "display_day_offset": 0,
     },
     {
         "job_id": "ep_earnings_execute",
         "label": "EP Earnings Execute",
-        "time": "15:50",
+        "time": "15:37",
         "end_time": "15:59",
         "category": "trade",
         "phase": "afternoon",
         "description": (
             "Places limit orders for every approved EP earnings candidate (A/B/C). Fires once "
-            "per minute from 3:50 to 3:59 — each run is idempotent (skips tickers already "
+            "per minute from 3:37 to 3:59 — each run is idempotent (skips tickers already "
             "traded today), so retries cover transient broker/network errors."
         ),
         "display_day_offset": 0,
@@ -121,13 +123,13 @@ PIPELINE_SCHEDULE = [
     {
         "job_id": "ep_news_execute",
         "label": "EP News Execute",
-        "time": "15:50",
+        "time": "15:37",
         "end_time": "15:59",
         "category": "trade",
         "phase": "afternoon",
         "description": (
             "Places limit orders for every approved EP news candidate (A/B/C). Fires once per "
-            "minute from 3:50 to 3:59 — each run is idempotent, so retries cover transient "
+            "minute from 3:37 to 3:59 — each run is idempotent, so retries cover transient "
             "broker/network errors."
         ),
         "display_day_offset": 0,

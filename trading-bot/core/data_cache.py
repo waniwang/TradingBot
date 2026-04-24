@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import date
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,30 @@ daily_volumes_cache: dict[str, list[int]] = {}
 daily_highs_cache: dict[str, list[float]] = {}
 daily_lows_cache: dict[str, list[float]] = {}
 cache_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Intraday price cache — updated on every on_bar tick from the stream.
+# Used by fetch_current_price so day2_confirm never needs a REST snapshot call.
+# Stores (price, date) so yesterday's prices don't bleed into today.
+# ---------------------------------------------------------------------------
+
+_intraday_price_cache: dict[str, tuple[float, date]] = {}
+
+
+def update_intraday_price(ticker: str, price: float) -> None:
+    """Record the latest streamed bar close for a ticker. Called from on_bar."""
+    with cache_lock:
+        _intraday_price_cache[ticker] = (price, date.today())
+
+
+def get_intraday_price(ticker: str) -> float | None:
+    """Return today's latest streamed price, or None if not yet received."""
+    with cache_lock:
+        entry = _intraday_price_cache.get(ticker)
+    if entry is None:
+        return None
+    price, cached_date = entry
+    return price if cached_date == date.today() else None
 
 
 def clear_daily_caches():

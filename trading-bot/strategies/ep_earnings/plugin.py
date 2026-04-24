@@ -53,14 +53,14 @@ class EPEarningsPlugin:
         ),
         ScheduleEntry(
             job_id="ep_earnings_day2_confirm",
-            cron={"hour": 15, "minute": 45, "day_of_week": "mon-fri"},
+            cron={"hour": 15, "minute": 35, "day_of_week": "mon-fri"},
             handler=_day2_confirm_job,
         ),
         ScheduleEntry(
             job_id="ep_earnings_execute",
-            # Retry every minute from 3:50-3:59 PM. Idempotent: skips tickers with
+            # Retry every minute from 3:37-3:59 PM. Idempotent: skips tickers with
             # an open Position or a recent (<10 min) non-terminal Order.
-            cron={"hour": 15, "minute": "50-59", "day_of_week": "mon-fri"},
+            cron={"hour": 15, "minute": "37-59", "day_of_week": "mon-fri"},
             handler=_execute_job,
         ),
     ]
