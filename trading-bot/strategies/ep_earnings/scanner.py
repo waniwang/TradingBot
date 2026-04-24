@@ -240,8 +240,14 @@ def _get_ticker_info(ticker: str) -> tuple[float, str]:
 
 
 def _check_earnings_today(ticker: str, today: date) -> bool:
-    """Return True if ticker reported earnings today or yesterday. Raises on API failure."""
-    dates = yf.Ticker(ticker).get_earnings_dates(limit=4)
+    """Return True if ticker reported earnings today or yesterday."""
+    try:
+        dates = yf.Ticker(ticker).get_earnings_dates(limit=4)
+    except Exception as e:
+        # yfinance scraper fails (e.g. KeyError: 'Earnings Date') when Yahoo returns
+        # a page without the expected column for tickers with no earnings history.
+        logger.warning("%s: get_earnings_dates failed (%s: %s), skipping", ticker, type(e).__name__, e)
+        return False
     if dates is None or (hasattr(dates, "empty") and dates.empty):
         return False
 
