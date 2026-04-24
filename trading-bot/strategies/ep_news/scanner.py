@@ -231,8 +231,14 @@ def scan_ep_news(
 
 
 def _confirm_no_earnings(ticker: str, today: date) -> bool:
-    """Return True if earnings calendar confirms no earnings today/yesterday. Raises on API failure."""
-    dates = yf.Ticker(ticker).get_earnings_dates(limit=4)
+    """Return True if earnings calendar confirms no earnings today/yesterday."""
+    try:
+        dates = yf.Ticker(ticker).get_earnings_dates(limit=4)
+    except Exception as e:
+        # yfinance scraper fails (e.g. KeyError: 'Earnings Date') when Yahoo returns
+        # a page without the expected column. Consistent with the None/empty path: assume no earnings.
+        logger.warning("%s: get_earnings_dates failed (%s: %s), assuming no earnings", ticker, type(e).__name__, e)
+        return True
     if dates is None or (hasattr(dates, "empty") and dates.empty):
         return True
 
