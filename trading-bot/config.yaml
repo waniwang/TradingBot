@@ -10,7 +10,7 @@ alpaca:
 
 risk:
   risk_per_trade_pct: 1.0      # % of portfolio risked per trade
-  max_positions: 4             # max concurrent open positions
+  max_positions: 10            # max concurrent open positions
   max_position_pct: 15.0       # max single position as % of portfolio notional
   daily_loss_limit_pct: 3.0    # halt day if daily loss exceeds this %
   weekly_loss_limit_pct: 5.0   # halt week if weekly loss exceeds this %
