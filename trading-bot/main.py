@@ -48,6 +48,7 @@ from scanner.watchlist_manager import (
     persist_candidates,
     expire_stale_active,
     get_active_watchlist,
+    get_watching_tickers,
     purge_disabled_strategies,
     run_nightly_scan,
 )
@@ -295,13 +296,28 @@ def job_subscribe_watchlist(
         logger.info("Watchlist empty — nothing to subscribe")
         return
     tickers = [c["ticker"] for c in _watchlist]
-    logger.info("Subscribing to real-time data for %s", tickers)
+
+    # Also subscribe yesterday's Strategy C candidates (stage=watching) so their
+    # prices are cached in data_cache.intraday_price_cache by on_bar throughout
+    # the day. fetch_current_price reads that cache at 3:35 PM, avoiding the
+    # congested Alpaca snapshot REST endpoint near market close.
+    watching = get_watching_tickers(db_engine)
+    extra = [t for t in watching if t not in tickers]
+    if extra:
+        logger.info("Also subscribing %d day-2 watching tickers for price cache: %s", len(extra), extra)
+        tickers = tickers + extra
+
+    logger.info("Subscribing to real-time data for %d tickers", len(tickers))
 
     def on_bar(bar: dict):
         """Called by AlpacaClient stream for every 1m bar update."""
         try:
             ticker = bar["ticker"]
             current_price = bar["close"]
+
+            # Keep intraday price cache warm — used by day2_confirm at 3:35 PM
+            # to avoid a cold REST snapshot call on the congested Alpaca endpoint.
+            data_cache.update_intraday_price(ticker, current_price)
 
             # Fetch ALL of today's 1m candles (up to 390 for a full day)
             candles_1m = client.get_candles_1m(ticker, count=390)
