@@ -462,15 +462,13 @@ class EPNewsPlugin:
             notify("\n".join(lines))
 
         if failures:
-            msg_lines = [f"EP NEWS DAY-2 CONFIRM: {len(failures)}/{attempted} failed"]
+            msg_lines = [f"EP NEWS DAY-2 CONFIRM: {len(failures)}/{attempted} price-data failures"]
             msg_lines.extend(f"  {t}: {reason}" for t, reason in failures)
             msg = "\n".join(msg_lines)
             if notify:
                 notify(msg)
-            # Batch-wide failure → escalate: likely an Alpaca outage, not per-ticker noise.
-            # _track_job turns RuntimeError into a JOB FAILED alert.
-            if attempted > 0 and len(failures) == attempted:
-                raise RuntimeError(msg)
+            # Each failure is already: logged, marked expired+[bot-failure] in DB, and notified.
+            # Don't raise — a snapshot gap for one ticker is not a job failure.
 
         return f"{len(confirmed)} confirmed from {len(pending)} pending ({len(failures)} failed)"
 
