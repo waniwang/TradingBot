@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json as _json
 import logging
-from collections import defaultdict
 from datetime import datetime
 
 import pytz
@@ -207,12 +206,15 @@ class EPEarningsPlugin:
             raise
 
     def job_execute(self, config, client, db_engine, notify):
-        """3:50 PM ET — execute entries persisted as stage='ready' in the watchlist.
+        """3:37 PM ET — execute entries persisted as stage='ready' in the watchlist.
 
-        DB-driven: any A/B from today's scan and any C confirmed at 15:45 will be
-        flagged stage='ready' with the execution payload in metadata_json. This is
-        crash-safe — a process restart between scan/confirm and execute is recoverable
-        because nothing is held in memory.
+        DB-driven and crash-safe: A/B from today's scan and any C confirmed at 3:35 PM
+        are all flagged stage='ready' with the execution payload in metadata_json.
+
+        Multi-position: A and B variants for the same ticker each get their own
+        Position (setup_type ep_earnings_a / ep_earnings_b / ep_earnings_c).
+        Idempotency is keyed on (ticker, setup_type) so a retry only skips the
+        specific variant that already filled, not both.
         """
         from core.execution import (
             is_trading_day, _execute_entry,
@@ -221,7 +223,7 @@ class EPEarningsPlugin:
         )
         from signals.base import SignalResult
         from risk.manager import RiskManager
-        from db.models import Order, Position, Watchlist, get_session
+        from db.models import Order, Position, Signal as DbSignal, Watchlist, get_session
         from datetime import timedelta
 
         if not is_trading_day(client):
@@ -250,39 +252,41 @@ class EPEarningsPlugin:
 
         logger.info("=== EP EARNINGS EXECUTE: %d ready rows ===", len(entries))
         risk = RiskManager(config)
-
-        # Group by ticker: if same stock passes both A and B, enter once
-        by_ticker = defaultdict(list)
-        for entry in entries:
-            by_ticker[entry["ticker"]].append(entry)
-
         executed = 0
-        for ticker, ticker_entries in by_ticker.items():
-            strategies = [e["ep_strategy"] for e in ticker_entries]
-            entry = ticker_entries[0]
-            strategy_label = "+".join(sorted(set(strategies)))
 
-            # Idempotency guards:
-            #   1. An open Position exists → we're already in this trade, skip.
-            #   2. A recent non-terminal Order exists → a prior job_execute run (or crashed
-            #      mid-flight) already submitted the order. Skip to avoid double-entry
-            #      in the replay window between place_limit_order and mark_triggered.
+        for entry in entries:
+            ep_strategy = entry["ep_strategy"]
+            # Each variant gets a distinct setup_type so A and B on the same ticker
+            # produce separate Position rows with independent stop/exit tracking.
+            setup_type = f"ep_earnings_{ep_strategy.lower()}"
+            ticker = entry["ticker"]
+
+            # Idempotency guards scoped to this specific variant:
+            #   1. An open Position with this setup_type exists → already entered, skip.
+            #   2. A recent non-terminal Order via Signal(setup_type) → prior run already
+            #      submitted. Skip to avoid double-entry in the replay window.
             with get_session(db_engine) as session:
                 existing = session.query(Position).filter_by(
-                    ticker=ticker, is_open=True
+                    ticker=ticker, setup_type=setup_type, is_open=True
                 ).first()
                 if existing:
-                    logger.info("EP earnings: %s already has open position, skipping", ticker)
+                    logger.info("EP earnings: %s (%s) already has open position, skipping", ticker, ep_strategy)
                     continue
-                recent_order = session.query(Order).filter(
-                    Order.ticker == ticker,
-                    Order.status.in_(["pending", "submitted", "filled", "partially_filled"]),
-                    Order.created_at >= datetime.utcnow() - timedelta(minutes=10),
-                ).first()
+                recent_order = (
+                    session.query(Order)
+                    .join(DbSignal, Order.signal_id == DbSignal.id)
+                    .filter(
+                        Order.ticker == ticker,
+                        DbSignal.setup_type == setup_type,
+                        Order.status.in_(["pending", "submitted", "filled", "partially_filled"]),
+                        Order.created_at >= datetime.utcnow() - timedelta(minutes=10),
+                    )
+                    .first()
+                )
                 if recent_order is not None:
                     logger.warning(
-                        "EP earnings: %s has recent order (id=%s status=%s) — job_execute replay detected, skipping",
-                        ticker, recent_order.id, recent_order.status,
+                        "EP earnings: %s (%s) has recent order (id=%s status=%s) — replay detected, skipping",
+                        ticker, ep_strategy, recent_order.id, recent_order.status,
                     )
                     continue
 
@@ -298,15 +302,14 @@ class EPEarningsPlugin:
             weekly_pnl = _compute_current_weekly_pnl(db_engine)
             can_enter, reason = risk.can_enter(open_count, daily_pnl, weekly_pnl, portfolio_value)
             if not can_enter:
-                logger.info("EP earnings: %s blocked by risk manager: %s", ticker, reason)
+                logger.info("EP earnings: %s (%s) blocked by risk manager: %s", ticker, ep_strategy, reason)
                 if notify:
-                    notify(f"EP EARNINGS BLOCKED: {ticker} ({strategy_label}) - {reason}")
+                    notify(f"EP EARNINGS BLOCKED: {ticker} ({ep_strategy}) - {reason}")
                 continue
 
             # Refresh entry against live mid — scanner captured price at 3:00 PM but
-            # execute runs at 3:50+, so the mark is ~50 min stale on a running name.
-            # Returns None to skip this attempt; next minute's retry re-evaluates
-            # with a fresh quote. See core.execution.resolve_execution_price.
+            # execute runs at 3:37+, so the mark is ~37 min stale on a running name.
+            # Returns None to skip this attempt; next minute's retry re-evaluates.
             stop_pct = entry.get("stop_loss_pct", 7.0)
             resolved = resolve_execution_price(
                 ticker, entry["entry_price"], stop_pct,
@@ -320,13 +323,8 @@ class EPEarningsPlugin:
                 portfolio_value, use_entry, use_stop
             )
             if shares <= 0:
-                logger.info("EP earnings: %s position size = 0, skipping", ticker)
+                logger.info("EP earnings: %s (%s) position size = 0, skipping", ticker, ep_strategy)
                 continue
-
-            # Use distinct setup_type for Strategy C (different max hold period)
-            setup_type = "ep_earnings"
-            if strategy_label == "C":
-                setup_type = "ep_earnings_c"
 
             signal = SignalResult(
                 ticker=ticker,
@@ -336,25 +334,27 @@ class EPEarningsPlugin:
                 stop_price=use_stop,
                 gap_pct=entry["gap_pct"],
                 volume_ratio=entry.get("rvol"),
-                notes=f"EP Earnings Strategy {strategy_label} | price={price_label} | "
+                notes=f"EP Earnings Strategy {ep_strategy} | price={price_label} | "
                       f"CHG-OPEN={entry['chg_open_pct']:.1f}% CIR={entry['close_in_range']:.0f} "
                       f"P10D={entry['prev_10d_change_pct']:.1f}% ATR={entry['atr_pct']:.1f}%",
             )
 
             logger.info(
                 "EP earnings entry: %s (%s) %d shares @ $%.2f stop $%.2f (%s)",
-                ticker, strategy_label, shares, signal.entry_price, signal.stop_price, price_label,
+                ticker, ep_strategy, shares, signal.entry_price, signal.stop_price, price_label,
             )
             _execute_entry(
                 ticker, signal, shares, client, db_engine, notify,
                 watchlist_setup_type="ep_earnings",
+                watchlist_ep_strategy=ep_strategy,
             )
             executed += 1
 
+        entry_labels = [f"{e['ticker']}({e['ep_strategy']})" for e in entries]
         if notify:
-            notify(f"EP EARNINGS EXECUTE: {executed}/{len(by_ticker)} tickers entered")
+            notify(f"EP EARNINGS EXECUTE: {executed}/{len(entries)} entered")
 
-        return f"{executed}/{len(by_ticker)} entered: {', '.join(list(by_ticker.keys()))}"
+        return f"{executed}/{len(entries)} entered: {', '.join(entry_labels)}"
 
     def job_day2_confirm(self, config, client, db_engine, notify):
         """3:45 PM ET — check yesterday's Strategy C candidates for day-2 confirmation."""
