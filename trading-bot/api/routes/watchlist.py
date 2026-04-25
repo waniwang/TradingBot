@@ -131,7 +131,14 @@ def get_watchlist():
 
     with get_session(engine) as session:
         enabled_tuple = tuple(enabled)
-        base_query = session.query(Watchlist).filter(Watchlist.setup_type.in_(enabled_tuple))
+        # Server-side sort: most recently added first. Each pipeline tab on the
+        # dashboard shows newest-on-top so an operator scanning the page sees
+        # today's activity above older rows.
+        base_query = (
+            session.query(Watchlist)
+            .filter(Watchlist.setup_type.in_(enabled_tuple))
+            .order_by(Watchlist.added_at.desc())
+        )
 
         active = base_query.filter(Watchlist.stage == "active").all()
         ready = base_query.filter(Watchlist.stage == "ready").all()
@@ -177,6 +184,19 @@ def get_watchlist():
     ready_filtered = [r for r in ready if r.ticker not in active_tickers]
     shown_tickers = active_tickers | {r.ticker for r in ready}
     watching_filtered = [r for r in watching if r.ticker not in shown_tickers]
+
+    # Final safety: explicitly resort every list newest-first. The base query
+    # already orders by added_at desc, but `cancelled` is a concat of two such
+    # lists which loses the global ordering.
+    def _newest_first(rows):
+        return sorted(rows, key=lambda r: r.added_at or 0, reverse=True)
+
+    active = _newest_first(active)
+    ready_filtered = _newest_first(ready_filtered)
+    watching_filtered = _newest_first(watching_filtered)
+    filled = _newest_first(filled)
+    cancelled = _newest_first(cancelled)
+    expired = _newest_first(expired)
 
     return {
         "counts": {
