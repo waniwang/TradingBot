@@ -579,6 +579,49 @@ _SETUP_LABELS = {
 }
 
 
+# Map Alpaca's order status vocabulary to our DB enum's allowed values.
+# Alpaca uses a richer set (https://docs.alpaca.markets/docs/orders-at-alpaca);
+# our `order_status_enum` only allows pending/submitted/filled/partially_filled/
+# cancelled/rejected. Writing an unknown string crashes every subsequent SELECT
+# on the row with `LookupError: '<x>' is not among the defined enum values`.
+_BROKER_STATUS_MAP = {
+    # In-flight states → still working
+    "new": "submitted",
+    "accepted": "submitted",
+    "accepted_for_bidding": "submitted",
+    "pending_new": "submitted",
+    "pending_replace": "submitted",
+    "pending_cancel": "submitted",
+    "stopped": "submitted",
+    "suspended": "submitted",
+    "calculated": "submitted",
+    "replaced": "submitted",
+    # Terminal non-fill states → cancelled
+    "canceled": "cancelled",   # Alpaca uses one l
+    "cancelled": "cancelled",  # belt-and-braces
+    "expired": "cancelled",    # broker timed it out
+    "done_for_day": "cancelled",
+    # Terminal fill states (untouched but mapped explicitly)
+    "filled": "filled",
+    "partially_filled": "partially_filled",
+    "rejected": "rejected",
+}
+
+
+def _normalize_broker_status(broker_status: str) -> str:
+    """Map an Alpaca status string to our DB enum. Falls back to 'cancelled'
+    for unknown values and logs a warning so the new term gets noticed."""
+    normalized = _BROKER_STATUS_MAP.get(broker_status)
+    if normalized is None:
+        logger.warning(
+            "Unknown broker order status %r — coercing to 'cancelled'. "
+            "Add a mapping in main._BROKER_STATUS_MAP if this should be tracked separately.",
+            broker_status,
+        )
+        return "cancelled"
+    return normalized
+
+
 def _eod_strategy_breakdown(trade_date, db_engine) -> tuple[str, int, int, int]:
     """Summarize today's strategy executions for the EOD Telegram message.
 
@@ -1103,8 +1146,16 @@ def _reconcile_on_startup(client, db_engine, notify):
                             f"but no position recorded.\nCheck account manually."
                         )
                     else:
-                        # Update DB status to match broker
-                        order.status = broker_status
+                        # Update DB status to match broker, normalising the
+                        # Alpaca-side terminology to our DB enum. Alpaca emits
+                        # values like "expired", "canceled" (one l), "done_for_day",
+                        # "accepted", "pending_new", etc. — the DB enum only
+                        # allows: pending, submitted, filled, partially_filled,
+                        # cancelled, rejected. Writing an Alpaca-only string
+                        # crashes any later read of the row (LookupError on
+                        # enum decode). See watchlist_pipeline 500 incident
+                        # 2026-04-25 (AMD order id=8 status='expired').
+                        order.status = _normalize_broker_status(broker_status)
                         session.commit()
                 except Exception as e:
                     logger.error("Could not reconcile stuck order %s: %s", order.broker_order_id, e)
