@@ -483,20 +483,27 @@ def get_ready_candidates(db_engine) -> list[dict]:
         return results
 
 
-def mark_triggered(ticker: str, db_engine, setup_type: str | None = None) -> bool:
+def mark_triggered(
+    ticker: str,
+    db_engine,
+    setup_type: str | None = None,
+    ep_strategy: str | None = None,
+) -> bool:
     """
     Move an active (or ready) entry to triggered stage.
 
     Works for ALL setup types. Optionally filter by setup_type.
+    `ep_strategy` ("A"/"B"/"C") disambiguates when the same ticker has multiple
+    ready rows for the same setup_type (e.g. both A and B passed filters for
+    ep_earnings on the same day — multi-position support).
+
     Returns True if a row was updated, False if no matching entry found.
 
     Tie-breaking: EP swing scans persist two rows per A/B entry — a
     stage="active" candidate-pool snapshot AND a stage="ready" execution
     row. Execute wants to flip the "ready" row. `Watchlist.stage.desc()`
-    orders "ready" before "active" alphabetically, so the .first() hits
-    the execution row. Without this, a stale "ready" row lingers after
-    entry — it's harmless (idempotency guards skip re-entry) but
-    clutters the dashboard and breaks the `verify_day.py` drop check.
+    orders "ready" before "active" alphabetically, so .first() (or the first
+    match when ep_strategy filtering) hits the execution row.
     """
     now = datetime.utcnow()
     with get_session(db_engine) as session:
@@ -506,7 +513,15 @@ def mark_triggered(ticker: str, db_engine, setup_type: str | None = None) -> boo
         )
         if setup_type:
             query = query.filter(Watchlist.setup_type == setup_type)
-        row = query.order_by(Watchlist.stage.desc()).first()
+        rows = query.order_by(Watchlist.stage.desc()).all()
+
+        if ep_strategy:
+            # Multiple rows can share ticker+setup_type (A and B variants).
+            # Filter in Python since meta is a JSON column without a DB index.
+            row = next((r for r in rows if (r.meta or {}).get("ep_strategy") == ep_strategy), None)
+        else:
+            row = rows[0] if rows else None
+
         if row is None:
             return False
         row.stage = "triggered"

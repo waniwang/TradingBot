@@ -337,11 +337,19 @@ class PositionTracker:
         """Exit positions that have exceeded their max hold period."""
         cfg = self.config.get("signals", {})
         # Per-setup-type max hold days
+        _ep_e_hold = int(cfg.get("ep_earnings_max_hold_days", 50))
+        _ep_e_c_hold = int(cfg.get("ep_earnings_c_max_hold_days", 20))
+        _ep_n_hold = int(cfg.get("ep_news_max_hold_days", 50))
+        _ep_n_c_hold = int(cfg.get("ep_news_c_max_hold_days", 20))
         max_hold_map = {
-            "ep_earnings": int(cfg.get("ep_earnings_max_hold_days", 50)),
-            "ep_earnings_c": int(cfg.get("ep_earnings_c_max_hold_days", 20)),
-            "ep_news": int(cfg.get("ep_news_max_hold_days", 50)),
-            "ep_news_c": int(cfg.get("ep_news_c_max_hold_days", 20)),
+            "ep_earnings": _ep_e_hold,
+            "ep_earnings_a": _ep_e_hold,
+            "ep_earnings_b": _ep_e_hold,
+            "ep_earnings_c": _ep_e_c_hold,
+            "ep_news": _ep_n_hold,
+            "ep_news_a": _ep_n_hold,
+            "ep_news_b": _ep_n_hold,
+            "ep_news_c": _ep_n_c_hold,
         }
         default_max_hold = 50
 

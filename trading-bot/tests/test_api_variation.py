@@ -106,6 +106,20 @@ def test_et_midnight_rollover(engine):
         assert resolve_variation(session, "CRM", "ep_news", localized) == "B"
 
 
+def test_strategy_a_from_setup_type_suffix(engine):
+    """ep_earnings_a / ep_news_a resolve directly without any DB lookup."""
+    with get_session(engine) as session:
+        assert resolve_variation(session, "AAPL", "ep_earnings_a", date(2026, 4, 16)) == "A"
+        assert resolve_variation(session, "TSLA", "ep_news_a", date(2026, 4, 16)) == "A"
+
+
+def test_strategy_b_from_setup_type_suffix(engine):
+    """ep_earnings_b / ep_news_b resolve directly without any DB lookup."""
+    with get_session(engine) as session:
+        assert resolve_variation(session, "NVDA", "ep_earnings_b", date(2026, 4, 16)) == "B"
+        assert resolve_variation(session, "META", "ep_news_b", date(2026, 4, 16)) == "B"
+
+
 def test_non_ep_c_suffix_is_not_strategy_c(engine):
     """`_c` suffix on a non-EP setup_type should NOT be treated as Strategy C."""
     with get_session(engine) as session:

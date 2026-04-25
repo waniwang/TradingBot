@@ -246,12 +246,15 @@ def _await_fill_and_setup_stop(
 # Entry execution
 # ---------------------------------------------------------------------------
 
-def execute_entry(ticker, signal, shares, client, db_engine, notify, watchlist_setup_type=None):
+def execute_entry(ticker, signal, shares, client, db_engine, notify, watchlist_setup_type=None, watchlist_ep_strategy=None):
     """Place the entry limit order, record to DB, then wait for fill in background.
 
     `watchlist_setup_type` lets callers flip a Watchlist row whose setup_type differs from
-    the Signal's (e.g. Strategy C executes as `ep_earnings_c` but the Watchlist row was
-    persisted as `ep_earnings`). Defaults to `signal.setup_type`.
+    the Signal's (e.g. Strategy A/B/C execute as `ep_earnings_a/b/c` but the Watchlist row
+    was persisted as `ep_earnings`). Defaults to `signal.setup_type`.
+
+    `watchlist_ep_strategy` ("A"/"B"/"C") disambiguates when the same ticker+setup_type has
+    multiple ready Watchlist rows (A and B both passed for ep_earnings multi-position).
     """
     from db.models import Signal as DbSignal, Order
 
@@ -305,6 +308,7 @@ def execute_entry(ticker, signal, shares, client, db_engine, notify, watchlist_s
             mark_triggered(
                 ticker, db_engine,
                 setup_type=watchlist_setup_type or signal.setup_type,
+                ep_strategy=watchlist_ep_strategy,
             )
         except Exception as e:
             # Order succeeded; DB state drift is recoverable but needs operator attention.

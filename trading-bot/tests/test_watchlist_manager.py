@@ -650,6 +650,69 @@ class TestMarkTriggered:
             assert "active" in stages, f"candidate-pool row shouldn't be touched, got {stages}"
             assert "ready" not in stages, f"stale ready row lingering, got {stages}"
 
+    def test_ep_strategy_kwarg_targets_correct_variant(self, db_engine):
+        """Multi-position: A and B ready rows for the same ticker+setup_type should each
+        be flippable independently via the ep_strategy kwarg."""
+        import json
+        with get_session(db_engine) as session:
+            session.add(Watchlist(
+                ticker="NVDA", setup_type="ep_earnings", stage="ready",
+                scan_date=date.today(),
+                metadata_json=json.dumps({"ep_strategy": "A"}),
+                added_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+                stage_changed_at=datetime.utcnow(),
+            ))
+            session.add(Watchlist(
+                ticker="NVDA", setup_type="ep_earnings", stage="ready",
+                scan_date=date.today(),
+                metadata_json=json.dumps({"ep_strategy": "B"}),
+                added_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+                stage_changed_at=datetime.utcnow(),
+            ))
+            session.commit()
+
+        # Flip only Strategy A
+        result = mark_triggered("NVDA", db_engine, setup_type="ep_earnings", ep_strategy="A")
+        assert result is True
+
+        with get_session(db_engine) as session:
+            rows = session.query(Watchlist).filter_by(ticker="NVDA", setup_type="ep_earnings").all()
+            stages = {(json.loads(r.metadata_json or "{}").get("ep_strategy")): r.stage for r in rows}
+            assert stages["A"] == "triggered", "A should be triggered"
+            assert stages["B"] == "ready", "B should still be ready"
+
+        # Flip Strategy B next
+        result = mark_triggered("NVDA", db_engine, setup_type="ep_earnings", ep_strategy="B")
+        assert result is True
+
+        with get_session(db_engine) as session:
+            rows = session.query(Watchlist).filter_by(ticker="NVDA", setup_type="ep_earnings").all()
+            stages = {(json.loads(r.metadata_json or "{}").get("ep_strategy")): r.stage for r in rows}
+            assert stages["A"] == "triggered"
+            assert stages["B"] == "triggered"
+
+    def test_ep_strategy_returns_false_when_variant_not_found(self, db_engine):
+        """ep_strategy filter returns False when the target variant doesn't exist."""
+        import json
+        with get_session(db_engine) as session:
+            session.add(Watchlist(
+                ticker="AAPL", setup_type="ep_earnings", stage="ready",
+                scan_date=date.today(),
+                metadata_json=json.dumps({"ep_strategy": "A"}),
+                added_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+                stage_changed_at=datetime.utcnow(),
+            ))
+            session.commit()
+
+        # B doesn't exist — should return False
+        result = mark_triggered("AAPL", db_engine, setup_type="ep_earnings", ep_strategy="B")
+        assert result is False
+
+        # A row should be untouched
+        with get_session(db_engine) as session:
+            row = session.query(Watchlist).filter_by(ticker="AAPL").first()
+            assert row.stage == "ready"
+
 
 # ---------------------------------------------------------------------------
 # get_pipeline_counts tests

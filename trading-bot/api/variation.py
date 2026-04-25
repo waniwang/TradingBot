@@ -25,6 +25,10 @@ from db.models import Watchlist
 
 _ET = pytz.timezone("America/New_York")
 _EP_BASES = ("ep_earnings", "ep_news")
+# Suffixes that encode the variant directly in setup_type (multi-position support).
+# Positions created after the multi-position change use ep_earnings_a/b/c and ep_news_a/b/c.
+# Older positions use ep_earnings/ep_news (base) and need a DB lookup.
+_SUFFIX_TO_VARIANT: dict[str, str] = {"_a": "A", "_b": "B", "_c": "C"}
 
 
 def _to_et_date(value: Any) -> date | None:
@@ -41,16 +45,19 @@ def _to_et_date(value: Any) -> date | None:
     return None
 
 
-def _classify(setup_type: str) -> tuple[str | None, bool]:
-    """Return (base, is_c). base is None for non-EP setup types."""
+def _classify(setup_type: str) -> tuple[str | None, str | None]:
+    """Return (base, direct_variant).
+
+    base is None for non-EP setup types.
+    direct_variant is "A"/"B"/"C" when the suffix encodes it (ep_earnings_a → "A"),
+    or None when the setup_type is the bare base (ep_earnings) and a DB lookup is needed.
+    """
     base = next((b for b in _EP_BASES if setup_type.startswith(b)), None)
     if base is None:
-        return None, False
-    # Only treat `_c` as Strategy C when it's on top of an EP base — this
-    # avoids false positives if an unrelated setup_type ever happens to end
-    # in `_c`.
-    is_c = setup_type == f"{base}_c"
-    return base, is_c
+        return None, None
+    suffix = setup_type[len(base):]
+    direct_variant = _SUFFIX_TO_VARIANT.get(suffix)
+    return base, direct_variant
 
 
 def resolve_variation(
@@ -81,15 +88,17 @@ def resolve_variations_batch(
 
     for ticker, setup_type, as_of in items:
         key = (ticker, setup_type, as_of)
-        base, is_c = _classify(setup_type)
+        base, direct_variant = _classify(setup_type)
 
         if base is None:
             result[key] = None
             continue
-        if is_c:
-            result[key] = "C"
+        if direct_variant is not None:
+            # Variant encoded in setup_type suffix (ep_earnings_a/b/c) — no DB lookup needed.
+            result[key] = direct_variant
             continue
 
+        # Bare base setup_type (ep_earnings, ep_news) — old positions need a DB join.
         scan_date = _to_et_date(as_of)
         if scan_date is None:
             result[key] = None
