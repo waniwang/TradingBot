@@ -91,7 +91,7 @@ class TestEPNewsDedup:
         candidate = _news_candidate()
         daily_bars = _daily_bars_with_prev_10d("XYZ", prev_10d_change_pct=-25.0)
 
-        entries = evaluate_ep_news_strategies([candidate], daily_bars, _news_config())
+        entries, _ = evaluate_ep_news_strategies([candidate], daily_bars, _news_config())
 
         strategies = [e["ep_strategy"] for e in entries if e["ep_strategy"] in ("A", "B")]
         assert strategies == ["A"], (
@@ -100,11 +100,16 @@ class TestEPNewsDedup:
         assert entries[0]["stop_loss_pct"] == 7.0  # A's tighter stop, not B's -10%
 
     def test_fails_a_but_passes_b_yields_only_b(self):
-        # prev_10d = -12% fails A's <= -20% threshold but passes B's <= -10%.
-        candidate = _news_candidate()
+        # Drive downside_from_open to ~4% so A's <3% gate fails, while keeping
+        # close_in_range in B's [30, 80] window. With today_low=9.6 and
+        # current_price=10.32: downside ~4%, close_in_range ~60%, chg_open ~3.2%.
+        # B has no downside gate of its own (only A does in EP-News), so only B
+        # survives. The original prev_10d-based discriminator was removed
+        # 2026-04-21 — see strategies/ep_news/strategy.py::evaluate_strategy_a.
+        candidate = _news_candidate(today_low=9.6, current_price=10.32)
         daily_bars = _daily_bars_with_prev_10d("XYZ", prev_10d_change_pct=-12.0)
 
-        entries = evaluate_ep_news_strategies([candidate], daily_bars, _news_config())
+        entries, _ = evaluate_ep_news_strategies([candidate], daily_bars, _news_config())
 
         strategies = [e["ep_strategy"] for e in entries if e["ep_strategy"] in ("A", "B")]
         assert strategies == ["B"]
@@ -117,7 +122,7 @@ class TestEPEarningsDedup:
         candidate = _earnings_candidate()
         daily_bars = _daily_bars_with_prev_10d("XYZ", prev_10d_change_pct=-15.0)
 
-        entries = evaluate_ep_earnings_strategies([candidate], daily_bars, _earnings_config())
+        entries, _ = evaluate_ep_earnings_strategies([candidate], daily_bars, _earnings_config())
 
         strategies = [e["ep_strategy"] for e in entries if e["ep_strategy"] in ("A", "B")]
         assert strategies == ["A"], (
@@ -125,11 +130,15 @@ class TestEPEarningsDedup:
         )
 
     def test_fails_a_but_passes_b_yields_only_b(self):
-        # prev_10d = -40% is outside A's [-30, -10] (too deep) but still <= B's -10.
-        candidate = _earnings_candidate()
+        # Drive downside_from_open to ~4%: fails A's <3% gate, while B doesn't
+        # check downside at all and only requires CHG-OPEN > 0 + close_in_range
+        # >= 50 + ATR% in [2, 5] (the test config widens ATR so it always
+        # passes). The original prev_10d-based discriminator was removed
+        # 2026-04-21 — see strategies/ep_earnings/strategy.py::evaluate_strategy_a.
+        candidate = _earnings_candidate(today_low=9.6)
         daily_bars = _daily_bars_with_prev_10d("XYZ", prev_10d_change_pct=-40.0)
 
-        entries = evaluate_ep_earnings_strategies([candidate], daily_bars, _earnings_config())
+        entries, _ = evaluate_ep_earnings_strategies([candidate], daily_bars, _earnings_config())
 
         strategies = [e["ep_strategy"] for e in entries if e["ep_strategy"] in ("A", "B")]
         assert strategies == ["B"]

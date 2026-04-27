@@ -467,8 +467,11 @@ class EPNewsPlugin:
             msg = "\n".join(msg_lines)
             if notify:
                 notify(msg)
-            # Each failure is already: logged, marked expired+[bot-failure] in DB, and notified.
-            # Don't raise — a snapshot gap for one ticker is not a job failure.
+            # See strategies/ep_earnings/plugin.py for the rationale on the
+            # partial-vs-total split. Total outage → raise so _track_job fires
+            # JOB FAILED via Telegram.
+            if attempted > 0 and len(failures) == attempted:
+                raise RuntimeError(msg)
 
         return f"{len(confirmed)} confirmed from {len(pending)} pending ({len(failures)} failed)"
 

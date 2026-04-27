@@ -180,12 +180,19 @@ class TestPhaseBFilters:
         result = scan_ep_news(config, client)
         assert len(result) == 0
 
-    def test_filter_low_rvol(self):
-        """Stock where today's volume < 14d avg is rejected."""
+    def test_low_rvol_is_kept_for_enrichment(self):
+        """RVOL is computed for enrichment but NOT used as a filter — Spikeet
+        picks often have RVOL < 1 and we don't want to drop them. See
+        strategies/ep_news/scanner.py Phase B comment. Locks in the intentional
+        decision so a future "let's add an RVOL gate" change has to update this
+        test, not silently slip through."""
         client = _make_passing_client(daily_volume=100_000)
         config = _make_config()
-        result = scan_ep_news(config, client)
-        assert len(result) == 0
+        with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(2_000_000_000, "EQUITY")), \
+             patch("strategies.ep_news.scanner._confirm_no_earnings", return_value=True):
+            result = scan_ep_news(config, client)
+        assert len(result) == 1
+        assert result[0]["rvol"] == 0.2
 
     def test_no_daily_bars(self):
         """Stock with no daily bars is skipped."""

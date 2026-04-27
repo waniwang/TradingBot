@@ -473,8 +473,14 @@ class EPEarningsPlugin:
             msg = "\n".join(msg_lines)
             if notify:
                 notify(msg)
-            # Each failure is already: logged, marked expired+[bot-failure] in DB, and notified.
-            # Don't raise — a snapshot gap for one ticker is not a job failure.
+            # Per-ticker failures are already marked expired+[bot-failure] in DB and
+            # notified. A partial outage (some tickers OK, some not) is informational,
+            # not a job failure — return normally. But a *total* outage (every attempt
+            # failed) is systemic — almost always an Alpaca/auth/network problem the
+            # operator needs to know about RIGHT NOW, not bury in a per-job notify.
+            # Raise so _track_job fires JOB FAILED with traceback to Telegram.
+            if attempted > 0 and len(failures) == attempted:
+                raise RuntimeError(msg)
 
         return f"{len(confirmed)} confirmed from {len(pending)} pending ({len(failures)} failed)"
 
