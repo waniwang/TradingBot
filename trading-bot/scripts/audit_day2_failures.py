@@ -88,13 +88,18 @@ def main() -> int:
     logger.info("UTC window: %s → %s", start_utc, end_utc)
     logger.info("=" * 78)
 
+    # Filter by updated_at, not stage_changed_at: the plugin code flips
+    # stage="expired" without explicitly bumping stage_changed_at, and the
+    # column only has a default-on-insert (no onupdate hook), so its value
+    # stays at the original scan-time timestamp. updated_at has onupdate=
+    # datetime.utcnow and reliably reflects the day-2 confirm save.
     rows: list[Watchlist] = []
     with get_session(engine) as session:
         candidates = session.query(Watchlist).filter(
             Watchlist.stage == "expired",
             Watchlist.setup_type.in_(["ep_earnings", "ep_news"]),
-            Watchlist.stage_changed_at >= start_utc,
-            Watchlist.stage_changed_at < end_utc,
+            Watchlist.updated_at >= start_utc,
+            Watchlist.updated_at < end_utc,
         ).all()
         for row in candidates:
             if TAG in (row.notes or ""):
