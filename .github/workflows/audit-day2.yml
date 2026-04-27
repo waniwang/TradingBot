@@ -1,0 +1,33 @@
+name: Audit day-2 confirm failures
+
+# One-off diagnostic: SSH into the server, run scripts/audit_day2_failures.py
+# for the chosen ET date, and surface the output in the Actions log so it can
+# be read from the browser without server access. Manually triggered.
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'ET date to audit (YYYY-MM-DD). Leave blank for today.'
+        required: false
+        default: ''
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run audit on Linode
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            DATE_ARG=""
+            if [ -n "${{ github.event.inputs.date }}" ]; then
+              DATE_ARG="--date ${{ github.event.inputs.date }}"
+            fi
+            .venv/bin/python scripts/audit_day2_failures.py $DATE_ARG
