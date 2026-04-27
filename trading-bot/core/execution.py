@@ -73,10 +73,28 @@ def fetch_current_price(client, ticker: str, attempts: int = 3, sleep_secs: floa
         try:
             snapshot = client.get_snapshots([ticker])
             snap = snapshot.get(ticker)
-            if snap and hasattr(snap, "latest_trade") and snap.latest_trade:
-                return float(snap.latest_trade.price)
-            if snap and hasattr(snap, "minute_bar") and snap.minute_bar:
-                return float(snap.minute_bar.close)
+            # executor/alpaca_client.py::get_snapshots returns a flat dict per
+            # ticker — keys: latest_price, prev_close, prev_high, daily_volume,
+            # open, today_high, today_low. Pre-2026-04-25 this branch wrongly
+            # checked hasattr for raw-SDK attrs (.latest_trade, .minute_bar) on
+            # a plain dict, so it always fell through to None and produced
+            # 100% "no price data" failures in EP day-2 confirm. See
+            # tests/test_fetch_current_price.py for the regression lock.
+            if snap:
+                price = snap.get("latest_price") or 0
+                if price > 0:
+                    return float(price)
+                # Last-resort fallback if there was no last_trade today (very
+                # illiquid ticker or pre-market): use the daily bar's open as
+                # a coarse proxy. Better than returning None and dropping the
+                # candidate on a [bot-failure] tag.
+                day_open = snap.get("open") or 0
+                if day_open > 0:
+                    logger.info(
+                        "fetch_current_price: %s no latest_price, using day open $%.2f",
+                        ticker, day_open,
+                    )
+                    return float(day_open)
             logger.info("fetch_current_price: %s attempt %d/%d empty", ticker, attempt, attempts)
         except Exception as e:
             last_err = e

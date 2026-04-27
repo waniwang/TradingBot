@@ -143,7 +143,10 @@ def _seed_ready(db_engine, ticker="AU", ep_strategy="C", scan_date=None,
 
 
 def _snap(price):
-    return SimpleNamespace(latest_trade=SimpleNamespace(price=price), minute_bar=None)
+    # executor/alpaca_client.py::get_snapshots returns a flat dict per ticker
+    # (not the raw Alpaca SDK object). See test_fetch_current_price.py for the
+    # full key set; we only need latest_price for day-2 confirm.
+    return {"latest_price": price}
 
 
 # ---------------------------------------------------------------------------
