@@ -240,14 +240,17 @@ def _get_ticker_info(ticker: str) -> tuple[float, str]:
 
 
 def _check_earnings_today(ticker: str, today: date) -> bool:
-    """Return True if ticker reported earnings today or yesterday."""
-    try:
-        dates = yf.Ticker(ticker).get_earnings_dates(limit=4)
-    except Exception as e:
-        # yfinance scraper fails (e.g. KeyError: 'Earnings Date') when Yahoo returns
-        # a page without the expected column for tickers with no earnings history.
-        logger.warning("%s: get_earnings_dates failed (%s: %s), skipping", ticker, type(e).__name__, e)
-        return False
+    """Return True if ticker reported earnings today or yesterday.
+
+    Per CLAUDE.md error-handling policy: yfinance failures must propagate so the
+    scan job fails loudly via _track_job → Telegram. Silent `except Exception:
+    return False` would let the bot quietly skip every ticker on a Yahoo HTML
+    structure change or auth/network outage — exactly the failure mode that hid
+    the day-2 confirm price-data bug for two days. If a single bad ticker should
+    be tolerated, the caller (scan_ep_earnings) is responsible for a per-ticker
+    notify-then-continue wrapper, NOT this helper.
+    """
+    dates = yf.Ticker(ticker).get_earnings_dates(limit=4)
     if dates is None or (hasattr(dates, "empty") and dates.empty):
         return False
 

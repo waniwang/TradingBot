@@ -274,12 +274,13 @@ class EPNewsPlugin:
                 if existing:
                     logger.info("EP news: %s (%s) already has open position, skipping", ticker, ep_strategy)
                     continue
+                # Replay guard: scope by ticker + recency, not by signal/setup_type.
+                # See strategies/ep_earnings/plugin.py for the rationale — same fix
+                # for the same join-blind-spot bug.
                 recent_order = (
                     session.query(Order)
-                    .join(DbSignal, Order.signal_id == DbSignal.id)
                     .filter(
                         Order.ticker == ticker,
-                        DbSignal.setup_type == setup_type,
                         Order.status.in_(["pending", "submitted", "filled", "partially_filled"]),
                         Order.created_at >= datetime.utcnow() - timedelta(minutes=10),
                     )

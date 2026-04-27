@@ -272,12 +272,19 @@ class EPEarningsPlugin:
                 if existing:
                     logger.info("EP earnings: %s (%s) already has open position, skipping", ticker, ep_strategy)
                     continue
+                # Replay guard: scope by ticker + recency, not by signal/setup_type.
+                # The real risk is that place_limit_order succeeded at the broker but
+                # the Signal+Order DB write that follows didn't (crash, connection
+                # drop, etc.). In that window any leftover non-terminal Order on this
+                # ticker — even one without a linked Signal — should block another
+                # broker submission. Joining on signal_id (the previous version)
+                # silently passed those orphan rows through and let a duplicate go
+                # out. A wrong-side same-ticker entry within 10 min is itself a
+                # smell, so the looser ticker-only check is safe.
                 recent_order = (
                     session.query(Order)
-                    .join(DbSignal, Order.signal_id == DbSignal.id)
                     .filter(
                         Order.ticker == ticker,
-                        DbSignal.setup_type == setup_type,
                         Order.status.in_(["pending", "submitted", "filled", "partially_filled"]),
                         Order.created_at >= datetime.utcnow() - timedelta(minutes=10),
                     )
