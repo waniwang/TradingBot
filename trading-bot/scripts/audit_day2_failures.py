@@ -81,6 +81,10 @@ def main() -> int:
     config = load_config()
     engine = init_db(config["database"]["url"])
     client = AlpacaClient(config)
+    # AlpacaClient.__init__ does not connect — _data/_trade stay None until
+    # .connect() runs. Without this call, get_snapshots blows up on
+    # "'NoneType' object has no attribute 'get_stock_snapshot'".
+    client.connect()
 
     start_utc, end_utc = _et_day_bounds_utc(args.date)
     logger.info("=" * 78)
