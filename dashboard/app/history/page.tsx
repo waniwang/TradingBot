@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
 import { RecentSignals } from "@/components/dashboard/recent-signals";
+import { VariationBadge } from "@/components/strategies/variation-badge";
 import type { BotStatus, ClosedPosition, SignalToday } from "@/lib/types";
 
 export default function HistoryPage() {
@@ -121,7 +122,10 @@ export default function HistoryPage() {
                     </TableCell>
                     <TableCell className="font-medium">{t.ticker}</TableCell>
                     <TableCell>
-                      <Badge variant="outline" className="text-xs">{t.setup}</Badge>
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="outline" className="text-xs">{t.setup}</Badge>
+                        <VariationBadge value={t.variation} />
+                      </div>
                     </TableCell>
                     <TableCell>
                       <Badge
