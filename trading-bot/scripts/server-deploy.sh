@@ -44,7 +44,17 @@ else
     log "trading-bot is $bot_status -> skipping restart."
 fi
 
-# --- 4. Restart API if active ---
+# --- 4. Restart IB bot if active (passive executor against IBKR paper) ---
+ib_status=$(systemctl is-active trading-bot-ib 2>/dev/null || echo "inactive")
+if [ "$ib_status" = "active" ]; then
+    log "trading-bot-ib is active -> restarting..."
+    systemctl restart trading-bot-ib
+    log "trading-bot-ib restarted."
+else
+    log "trading-bot-ib is $ib_status -> skipping restart."
+fi
+
+# --- 5. Restart API if active ---
 api_status=$(systemctl is-active trading-api 2>/dev/null || echo "inactive")
 if [ "$api_status" = "active" ]; then
     log "trading-api is active -> restarting..."
@@ -54,5 +64,5 @@ else
     log "trading-api is $api_status -> skipping restart."
 fi
 
-# --- 5. Summary ---
-log "Deploy complete. Bot: $bot_status -> $(systemctl is-active trading-bot 2>/dev/null || echo inactive), API: $api_status -> $(systemctl is-active trading-api 2>/dev/null || echo inactive)"
+# --- 6. Summary ---
+log "Deploy complete. Bot: $bot_status -> $(systemctl is-active trading-bot 2>/dev/null || echo inactive), IB Bot: $ib_status -> $(systemctl is-active trading-bot-ib 2>/dev/null || echo inactive), API: $api_status -> $(systemctl is-active trading-api 2>/dev/null || echo inactive)"

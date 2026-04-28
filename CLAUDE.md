@@ -10,8 +10,10 @@ Automated momentum trading bot inspired by Kristjan Kullamagi's setups: **Breako
 | Strategy plugins | `trading-bot/strategies/` — breakout, ep_earnings, ep_news, episodic_pivot, parabolic_short |
 | Core framework | `trading-bot/core/` — plugin loader, scheduler, data cache |
 | Documentation | `docs/` (7 docs — read these for deep context) |
-| Entry point | `trading-bot/main.py` — APScheduler orchestrator |
+| Entry point (Alpaca) | `trading-bot/main.py` — APScheduler orchestrator |
+| Entry point (IBKR paper, passive executor) | `trading-bot/main_ib.py` — runs only EP execute jobs; reads watchlist from Alpaca DB |
 | Config | `trading-bot/config.yaml` (env vars override: `ALPACA_API_KEY`, etc.) |
+| IB config (gitignored) | `trading-bot/config.ib.local.yaml` — sets `ibkr:`, `database_ib:`, and `watchlist_source_db_url` |
 | Tests | `trading-bot/tests/` — 15 test files |
 | Backtest | `trading-bot/backtest/` + `trading-bot/run_backtest.py` |
 | Dashboard (FE) | `dashboard/` — Next.js + Tailwind + shadcn/ui (deploys to Vercel) |
@@ -65,6 +67,25 @@ Pipeline job metadata (descriptions, categories, `time`/`end_time` window, phase
 
 **Database:** SQLAlchemy ORM, SQLite for dev/paper, PostgreSQL for live. All DB ops use `get_session(engine)` context manager.
 
+### IBKR Paper (Passive Executor)
+
+A second bot process (`main_ib.py` → `trading-bot-ib.service` on the Linode) runs the EP earnings + EP news strategies against an IBKR paper account in **passive-executor mode**: it does NOT scan. It reads `stage IN ("ready","triggered")` `Watchlist` rows from the Alpaca DB (`trading_bot.db`) and only places orders on IBKR. Every scanner/strategy fix shipped to the Alpaca code automatically applies to IB execution — single source of truth for trade ideas.
+
+```
+Alpaca bot                         IB bot
+─────────────                      ──────
+3:00 PM scan        ────────►   reads ready/triggered rows
+3:35 PM day2_confirm ────►      from trading_bot.db at 3:37+
+3:37 PM execute (Alpaca)        executes on IBKR (parallel, idempotent)
+```
+
+- **Watchlist source**: configured via `config["watchlist_source_db_url"]` (or env `WATCHLIST_SOURCE_DB_URL`). Server config: `sqlite:////opt/trading-bot/trading-bot/trading_bot.db`. Without this key the IB bot falls back to local-DB reads and won't trade (since it doesn't scan).
+- **Idempotency**: each bot's `job_execute` checks ITS OWN local DB (`Order` + `Position` tables) for an existing entry on `(ticker, setup_type)`. Both bots can safely run concurrently — the Alpaca bot tracks Alpaca executions in `trading_bot.db`, IB bot tracks IB executions in `trading_bot_ib.db`.
+- **Skipped jobs**: `main_ib.py` passes `skip_jobs=("ep_earnings_scan", "ep_earnings_day2_confirm", "ep_news_scan", "ep_news_day2_confirm")` to `register_strategy_jobs()`. The IB scheduler runs only `ep_earnings_execute`, `ep_news_execute`, `eod_tasks`, `reconcile_positions`, `ib_watchdog`, `heartbeat`.
+- **Cross-DB reads**: `executor/watchlist_source.py` opens a second SQLAlchemy engine pointing at `trading_bot.db`. Read-only — IB never writes to the Alpaca DB. Trade-paths must remain per-bot (Position/Order/Signal are local).
+- **SQLite WAL**: `trading_bot.db` runs in WAL mode so the IB reader doesn't block Alpaca writes. Set once via `PRAGMA journal_mode=WAL`.
+- **Plan + risks**: see `~/.claude/projects/.../memory/project_ib_passive_executor.md` for the detailed plan, deferred fallback enhancements, and operational runbook.
+
 ## CI/CD: GitHub Actions Auto-Deploy
 
 On every push to `main`, `.github/workflows/deploy.yml` SSHs into the Linode server and runs `scripts/server-deploy.sh`, which pulls the latest code, runs DB migrations, and restarts the bot + dashboard services. Secrets (`SERVER_HOST`, `SERVER_SSH_KEY`) are stored in GitHub repo settings.
@@ -74,7 +95,8 @@ On every push to `main`, `.github/workflows/deploy.yml` SSHs into the Linode ser
 | Module | Key functions / classes |
 |--------|----------------------|
 | `core/loader.py` | `load_strategies()`, `get_plugin()`, `get_registry()` — plugin discovery and registry |
-| `core/scheduler.py` | `register_strategy_jobs()` — registers each plugin's scheduled jobs |
+| `core/scheduler.py` | `register_strategy_jobs()` — registers each plugin's scheduled jobs; supports `skip_jobs=` to opt out of named job_ids (used by `main_ib.py` to skip scan + day-2-confirm jobs) |
+| `executor/watchlist_source.py` | `read_ready_entries()` — IB passive executor reads ready/triggered Watchlist rows from the Alpaca DB across processes (no scanning in IB bot) |
 | `core/alerts.py` | `notify_job_failure()` — shared Telegram "JOB FAILED" sender with escalation on notify failure; invoked by both job wrappers |
 | `core/data_cache.py` | Shared data cache for cross-strategy data reuse |
 | `scanner/watchlist_manager.py` | `persist_candidates()`, `get_active_watchlist()`, `run_nightly_scan()`, `expire_stale_active()` — DB-backed watchlist lifecycle |

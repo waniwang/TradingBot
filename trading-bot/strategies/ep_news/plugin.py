@@ -217,6 +217,13 @@ class EPNewsPlugin:
         Position (setup_type ep_news_a / ep_news_b / ep_news_c).
         Idempotency is keyed on (ticker, setup_type) so a retry only skips the
         specific variant that already filled, not both.
+
+        Watchlist source: by default reads from ``db_engine`` (the local DB).
+        If ``config["watchlist_source_db_url"]`` is set, reads from that
+        external DB instead (used by the IB passive-executor bot to consume
+        the Alpaca bot's vetted watchlist). The IB-bot path includes
+        stage="triggered" rows so we still see the row after Alpaca has
+        executed; idempotency is enforced via the local Order/Position tables.
         """
         from core.execution import (
             is_trading_day, _execute_entry,
@@ -233,20 +240,26 @@ class EPNewsPlugin:
 
         today = datetime.now(ET).date()
 
-        # Load entries from DB, not memory
+        # Load entries — either from the local DB (Alpaca bot path) or from
+        # the Alpaca DB across processes (IB passive-executor path).
+        watchlist_source_db_url = config.get("watchlist_source_db_url")
         entries: list[dict] = []
-        with get_session(db_engine) as session:
-            rows = session.query(Watchlist).filter(
-                Watchlist.setup_type == "ep_news",
-                Watchlist.stage == "ready",
-                Watchlist.scan_date <= today,
-            ).all()
-            for wl in rows:
-                meta = wl.meta or {}
-                if not meta.get("ep_strategy"):
-                    logger.warning("EP news: ready row %s has no ep_strategy in meta, skipping", wl.ticker)
-                    continue
-                entries.append({"ticker": wl.ticker, **meta})
+        if watchlist_source_db_url:
+            from executor.watchlist_source import read_ready_entries
+            entries = read_ready_entries(watchlist_source_db_url, "ep_news", today)
+        else:
+            with get_session(db_engine) as session:
+                rows = session.query(Watchlist).filter(
+                    Watchlist.setup_type == "ep_news",
+                    Watchlist.stage == "ready",
+                    Watchlist.scan_date <= today,
+                ).all()
+                for wl in rows:
+                    meta = wl.meta or {}
+                    if not meta.get("ep_strategy"):
+                        logger.warning("EP news: ready row %s has no ep_strategy in meta, skipping", wl.ticker)
+                        continue
+                    entries.append({"ticker": wl.ticker, **meta})
 
         if not entries:
             logger.info("EP news execute: no ready rows in watchlist")

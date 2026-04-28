@@ -82,15 +82,28 @@ def _tracked_strategy_job(job_id, handler, config, client, db_engine, notify):
                 logger.debug("Failed to update job_execution for %s: %s", job_id, e)
 
 
-def register_strategy_jobs(scheduler, plugins, config, client, db_engine, notify):
+def register_strategy_jobs(
+    scheduler, plugins, config, client, db_engine, notify, skip_jobs=()
+):
     """
     Register each plugin's schedule entries with APScheduler.
 
     Each ScheduleEntry.handler is called with (config, client, db_engine, notify).
     Jobs are wrapped with tracking to persist execution history.
+
+    ``skip_jobs`` is an iterable of ``job_id`` strings to NOT register. Used by
+    the IB passive-executor bot to opt out of scan + day-2-confirm jobs while
+    keeping the execute jobs. Default empty tuple = current Alpaca behavior.
     """
+    skip_set = set(skip_jobs)
     for plugin in plugins.values():
         for entry in plugin.schedule:
+            if entry.job_id in skip_set:
+                logger.info(
+                    "Skipping job '%s' for strategy '%s' (configured to skip)",
+                    entry.job_id, plugin.name,
+                )
+                continue
             scheduler.add_job(
                 func=_tracked_strategy_job,
                 trigger=CronTrigger(**entry.cron, timezone=ET),

@@ -7,21 +7,34 @@ separate database (trading_bot_ib.db), separate heartbeat file
 (bot_status_ib.json), and connects to IB Gateway instead of Alpaca. Code,
 strategies, and the API are shared with the Alpaca bot.
 
+Architecture: passive executor.
+  The IB bot does NOT scan. It reads the Alpaca bot's already-vetted
+  Watchlist from trading_bot.db and only places orders on IBKR paper.
+  Every scanner/strategy fix shipped to the Alpaca code automatically
+  applies to IB execution. Idempotency is enforced via the IB bot's local
+  Order/Position tables in trading_bot_ib.db.
+
 Prereqs:
   1. IB Gateway running + logged into PAPER account on localhost:4002
   2. A personal config file (e.g. config.ib.local.yaml — gitignored) with:
        - `ibkr:` section (host, port, client_id)
-       - `database.url` pointing at your IB DB (e.g. sqlite:///trading_bot_ib.db)
+       - `database_ib.url` pointing at your IB DB (e.g. sqlite:///trading_bot_ib.db)
+       - `watchlist_source_db_url` pointing at the Alpaca DB
+         (e.g. sqlite:////opt/trading-bot/trading-bot/trading_bot.db) — the
+         IB bot reads ready/triggered Watchlist rows from this DB instead of
+         scanning. Without this key the IB bot falls back to local-DB reads.
        - Any per-instance risk / share-size tweaks you want
   3. Launch via bot_ib.sh, which sets BOT_CONFIG=config.ib.local.yaml
 
-Scheduled jobs (ET timezone) — declared by each EP plugin, not here:
-  3:00 PM  — EP earnings scan + strategy A/B evaluation
-  3:00 PM  — EP news scan + strategy evaluation
-  3:45 PM  — EP earnings day-2 confirmation check
-  3:50 PM  — EP earnings execute (limit orders)
-  3:50 PM  — EP news execute (limit orders)
-  3:55 PM  — EOD tasks: trailing stops, max hold exits, P&L
+Scheduled jobs (ET timezone):
+  Scan + day-2-confirm jobs run only in the Alpaca bot — the IB bot skips
+  them via the scheduler's skip_jobs param. The IB bot only runs:
+    3:37–3:59 PM — EP earnings execute (limit orders, retry per minute)
+    3:37–3:59 PM — EP news execute (limit orders, retry per minute)
+    3:55 PM      — EOD tasks: trailing stops, max hold exits, P&L
+    every 5 min  — reconcile broker stops during market hours
+    every 60s    — IB Gateway watchdog (reconnect if dropped)
+    every 30s    — heartbeat status write
 
 Usage:
   BOT_CONFIG=config.ib.local.yaml .venv/bin/python main_ib.py
@@ -94,6 +107,8 @@ def load_config(path: str | None = None) -> dict:
         cfg.setdefault("ibkr", {})["client_id"] = int(os.environ["IBKR_CLIENT_ID"])
     if os.environ.get("DATABASE_IB_URL"):
         cfg.setdefault("database_ib", {})["url"] = os.environ["DATABASE_IB_URL"]
+    if os.environ.get("WATCHLIST_SOURCE_DB_URL"):
+        cfg["watchlist_source_db_url"] = os.environ["WATCHLIST_SOURCE_DB_URL"]
     if os.environ.get("TELEGRAM_BOT_TOKEN"):
         cfg.setdefault("telegram", {})["bot_token"] = os.environ["TELEGRAM_BOT_TOKEN"]
     if os.environ.get("TELEGRAM_CHAT_ID"):
@@ -383,8 +398,24 @@ def main():
     scheduler = BackgroundScheduler(timezone=ET)
     _scheduler_ref = scheduler
 
-    # Register cron jobs declared by the EP plugins themselves
-    register_strategy_jobs(scheduler, plugins, config, client, db_engine, notify)
+    # Register cron jobs declared by the EP plugins themselves.
+    # The IB bot is a passive executor — it does NOT run scan or day-2-confirm
+    # jobs. Those run on the Alpaca bot, which writes ready Watchlist rows
+    # that the IB bot reads via config["watchlist_source_db_url"].
+    ib_skip_jobs = (
+        "ep_earnings_scan", "ep_earnings_day2_confirm",
+        "ep_news_scan", "ep_news_day2_confirm",
+    )
+    if not config.get("watchlist_source_db_url"):
+        logger.warning(
+            "watchlist_source_db_url not set — IB bot will read from its own "
+            "(empty) DB and never execute. Set this in config.ib.local.yaml "
+            "to point at the Alpaca DB."
+        )
+    register_strategy_jobs(
+        scheduler, plugins, config, client, db_engine, notify,
+        skip_jobs=ib_skip_jobs,
+    )
 
     # EOD tasks at 3:55 PM ET (swing exits + P&L summary)
     scheduler.add_job(
