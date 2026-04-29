@@ -85,6 +85,15 @@ class IBClient:
         self._contracts: dict[str, object] = {}
         self._contracts_lock = threading.Lock()
 
+        # Account-summary cache. IBKR caps concurrent account-summary
+        # subscriptions per session (~10), so calling accountSummaryAsync()
+        # on every _account_value() lookup quickly hits Error 322
+        # ("Maximum number of account summary requests exceeded"). Instead
+        # we fetch once and reuse for `_ACCOUNT_SUMMARY_TTL` seconds.
+        self._account_summary_rows: list = []
+        self._account_summary_fetched_at: float = 0.0
+        self._account_summary_lock = threading.Lock()
+
     # ------------------------------------------------------------------
     # Event-loop bridge
     # ------------------------------------------------------------------
@@ -114,6 +123,13 @@ class IBClient:
         if not IB_AVAILABLE:
             logger.info("[stub] IBClient.connect()")
             return
+
+        # Invalidate cached state from any prior connection. The watchdog calls
+        # connect() again after a Gateway disconnect, so stale rows from the
+        # previous IB instance must not leak into the new session.
+        with self._account_summary_lock:
+            self._account_summary_rows = []
+            self._account_summary_fetched_at = 0.0
 
         self._start_loop()
         self._ib = IB()
@@ -229,32 +245,81 @@ class IBClient:
     # Account info
     # ------------------------------------------------------------------
 
+    # How long to reuse a fetched account-summary snapshot before re-fetching.
+    # Account values for a paper account barely change minute-to-minute; 30s
+    # is well under the IBKR subscription quota window and keeps a single
+    # ep_*_execute fire (which calls _account_value for NetLiquidation +
+    # potentially BuyingPower) on one fetch.
+    _ACCOUNT_SUMMARY_TTL = 30.0
+
+    def _get_account_summary_rows(self) -> list:
+        """Return the cached AccountSummary rows, refreshing if stale.
+
+        Callers must catch failures and either propagate or notify — silent
+        empty-list returns would let _account_value() return 0 and trip the
+        ZeroDivisionError in risk.manager.check_daily_loss (the bug this
+        cache fixes).
+        """
+        now = time.monotonic()
+        with self._account_summary_lock:
+            if (
+                self._account_summary_rows
+                and (now - self._account_summary_fetched_at) < self._ACCOUNT_SUMMARY_TTL
+            ):
+                return self._account_summary_rows
+
+        # Fetch outside the lock so concurrent callers don't block on each other.
+        # If two callers race here, both will fetch — that's an acceptable cost
+        # vs. holding the lock across an IB round-trip.
+        rows = self._run(self._ib.accountSummaryAsync(), timeout=10)
+
+        with self._account_summary_lock:
+            self._account_summary_rows = list(rows)
+            self._account_summary_fetched_at = time.monotonic()
+        return self._account_summary_rows
+
     def _account_value(self, tag: str) -> float:
-        """Fetch a single AccountSummary tag as a float."""
-        if not IB_AVAILABLE or not self._connected:
-            return 0.0
-        try:
-            rows = self._run(self._ib.accountSummaryAsync(), timeout=10)
-            for r in rows:
-                if r.tag == tag:
-                    try:
-                        return float(r.value)
-                    except (TypeError, ValueError):
-                        return 0.0
-            return 0.0
-        except Exception as e:
-            logger.warning("account_value(%s) failed: %s", tag, e)
-            return 0.0
+        """Fetch a single AccountSummary tag as a float.
+
+        Trade-path: exceptions propagate to _track_job. A wrong-size trade
+        (driven by a fallback 0.0 portfolio value) is worse than no trade —
+        see CLAUDE.md "Trade-path rule".
+        """
+        if not IB_AVAILABLE:
+            return 0.0  # stub mode: ib_async not installed (dev only)
+        if not self._connected:
+            raise RuntimeError(
+                f"IBClient._account_value({tag!r}) called while disconnected"
+            )
+        rows = self._get_account_summary_rows()
+        for r in rows:
+            if r.tag == tag:
+                try:
+                    return float(r.value)
+                except (TypeError, ValueError) as e:
+                    raise RuntimeError(
+                        f"IB account_value({tag!r}): non-numeric value {r.value!r}"
+                    ) from e
+        # Tag not present in the summary — surface this loudly. Possible causes:
+        # IB Gateway hasn't pushed account values yet (usually within seconds of
+        # connect), or the tag name is misspelled. Either case is a real bug, not
+        # something to silently paper over with a 0.
+        available_tags = sorted({r.tag for r in rows})
+        raise RuntimeError(
+            f"IB account_value: tag {tag!r} not in AccountSummary "
+            f"(have {len(rows)} rows, tags: {available_tags[:8]}...)"
+        )
 
     def get_portfolio_value(self) -> float:
+        """Total liquidation value (NetLiquidation). Trade-path; exceptions propagate."""
         if not IB_AVAILABLE:
             return 100_000.0
         return self._account_value("NetLiquidation")
 
     def get_cash(self) -> float:
+        """Cash minus margin used (AvailableFunds). Trade-path; exceptions propagate."""
         if not IB_AVAILABLE:
             return 100_000.0
-        # AvailableFunds = cash minus margin used (closer to "buying headroom")
         return self._account_value("AvailableFunds")
 
     def get_open_positions(self) -> list[dict]:
@@ -488,6 +553,62 @@ class IBClient:
         except Exception as e:
             logger.warning("get_latest_bar(%s) failed: %s", ticker, e)
             return {"ticker": ticker, "last_price": 0.0, "volume": 0}
+
+    def get_realtime_quote(self, ticker: str) -> dict:
+        """Latest bid/ask/last for a single ticker.
+
+        Used by core.execution.resolve_execution_price during EP execute to
+        refresh the entry mid against a live quote (the scanner's price is
+        ~37 min stale by the time we fire). Wide spreads / broken quotes are
+        handled by the caller via ep_execute_max_spread_pct.
+
+        Returns: {"ticker", "bid", "ask", "last_price"}.
+
+        Trade-path: exceptions propagate to _track_job. resolve_execution_price
+        treats a `(0, 0)` bid/ask as "skip this attempt" and the per-minute
+        retry will pick it up on the next fire — that's the right fallback
+        behavior for a transient quote miss, but anything *worse* (no bid/ask
+        AT ALL because of an unhandled error) deserves a JOB FAILED alert.
+        """
+        if not IB_AVAILABLE:
+            return {"ticker": ticker, "bid": 0.0, "ask": 0.0, "last_price": 0.0}
+        if not self._connected:
+            raise RuntimeError(
+                f"IBClient.get_realtime_quote({ticker!r}) called while disconnected"
+            )
+
+        def _f(x: object) -> float:
+            """Coerce IB's float-or-NaN-or-None to a clean float."""
+            if x is None:
+                return 0.0
+            try:
+                v = float(x)
+            except (TypeError, ValueError):
+                return 0.0
+            return v if v == v else 0.0  # NaN check
+
+        async def _snap():
+            contract = await self._qualify(ticker)
+            t = self._ib.reqMktData(contract, snapshot=True)
+            # Wait for bid/ask to arrive. We poll for up to 5s — typical
+            # snapshots resolve in 100-500ms but markets near-close are noisier.
+            for _ in range(50):
+                await asyncio.sleep(0.1)
+                bid_ok = t.bid and t.bid == t.bid and t.bid > 0
+                ask_ok = t.ask and t.ask == t.ask and t.ask > 0
+                last_ok = (t.last and t.last == t.last) or (t.close and t.close == t.close)
+                if bid_ok and ask_ok and last_ok:
+                    break
+            return t
+
+        t = self._run(_snap(), timeout=10)
+        last = _f(t.last) or _f(t.close) or _f(t.marketPrice())
+        return {
+            "ticker": ticker,
+            "bid": _f(t.bid),
+            "ask": _f(t.ask),
+            "last_price": last,
+        }
 
     # ------------------------------------------------------------------
     # Scanner helpers (used by strategies/ep_*/scanner.py)

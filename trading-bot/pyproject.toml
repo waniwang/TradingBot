@@ -24,6 +24,7 @@ alembic = ">=1.13.0"
 fastapi = ">=0.115.0"
 uvicorn = {version = ">=0.34.0", extras = ["standard"]}
 ib_async = ">=2.0.0"   # IBKR API client used by main_ib.py / executor/ib_client.py
+exchange_calendars = ">=4.0.0"   # NYSE calendar for IBClient.is_market_open / is_trading_day
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0.0"
