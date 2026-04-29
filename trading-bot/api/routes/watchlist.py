@@ -177,13 +177,18 @@ def get_watchlist():
 
         cancelled = cancelled_from_triggered + cancelled_from_expired
 
-    # Existing dedup: active wins, then ready, then watching. Applies only to the
-    # forward pipeline — filled/cancelled/expired are terminal states and are
-    # returned without dedup so a full history is visible.
+    # Dedup: active wins over ready; ready wins over watching — but only suppress
+    # watching rows that are NOT day-2-confirm C candidates. EP strategies
+    # intentionally persist both an active pool row AND a watching row for C
+    # candidates. Suppressing watching on active-ticker presence would hide C
+    # candidates from the dashboard. day2_confirm rows are always shown.
     active_tickers = {r.ticker for r in active}
     ready_filtered = [r for r in ready if r.ticker not in active_tickers]
     shown_tickers = active_tickers | {r.ticker for r in ready}
-    watching_filtered = [r for r in watching if r.ticker not in shown_tickers]
+    watching_filtered = [
+        r for r in watching
+        if r.ticker not in shown_tickers or (r.meta or {}).get("day2_confirm")
+    ]
 
     # Final safety: explicitly resort every list newest-first. The base query
     # already orders by added_at desc, but `cancelled` is a concat of two such
