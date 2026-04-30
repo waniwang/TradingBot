@@ -1,0 +1,78 @@
+name: Phantom positions check
+
+# Detect broker-side positions (Alpaca) with no matching DB Position row.
+# Self-contained — runs an inline Python heredoc on the server so we can
+# diagnose without deploying. Once the script lands on prod via a normal
+# deploy, this workflow can be simplified to just call it.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run inline phantom-positions check on Linode
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            if [ -f scripts/phantom_positions_check.py ]; then
+              .venv/bin/python scripts/phantom_positions_check.py
+              exit 0
+            fi
+            # Fallback: inline check if script hasn't been deployed yet.
+            .venv/bin/python - <<'PY'
+            import os, sys, yaml
+            from pathlib import Path
+            ROOT = Path("/opt/trading-bot/trading-bot")
+            sys.path.insert(0, str(ROOT))
+            from db.models import Order, Position, get_session, init_db
+            from executor.alpaca_client import AlpacaClient
+
+            with open(ROOT / "config.yaml") as f:
+                cfg = yaml.safe_load(f)
+            engine = init_db(cfg["database"]["url"])
+            client = AlpacaClient(cfg, notify=None)
+
+            broker = client.get_open_positions()
+            broker_by_sym = {p["symbol"]: p for p in broker}
+            print(f"Alpaca: {len(broker)} open positions: {sorted(broker_by_sym.keys())}")
+
+            with get_session(engine) as s:
+                db_open = s.query(Position).filter(Position.is_open == True).all()
+                db_by_ticker = {p.ticker: p for p in db_open}
+                print(f"DB: {len(db_open)} open positions: {sorted(db_by_ticker.keys())}")
+
+                phantoms = [sym for sym in broker_by_sym if sym not in db_by_ticker]
+                orphans = [t for t in db_by_ticker if t not in broker_by_sym]
+
+                print()
+                print("=" * 70)
+                print(f"PHANTOM (broker has, DB missing): {len(phantoms)}")
+                print("=" * 70)
+                for sym in sorted(phantoms):
+                    bp = broker_by_sym[sym]
+                    print(f"  {sym}: qty={bp['qty']} avg=${bp['avg_entry_price']:.2f} "
+                          f"now=${bp['current_price']:.2f} pl=${bp['unrealized_pl']:+.2f}")
+                    orders = (s.query(Order)
+                              .filter(Order.ticker == sym)
+                              .order_by(Order.created_at.desc()).limit(3).all())
+                    for o in orders:
+                        print(f"    Order id={o.id} {o.side} qty={o.qty} filled_qty={o.filled_qty} "
+                              f"avg=${(o.filled_avg_price or 0):.2f} status={o.status} {o.created_at}")
+                print()
+                print("=" * 70)
+                print(f"ORPHAN (DB open, broker closed): {len(orphans)}")
+                print("=" * 70)
+                for t in sorted(orphans):
+                    p = db_by_ticker[t]
+                    print(f"  {t}: id={p.id} {p.setup_type} {p.side} {p.shares}@${p.entry_price:.2f} stop=${p.stop_price:.2f}")
+                print()
+                print(f"SUMMARY: {len(phantoms)} phantom, {len(orphans)} orphan")
+            PY
