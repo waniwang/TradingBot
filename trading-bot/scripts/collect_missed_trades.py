@@ -139,14 +139,27 @@ def _short_reason(row: Watchlist) -> str:
 
 
 def _historical_day2_close(client, ticker: str, day2_date: date) -> float | None:
-    """Pull the daily bar for the day-2 date and return its close."""
+    """Pull the daily bar for the day-2 date and return its close.
+
+    get_daily_bars_batch returns DataFrames with `date` as a COLUMN (Alpaca
+    path) or as a DatetimeIndex (yfinance fallback) — handle both.
+    """
+    import pandas as pd
     today = datetime.now(ET).date()
     days_back = (today - day2_date).days + 7  # padding for weekends/holidays
     bars_by_ticker = client.get_daily_bars_batch([ticker], days=max(days_back, 30))
     df = bars_by_ticker.get(ticker)
     if df is None or df.empty:
         return None
-    # DataFrame index is DatetimeIndex; lookup by exact date.
+
+    if "date" in df.columns:
+        dates = pd.to_datetime(df["date"]).dt.date
+        match = df[dates == day2_date]
+        if match.empty:
+            return None
+        return float(match.iloc[0]["close"])
+
+    # DatetimeIndex form (yfinance fallback typically lands here)
     for idx in df.index:
         d = idx.date() if hasattr(idx, "date") else idx
         if d == day2_date:

@@ -1,7 +1,7 @@
 name: Collect missed trades
 
 # Nightly + on-demand: run scripts/collect_missed_trades.py on the server,
-# pull the resulting CSV back to the runner, and commit any changes to
+# capture the resulting CSV via stdout, and commit any changes to
 # docs/missed_trades.csv. The committed file is the source of truth for the
 # missed-trades tracker. A Google Sheet can sync from the raw GitHub URL via
 # =IMPORTDATA() — no Google API credentials needed on our side.
@@ -23,49 +23,55 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run collector on Linode and pull CSV back
+      - name: Run collector and capture CSV via SSH
+        id: collect
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SERVER_SSH_KEY }}
+          # capture_stdout streams everything the remote script prints back
+          # to this step's stdout. We redirect only the cat output to stdout
+          # and send the collector's logging to stderr so the captured stdout
+          # is a clean CSV.
+          capture_stdout: true
           script: |
             set -e
             cd /opt/trading-bot/trading-bot
             set -a && source .env && set +a
-            mkdir -p /tmp/missed-trades
+            CSV_PATH=/tmp/missed_trades.csv
             .venv/bin/python scripts/collect_missed_trades.py \
-              --output /tmp/missed-trades/missed_trades.csv
+              --output "$CSV_PATH" 1>&2
+            # Print ONLY the CSV to stdout — the runner captures this and
+            # writes it to docs/missed_trades.csv.
+            cat "$CSV_PATH"
 
-      - name: Copy CSV from Linode to runner
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: root
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          source: /tmp/missed-trades/missed_trades.csv
-          target: docs/
-          strip_components: 3   # strip /tmp/missed-trades/ prefix
+      - name: Write captured CSV to docs/missed_trades.csv
+        run: |
+          mkdir -p docs
+          # ssh-action prefixes captured stdout with a header line; strip
+          # anything before the first CSV header line ("date,failure_time,…").
+          printf '%s' "${{ steps.collect.outputs.stdout }}" \
+            | awk '/^date,failure_time,/{found=1} found' \
+            > docs/missed_trades.csv
+          echo "=== Preview ==="
+          head -10 docs/missed_trades.csv
+          echo "..."
+          echo "Total rows: $(($(wc -l < docs/missed_trades.csv) - 1))"
 
       - name: Commit if changed
         run: |
           set -e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet docs/missed_trades.csv; then
+          if git diff --quiet docs/missed_trades.csv 2>/dev/null && git ls-files --error-unmatch docs/missed_trades.csv > /dev/null 2>&1; then
             echo "No changes to docs/missed_trades.csv — nothing to commit"
             exit 0
           fi
           git add docs/missed_trades.csv
+          if git diff --cached --quiet; then
+            echo "Staged diff is empty — nothing to commit"
+            exit 0
+          fi
           git commit -m "chore(missed-trades): refresh tracker $(date -u +'%Y-%m-%d')"
           git push origin main
-
-      - name: Show summary
-        run: |
-          echo "=== Latest missed_trades.csv ==="
-          if [ -f docs/missed_trades.csv ]; then
-            head -1 docs/missed_trades.csv
-            echo "Total rows: $(($(wc -l < docs/missed_trades.csv) - 1))"
-          else
-            echo "No CSV produced"
-          fi
