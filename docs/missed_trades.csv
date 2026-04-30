@@ -8,6 +8,3 @@ date,failure_time,ticker,strategy,intended_entry,intended_stop,would_confirm,rea
 2026-04-27,2026-04-27T19:35:29.310534Z,INTC,ep_earnings_c,84.99,79.04,yes,fetch_current_price returned None during day-2 confirm,756390a
 2026-04-27,2026-04-27T19:35:29.310537Z,WKC,ep_earnings_c,26.27,24.43,yes,fetch_current_price returned None during day-2 confirm,756390a
 2026-04-27,2026-04-27T19:35:29.310538Z,CHE,ep_earnings_c,422.80,393.20,yes,fetch_current_price returned None during day-2 confirm,756390a
-===============================================
-✅ Successfully executed commands to all hosts.
-===============================================
