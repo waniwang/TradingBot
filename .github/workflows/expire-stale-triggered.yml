@@ -1,0 +1,38 @@
+name: Expire stale triggered rows
+
+# Manually-triggered cleanup: flip Watchlist rows in stage IN (ready, triggered)
+# with scan_date older than the chosen window to stage="expired", so the IBKR
+# bot stops re-firing them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'true to actually expire rows; false for dry-run preview.'
+        required: false
+        default: 'false'
+      max_age_days:
+        description: 'Staleness cap (calendar days). Default 4.'
+        required: false
+        default: '4'
+
+jobs:
+  expire:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run expire_stale_triggered_rows.py on Linode
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            FLAGS=""
+            if [ "${{ github.event.inputs.apply }}" = "true" ]; then
+              FLAGS="--yes"
+            fi
+            FLAGS="$FLAGS --max-age-days ${{ github.event.inputs.max_age_days || 4 }}"
+            .venv/bin/python scripts/expire_stale_triggered_rows.py $FLAGS

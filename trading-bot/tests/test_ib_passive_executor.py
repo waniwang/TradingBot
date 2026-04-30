@@ -175,6 +175,50 @@ def test_read_ready_entries_includes_prior_dates(tmp_alpaca_db):
     assert {e["ticker"] for e in entries} == {"OLD", "NEW"}
 
 
+def test_read_ready_entries_rejects_stale_rows(tmp_alpaca_db):
+    """Regression for the 2026-04-30 incident: ``triggered`` rows that
+    Alpaca processed days ago must NOT be returned. Without this filter
+    the IB bot picks up week-old rows on every cron tick and places fresh
+    orders at stale entry prices, because IB's local-DB idempotency cannot
+    detect rows it never saw the first time around."""
+    from executor.watchlist_source import read_ready_entries
+
+    url, engine = tmp_alpaca_db
+    today = _today_et()
+    # In window: today (A/B) and yesterday (C confirmed today).
+    _seed_watchlist_row(engine, "FRESH_A", "ep_earnings", "ready", today, ep_strategy="A")
+    _seed_watchlist_row(engine, "FRESH_C", "ep_earnings", "triggered", today - timedelta(days=1), ep_strategy="C")
+    # Out of window: 5+ days old, regardless of stage.
+    _seed_watchlist_row(engine, "STALE5", "ep_earnings", "ready", today - timedelta(days=5), ep_strategy="A")
+    _seed_watchlist_row(engine, "STALE7", "ep_earnings", "triggered", today - timedelta(days=7), ep_strategy="A")
+    _seed_watchlist_row(engine, "STALE30", "ep_earnings", "triggered", today - timedelta(days=30), ep_strategy="B")
+
+    entries = read_ready_entries(url, "ep_earnings", today)
+    tickers = {e["ticker"] for e in entries}
+    assert tickers == {"FRESH_A", "FRESH_C"}, (
+        f"stale rows leaked through filter: got {tickers}"
+    )
+
+
+def test_read_ready_entries_max_age_days_override(tmp_alpaca_db):
+    """The ``max_age_days`` override is for tests/edge cases. Setting it
+    high should re-admit older rows; setting it to 0 should accept only
+    today."""
+    from executor.watchlist_source import read_ready_entries
+
+    url, engine = tmp_alpaca_db
+    today = _today_et()
+    _seed_watchlist_row(engine, "T0", "ep_earnings", "ready", today)
+    _seed_watchlist_row(engine, "T1", "ep_earnings", "ready", today - timedelta(days=1), ep_strategy="C")
+    _seed_watchlist_row(engine, "T2", "ep_earnings", "ready", today - timedelta(days=2), ep_strategy="A")
+
+    only_today = read_ready_entries(url, "ep_earnings", today, max_age_days=0)
+    assert {e["ticker"] for e in only_today} == {"T0"}
+
+    wide = read_ready_entries(url, "ep_earnings", today, max_age_days=30)
+    assert {e["ticker"] for e in wide} == {"T0", "T1", "T2"}
+
+
 def test_read_ready_entries_skips_rows_without_ep_strategy(tmp_alpaca_db, caplog):
     from executor.watchlist_source import read_ready_entries
 
