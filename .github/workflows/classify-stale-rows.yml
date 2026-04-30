@@ -1,0 +1,40 @@
+name: Classify stale Watchlist rows
+
+# For each stale row (stage IN (ready, triggered), scan_date < cutoff),
+# look up the matching Order/Position and decide whether the row represents
+# (a) a real Alpaca trade that just shouldn't be re-fired by IBKR (TRADED:
+# leave alone), (b) a bot/broker failure that should appear in the dashboard's
+# Cancelled tab ([bot-failure] tag), or (c) an orphan candidate row with no
+# strategy info ([stale-cleanup] tag).
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'true to apply; false for dry-run preview.'
+        required: false
+        default: 'false'
+      max_age_days:
+        description: 'Calendar-day staleness cap (default 4).'
+        required: false
+        default: '4'
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run classify_stale_rows.py on Linode
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            FLAGS="--max-age-days ${{ github.event.inputs.max_age_days || 4 }}"
+            if [ "${{ github.event.inputs.apply }}" = "true" ]; then
+              FLAGS="$FLAGS --yes"
+            fi
+            .venv/bin/python scripts/classify_stale_rows.py $FLAGS
