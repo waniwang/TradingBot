@@ -1,0 +1,29 @@
+name: Show recent failures
+
+# Manually-triggered diagnostic: dumps the last N days of failed JobExecution
+# rows so we can answer "what was the 1 recent failure" the doctor endpoint
+# is reporting without needing SSH access.
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Lookback window in days (default: 2 — matches /api/doctor).'
+        required: false
+        default: '2'
+
+jobs:
+  show:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run recent_failures.py on Linode
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            .venv/bin/python scripts/recent_failures.py --days ${{ github.event.inputs.days || 2 }}
