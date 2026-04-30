@@ -1,0 +1,71 @@
+name: Collect missed trades
+
+# Nightly + on-demand: run scripts/collect_missed_trades.py on the server,
+# pull the resulting CSV back to the runner, and commit any changes to
+# docs/missed_trades.csv. The committed file is the source of truth for the
+# missed-trades tracker. A Google Sheet can sync from the raw GitHub URL via
+# =IMPORTDATA() — no Google API credentials needed on our side.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 21:00 UTC daily ≈ 5:00 PM ET during DST / 4:00 PM ET in standard time.
+    # Runs after EOD tasks (3:55 PM ET) so any same-day [bot-failure] rows are
+    # already in the DB by the time we collect.
+    - cron: '0 21 * * 1-5'
+
+permissions:
+  contents: write   # needed to commit the refreshed CSV back to main
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run collector on Linode and pull CSV back
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            mkdir -p /tmp/missed-trades
+            .venv/bin/python scripts/collect_missed_trades.py \
+              --output /tmp/missed-trades/missed_trades.csv
+
+      - name: Copy CSV from Linode to runner
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: /tmp/missed-trades/missed_trades.csv
+          target: docs/
+          strip_components: 3   # strip /tmp/missed-trades/ prefix
+
+      - name: Commit if changed
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet docs/missed_trades.csv; then
+            echo "No changes to docs/missed_trades.csv — nothing to commit"
+            exit 0
+          fi
+          git add docs/missed_trades.csv
+          git commit -m "chore(missed-trades): refresh tracker $(date -u +'%Y-%m-%d')"
+          git push origin main
+
+      - name: Show summary
+        run: |
+          echo "=== Latest missed_trades.csv ==="
+          if [ -f docs/missed_trades.csv ]; then
+            head -1 docs/missed_trades.csv
+            echo "Total rows: $(($(wc -l < docs/missed_trades.csv) - 1))"
+          else
+            echo "No CSV produced"
+          fi
