@@ -73,10 +73,21 @@ def _classify(row: Watchlist, session) -> tuple[str, str, str | None]:
                 "no ep_strategy in meta (orphan candidate row, dashboard ignores)",
                 STALE_TAG)
 
+    # Match Position by either the post-d7691dc per-variant naming
+    # (`ep_earnings_a` / `ep_earnings_b` / `ep_earnings_c`) or the legacy
+    # plain `ep_earnings` / `ep_news` form. d7691dc landed 2026-04-24, so any
+    # Position written before that date uses the legacy form. Looking up only
+    # the suffixed name caused the 2026-04-30 false-CANCELLED incident:
+    # 6 real-trade rows from 2026-04-22..24 were mis-tagged [bot-failure]
+    # because their Positions were stored as `ep_earnings`, not `ep_earnings_a`.
     setup_with_strategy = f"{row.setup_type}_{ep.lower()}"
+    candidate_setup_types = [setup_with_strategy, row.setup_type]
     pos = (
         session.query(Position)
-        .filter_by(ticker=row.ticker, setup_type=setup_with_strategy)
+        .filter(
+            Position.ticker == row.ticker,
+            Position.setup_type.in_(candidate_setup_types),
+        )
         .order_by(Position.opened_at.desc())
         .first()
     )
