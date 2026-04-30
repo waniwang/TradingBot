@@ -49,10 +49,11 @@ jobs:
       - name: Write captured CSV to docs/missed_trades.csv
         run: |
           mkdir -p docs
-          # ssh-action prefixes captured stdout with a header line; strip
-          # anything before the first CSV header line ("date,failure_time,…").
+          # ssh-action wraps captured stdout with banner lines (`=== blah
+          # ===`) before AND after the script output. Keep everything from
+          # the CSV header through the next banner line — strips both ends.
           printf '%s' "${{ steps.collect.outputs.stdout }}" \
-            | awk '/^date,failure_time,/{found=1} found' \
+            | awk '/^date,failure_time,/{found=1} /^={3,}/{if(found)exit; next} found' \
             > docs/missed_trades.csv
           echo "=== Preview ==="
           head -10 docs/missed_trades.csv
