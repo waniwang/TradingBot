@@ -45,6 +45,7 @@ def main() -> int:
     cfg = load_config()
     engine = init_db(cfg["database"]["url"])
     client = AlpacaClient(cfg, notify=None)
+    client.connect()
 
     broker_positions = client.get_open_positions()
     broker_by_symbol = {p["symbol"]: p for p in broker_positions}

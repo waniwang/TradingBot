@@ -39,6 +39,7 @@ jobs:
                 cfg = yaml.safe_load(f)
             engine = init_db(cfg["database"]["url"])
             client = AlpacaClient(cfg, notify=None)
+            client.connect()
 
             broker = client.get_open_positions()
             broker_by_sym = {p["symbol"]: p for p in broker}
