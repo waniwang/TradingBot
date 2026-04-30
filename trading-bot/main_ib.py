@@ -159,8 +159,11 @@ def make_notifier(config: dict):
     _loop_thread.start()
 
     def notify(message: str):
-        # Prefix so you can tell IB messages apart from Alpaca in Telegram
-        tagged = f"[IB] {message}"
+        # Prefix every IB Telegram message with 🐢 so it's visually
+        # distinguishable from the Alpaca bot's 🦙-prefixed messages, even
+        # when both bots send to the same chat. Replaces the old "[IB]"
+        # string tag — emojis read faster at a glance.
+        tagged = f"🐢 {message}"
 
         async def _send():
             for cid in chat_ids:
@@ -259,14 +262,25 @@ def job_eod_tasks_ib(config, client, tracker, db_engine, notify):
     portfolio_value = client.get_portfolio_value()
     daily = tracker.compute_daily_pnl(portfolio_value, current_prices=current_prices)
 
+    # Match the Alpaca-side EOD summary shape exactly (commit consolidating
+    # both formats); the only differentiator between bots in Telegram is the
+    # 🦙 / 🐢 prefix that make_notifier prepends.
+    from core.eod import compute_eod_strategy_breakdown
+    strategy_line, opened_n, closed_n, failed_n = compute_eod_strategy_breakdown(
+        daily.trade_date, db_engine,
+    )
+
     sign = "+" if daily.total_pnl >= 0 else ""
     summary = (
-        f"EOD SUMMARY (IB)\n"
+        f"EOD SUMMARY\n"
         f"Date: {daily.trade_date}\n"
         f"P&L: {sign}${daily.total_pnl:.2f}\n"
         f"Realized: ${daily.realized_pnl:.2f}\n"
-        f"Trades: {daily.num_trades} ({daily.num_winners}W / {daily.num_losers}L)\n"
-        f"Portfolio: ${portfolio_value:,.0f}"
+        f"Portfolio: ${portfolio_value:,.0f}\n"
+        f"Strategies: {strategy_line}\n"
+        f"Trades Opened: {opened_n}\n"
+        f"Trades Closed: {closed_n}\n"
+        f"Orders Failed: {failed_n}"
     )
     notify(summary)
     logger.info(summary)

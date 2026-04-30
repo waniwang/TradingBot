@@ -161,10 +161,15 @@ def make_notifier(config: dict):
     _loop_thread.start()
 
     def notify(message: str):
+        # Prefix with 🦙 so Alpaca-bot messages are visually distinguishable
+        # from the IB bot's 🐢-prefixed ones in Telegram. See main_ib.py for
+        # the matching IB-side prefix.
+        tagged = f"🦙 {message}"
+
         async def _send():
             for cid in chat_ids:
                 try:
-                    await bot.send_message(chat_id=cid, text=message)
+                    await bot.send_message(chat_id=cid, text=tagged)
                 except Exception as e:
                     logger.warning("Telegram send failed (chat_id=%s): %s", cid, e)
 
@@ -571,12 +576,9 @@ def _validate_signal(ticker: str, sig) -> bool:
 # core/execution.py and are imported at the top of this file.
 
 
-_SETUP_LABELS = {
-    "ep_earnings": "EP Earnings",
-    "ep_earnings_c": "EP Earnings",
-    "ep_news": "EP News",
-    "ep_news_c": "EP News",
-}
+# SETUP_LABELS and the strategy-breakdown helper now live in core/eod.py so
+# the IB bot can reuse them and produce the same EOD summary shape.
+from core.eod import SETUP_LABELS as _SETUP_LABELS, compute_eod_strategy_breakdown as _eod_strategy_breakdown  # noqa: F401, E402
 
 
 # Map Alpaca's order status vocabulary to our DB enum's allowed values.
@@ -620,58 +622,6 @@ def _normalize_broker_status(broker_status: str) -> str:
         )
         return "cancelled"
     return normalized
-
-
-def _eod_strategy_breakdown(trade_date, db_engine) -> tuple[str, int, int, int]:
-    """Summarize today's strategy executions for the EOD Telegram message.
-
-    Returns (strategy_line, opened_count, closed_count, failed_count).
-    `strategy_line` looks like "EP Earnings A(1), EP News B(2), EP Earnings C(1)"
-    or "none" if no positions opened today. `opened` counts Positions with
-    opened_at on `trade_date` (ET); `closed` counts Positions with closed_at on
-    `trade_date`; `failed` counts Orders created on `trade_date` with status
-    cancelled or rejected.
-    """
-    from datetime import datetime as _dt, time as _time, timedelta as _td
-    from db.models import Order, Position, get_session
-    from api.variation import resolve_variations_batch
-
-    et_tz = pytz.timezone("America/New_York")
-    day_start_et = et_tz.localize(_dt.combine(trade_date, _time.min))
-    day_end_et = day_start_et + _td(days=1)
-    day_start_utc = day_start_et.astimezone(pytz.UTC).replace(tzinfo=None)
-    day_end_utc = day_end_et.astimezone(pytz.UTC).replace(tzinfo=None)
-
-    with get_session(db_engine) as session:
-        opened = session.query(Position).filter(
-            Position.opened_at >= day_start_utc,
-            Position.opened_at < day_end_utc,
-        ).all()
-        closed_n = session.query(Position).filter(
-            Position.closed_at >= day_start_utc,
-            Position.closed_at < day_end_utc,
-        ).count()
-        failed_n = session.query(Order).filter(
-            Order.created_at >= day_start_utc,
-            Order.created_at < day_end_utc,
-            Order.status.in_(("cancelled", "rejected")),
-        ).count()
-
-        if not opened:
-            return "none", 0, closed_n, failed_n
-
-        # Resolve A/B/C variant for each opened position via Watchlist join
-        keys = [(p.ticker, p.setup_type, p.opened_at) for p in opened]
-        variations = resolve_variations_batch(session, keys)
-
-    counts: dict[tuple[str, str], int] = {}
-    for p in opened:
-        label = _SETUP_LABELS.get(p.setup_type, p.setup_type)
-        variant = variations.get((p.ticker, p.setup_type, p.opened_at)) or "?"
-        counts[(label, variant)] = counts.get((label, variant), 0) + 1
-
-    parts = [f"{label} {variant}({n})" for (label, variant), n in sorted(counts.items())]
-    return ", ".join(parts), len(opened), closed_n, failed_n
 
 
 def job_eod_tasks(
