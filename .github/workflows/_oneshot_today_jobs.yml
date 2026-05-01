@@ -1,0 +1,40 @@
+name: One-shot — list all today's jobs (success + fail)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run inline diagnostic on Linode
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            .venv/bin/python -c "
+            import os, sys, yaml, pytz
+            from datetime import datetime
+            from pathlib import Path
+            ROOT = Path('/opt/trading-bot/trading-bot')
+            sys.path.insert(0, str(ROOT))
+            from db.models import JobExecution, get_session, init_db
+            ET = pytz.timezone('America/New_York')
+            with open(ROOT / 'config.yaml') as f:
+                cfg = yaml.safe_load(f)
+            if os.environ.get('DATABASE_URL'):
+                cfg['database']['url'] = os.environ['DATABASE_URL']
+            engine = init_db(cfg['database']['url'])
+            today = datetime.now(ET).date()
+            with get_session(engine) as s:
+                rows = s.query(JobExecution).filter(JobExecution.trade_date == today).order_by(JobExecution.started_at).all()
+            print(f'=== {len(rows)} jobs on {today} ===')
+            for r in rows:
+                started = r.started_at.strftime('%H:%M:%S') if r.started_at else '?'
+                print(f'  {started}  {r.job_id:40s}  {r.status:10s}  result={r.result_summary or \"-\"}')
+            "
