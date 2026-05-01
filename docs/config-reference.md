@@ -14,7 +14,7 @@ alpaca:
   secret_key: YOUR_ALPACA_SECRET_KEY
 
 risk:
-  risk_per_trade_pct: 1.0      # % of portfolio risked per trade
+  risk_per_trade_pct: 0.4      # % of portfolio risked per trade
   max_positions: 4             # max concurrent open positions
   max_position_pct: 15.0       # max single position as % of portfolio notional
   daily_loss_limit_pct: 3.0    # halt day if daily loss exceeds this %
@@ -99,7 +99,7 @@ Can also be set via env vars `ALPACA_API_KEY` and `ALPACA_SECRET_KEY`.
 ### `risk`
 | Key | Default | Description |
 |---|---|---|
-| `risk_per_trade_pct` | `1.0` | % of portfolio value risked per trade |
+| `risk_per_trade_pct` | `0.4` | % of portfolio value risked per trade |
 | `max_positions` | `4` | Max concurrent open positions |
 | `max_position_pct` | `15.0` | Max single position notional as % of portfolio |
 | `daily_loss_limit_pct` | `3.0` | Daily loss % that halts trading for the day |

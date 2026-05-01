@@ -20,7 +20,7 @@
 |---|---|
 | **Parabolic short requires locate access** | Strategy disabled — negative expectancy in 6-year backtest (Sharpe -0.39 OOS). If re-enabled, verify Alpaca margin account |
 | **Overfitting in backtest** | Walk-forward validation; hold out 2024 data as out-of-sample test |
-| **Gap risk on open positions overnight** | Defined risk per trade (1%); max 4 positions; diversification limits damage |
+| **Gap risk on open positions overnight** | Defined risk per trade (0.4%); max 4 positions; diversification limits damage |
 | **Low liquidity names — order never fills** | Minimum ADV (average daily volume) filter in scanners: >= 500k shares/day |
 | **False signals during broad market selloffs** | Optional: check SPY/QQQ trend filter — only trade longs if market in uptrend |
 | **Earnings risk on breakout positions** | Check earnings date; avoid holding through earnings unless intentional |

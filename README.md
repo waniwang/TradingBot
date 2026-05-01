@@ -186,7 +186,7 @@ Strategy Scanners                Strategy Signals              Monitor (intraday
     (3 PM: news gappers)        └── execute @ 3:50 PM
          ↓                           ↓                              ↓
     Watchlist ──────────────→ Risk Manager ──────────────→ Alpaca Executor
-                              (1% risk/trade,               (limit entries,
+                              (0.4% risk/trade,             (limit entries,
                                max 4 positions,              GTC stop orders)
                                15% max position)
 ```
@@ -300,7 +300,7 @@ cd trading-bot && .venv/bin/pytest tests/ -v
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `risk.risk_per_trade_pct` | 1.0 | % of portfolio risked per trade |
+| `risk.risk_per_trade_pct` | 0.4 | % of portfolio risked per trade |
 | `risk.max_positions` | 4 | Max concurrent open positions |
 | `risk.max_position_pct` | 15.0 | Max single position as % of portfolio notional |
 | `risk.daily_loss_limit_pct` | 3.0 | Halt trading if daily loss exceeds this % |

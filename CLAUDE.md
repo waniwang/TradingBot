@@ -52,7 +52,7 @@ Strategy Scanners (premarket)     Strategy Signals (market open)    Monitor (int
 └── parabolic_short/scanner.py
          ↓                               ↓                              ↓
     Watchlist Manager ─────────→ Risk Manager ──────────────→ Alpaca Executor
-    (scanner/watchlist_manager.py)  (1% risk/trade,             (limit entries,
+    (scanner/watchlist_manager.py)  (0.4% risk/trade,           (limit entries,
                                      max 4 positions,            GTC stop orders)
                                      15% max position)
 ```
