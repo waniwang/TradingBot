@@ -179,7 +179,7 @@ Detailed docs live in each module's README.md. Summary below.
 
 ```python
 risk_per_share = abs(entry_price - stop_price)
-max_risk_dollars = portfolio_value * (risk_per_trade_pct / 100)  # default 1%
+max_risk_dollars = portfolio_value * (risk_per_trade_pct / 100)  # default 0.4%
 raw_shares = floor(max_risk_dollars / risk_per_share)
 
 max_notional = portfolio_value * (max_position_pct / 100)        # default 15%
