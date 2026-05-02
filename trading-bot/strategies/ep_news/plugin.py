@@ -248,16 +248,32 @@ class EPNewsPlugin:
             from executor.watchlist_source import read_ready_entries
             entries = read_ready_entries(watchlist_source_db_url, "ep_news", today)
         else:
+            from core.trading_calendar import is_valid_scan_date
             with get_session(db_engine) as session:
+                # Pre-filter SQL by a loose 4-day window for performance, then
+                # apply the per-variant scan_date check in Python (A/B require
+                # scan_date == today; C requires scan_date == previous
+                # trading day). Without this, a stale "ready" row leftover
+                # from a prior session leaks into the next day's execute —
+                # the 2026-05-01 FSS leak (4/29 C row firing on 5/1).
                 rows = session.query(Watchlist).filter(
                     Watchlist.setup_type == "ep_news",
                     Watchlist.stage == "ready",
+                    Watchlist.scan_date >= today - timedelta(days=4),
                     Watchlist.scan_date <= today,
                 ).all()
                 for wl in rows:
                     meta = wl.meta or {}
-                    if not meta.get("ep_strategy"):
+                    variant = meta.get("ep_strategy")
+                    if not variant:
                         logger.warning("EP news: ready row %s has no ep_strategy in meta, skipping", wl.ticker)
+                        continue
+                    if not is_valid_scan_date(variant, wl.scan_date, today):
+                        logger.warning(
+                            "EP news: %s (%s) scan_date=%s not valid for today=%s — "
+                            "skipping stale row",
+                            wl.ticker, variant, wl.scan_date, today,
+                        )
                         continue
                     entries.append({"ticker": wl.ticker, **meta})
 

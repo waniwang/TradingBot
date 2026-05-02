@@ -31,6 +31,7 @@ from typing import Any
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from core.trading_calendar import is_valid_scan_date
 from db.models import Watchlist
 
 logger = logging.getLogger(__name__)
@@ -42,15 +43,18 @@ logger = logging.getLogger(__name__)
 # idempotency checks against trading_bot_ib.db.
 _VALID_STAGES = ("ready", "triggered")
 
-# Maximum age (in CALENDAR days) of a Watchlist row's scan_date relative to
-# `today`. Strategy intent: A/B fire same-day (scan_date == today), C fires
-# on day-2 (scan_date == today - 1 trading day). 4 calendar days covers the
-# common Friday→Monday weekend gap plus a holiday buffer. Anything older is
-# stale — almost certainly a row Alpaca processed days ago whose `triggered`
-# state was never cleared, and which IBKR's local-DB idempotency cannot
-# detect because IBKR's tables have no record of it. Hardcoding the bound
-# here is the only defense against IBKR re-firing those rows on every cron
-# tick into the indefinite future.
+# Pre-filter window: only fetch rows whose scan_date is within the last
+# ``_MAX_SCAN_AGE_DAYS`` calendar days. This is a coarse SQL-level guard
+# for query performance; the precise per-variant correctness check happens
+# in Python below via ``is_valid_scan_date`` (A/B → today; C → previous
+# trading day). 4 days covers the longest Fri→Tue gap with a holiday
+# buffer, so anything outside that window is automatically stale.
+#
+# Without per-variant filtering the executor leaks stale rows on day +N:
+# the 2026-05-01 incident saw FSS (a 4/29-scanned C row) execute on 5/1
+# instead of 4/30, and FTAI (a 4/30-scanned A row) execute on 5/1 instead
+# of 4/30 — both because the loose ``scan_date <= today`` window let
+# yesterday's leftovers through.
 _MAX_SCAN_AGE_DAYS = 4
 
 _engine_cache: dict[str, Any] = {}
@@ -104,6 +108,7 @@ def read_ready_entries(
     entries: list[dict] = []
     earliest = today - timedelta(days=max_age_days)
     stale_skipped = 0
+    variant_skipped: dict[str, int] = {}  # {variant: count} — wrong-day rows
 
     # Use a plain session — read-only intent, no commit.
     with Session(engine) as session:
@@ -133,19 +138,32 @@ def read_ready_entries(
 
         for wl in rows:
             meta = wl.meta or {}
-            if not meta.get("ep_strategy"):
+            variant = meta.get("ep_strategy")
+            if not variant:
                 logger.warning(
                     "watchlist_source: ready row %s (%s) has no ep_strategy — skipping",
                     wl.ticker, setup_type,
+                )
+                continue
+            # Per-variant scan_date check. A/B require scan_date == today;
+            # C requires scan_date == previous trading day. Anything else
+            # is a stale leftover and must NOT execute.
+            if not is_valid_scan_date(variant, wl.scan_date, today):
+                variant_skipped[variant] = variant_skipped.get(variant, 0) + 1
+                logger.warning(
+                    "watchlist_source: %s (%s/%s) scan_date=%s not valid for "
+                    "today=%s — skipping stale row",
+                    wl.ticker, setup_type, variant, wl.scan_date, today,
                 )
                 continue
             entries.append({"ticker": wl.ticker, **meta})
 
     logger.info(
         "watchlist_source: %d ready/triggered %s rows in [%s, %s] from %s "
-        "(skipped %d stale rows older than %d days)",
+        "(skipped %d stale rows older than %d days, %d wrong-day per variant: %s)",
         len(entries), setup_type, earliest, today, alpaca_db_url,
         stale_skipped, max_age_days,
+        sum(variant_skipped.values()), variant_skipped or "—",
     )
     if stale_skipped > 0:
         logger.warning(

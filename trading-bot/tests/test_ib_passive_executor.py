@@ -160,16 +160,19 @@ def test_read_ready_entries_filters_by_setup_type(tmp_alpaca_db):
 
 
 def test_read_ready_entries_includes_prior_dates(tmp_alpaca_db):
-    """C candidates from yesterday's scan are promoted to ready by today's
-    day-2-confirm job; their scan_date is yesterday but stage=ready today.
-    The filter must include scan_date <= today, not scan_date == today."""
+    """C candidates from the previous trading day's scan are promoted to ready
+    by today's day-2-confirm job; their scan_date is prev-trading-day but
+    stage=ready today. The filter must accept C variant rows whose scan_date
+    matches the previous TRADING day (handles weekends/holidays), and A
+    variant rows whose scan_date is today."""
     from executor.watchlist_source import read_ready_entries
+    from core.trading_calendar import previous_trading_day
 
     url, engine = tmp_alpaca_db
     today = _today_et()
-    yesterday = today - timedelta(days=1)
-    _seed_watchlist_row(engine, "OLD", "ep_earnings", "ready", yesterday, ep_strategy="C")
-    _seed_watchlist_row(engine, "NEW", "ep_earnings", "ready", today)
+    prev_trading = previous_trading_day(today)
+    _seed_watchlist_row(engine, "OLD", "ep_earnings", "ready", prev_trading, ep_strategy="C")
+    _seed_watchlist_row(engine, "NEW", "ep_earnings", "ready", today, ep_strategy="A")
 
     entries = read_ready_entries(url, "ep_earnings", today)
     assert {e["ticker"] for e in entries} == {"OLD", "NEW"}
@@ -182,12 +185,14 @@ def test_read_ready_entries_rejects_stale_rows(tmp_alpaca_db):
     orders at stale entry prices, because IB's local-DB idempotency cannot
     detect rows it never saw the first time around."""
     from executor.watchlist_source import read_ready_entries
+    from core.trading_calendar import previous_trading_day
 
     url, engine = tmp_alpaca_db
     today = _today_et()
-    # In window: today (A/B) and yesterday (C confirmed today).
+    prev_trading = previous_trading_day(today)
+    # In window: today (A) and prev trading day (C confirmed today).
     _seed_watchlist_row(engine, "FRESH_A", "ep_earnings", "ready", today, ep_strategy="A")
-    _seed_watchlist_row(engine, "FRESH_C", "ep_earnings", "triggered", today - timedelta(days=1), ep_strategy="C")
+    _seed_watchlist_row(engine, "FRESH_C", "ep_earnings", "triggered", prev_trading, ep_strategy="C")
     # Out of window: 5+ days old, regardless of stage.
     _seed_watchlist_row(engine, "STALE5", "ep_earnings", "ready", today - timedelta(days=5), ep_strategy="A")
     _seed_watchlist_row(engine, "STALE7", "ep_earnings", "triggered", today - timedelta(days=7), ep_strategy="A")
@@ -200,23 +205,36 @@ def test_read_ready_entries_rejects_stale_rows(tmp_alpaca_db):
     )
 
 
-def test_read_ready_entries_max_age_days_override(tmp_alpaca_db):
-    """The ``max_age_days`` override is for tests/edge cases. Setting it
-    high should re-admit older rows; setting it to 0 should accept only
-    today."""
+def test_read_ready_entries_max_age_days_is_sql_prefilter_only(tmp_alpaca_db):
+    """``max_age_days`` is the SQL pre-filter window — it controls which rows
+    are loaded from disk. The AUTHORITATIVE filter is the per-variant
+    scan_date check (A/B == today; C == previous trading day). So even with
+    ``max_age_days=30`` an A row scanned days ago must NOT be returned —
+    only ``max_age_days=0`` proves we exclude on SQL alone, and only A/B
+    rows on today + C rows on previous trading day are admitted regardless
+    of how large the window is.
+    """
     from executor.watchlist_source import read_ready_entries
+    from core.trading_calendar import previous_trading_day
 
     url, engine = tmp_alpaca_db
     today = _today_et()
-    _seed_watchlist_row(engine, "T0", "ep_earnings", "ready", today)
-    _seed_watchlist_row(engine, "T1", "ep_earnings", "ready", today - timedelta(days=1), ep_strategy="C")
-    _seed_watchlist_row(engine, "T2", "ep_earnings", "ready", today - timedelta(days=2), ep_strategy="A")
+    prev_trading = previous_trading_day(today)
+    _seed_watchlist_row(engine, "T0_TODAY_A", "ep_earnings", "ready", today, ep_strategy="A")
+    _seed_watchlist_row(engine, "T1_PREV_C", "ep_earnings", "ready", prev_trading, ep_strategy="C")
+    # Stale A scanned 2 days ago — invalid for A even with max_age_days=30.
+    _seed_watchlist_row(engine, "T2_STALE_A", "ep_earnings", "ready", today - timedelta(days=2), ep_strategy="A")
 
+    # max_age_days=0 → only today's rows reach the per-variant filter; prev_trading is excluded by SQL.
     only_today = read_ready_entries(url, "ep_earnings", today, max_age_days=0)
-    assert {e["ticker"] for e in only_today} == {"T0"}
+    assert {e["ticker"] for e in only_today} == {"T0_TODAY_A"}
 
+    # Wide window → SQL admits all 3, but per-variant rejects T2_STALE_A.
     wide = read_ready_entries(url, "ep_earnings", today, max_age_days=30)
-    assert {e["ticker"] for e in wide} == {"T0", "T1", "T2"}
+    assert {e["ticker"] for e in wide} == {"T0_TODAY_A", "T1_PREV_C"}, (
+        "per-variant filter must reject A rows whose scan_date != today, "
+        "regardless of the SQL pre-filter window"
+    )
 
 
 def test_read_ready_entries_skips_rows_without_ep_strategy(tmp_alpaca_db, caplog):
