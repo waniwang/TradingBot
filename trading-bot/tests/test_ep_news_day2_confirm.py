@@ -37,7 +37,7 @@ def db_engine():
 @pytest.fixture
 def mock_client():
     client = MagicMock()
-    client.place_limit_order.return_value = "broker-id-news"
+    client.place_oto_order.return_value = "broker-id-news"
     client.get_portfolio_value.return_value = 100_000.0
     # resolve_execution_price (added 2026-04-22) fetches a live quote before
     # placing each order. Default stub keeps mid at or just below the seeded
@@ -235,7 +235,7 @@ class TestExecuteIsDBDriven:
         _seed_ready(db_engine, ticker="AU", ep_strategy="C", entry_price=22.0)
         EPNewsPlugin().job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
 
-        mock_client.place_limit_order.assert_called_once()
+        mock_client.place_oto_order.assert_called_once()
         with get_session(db_engine) as session:
             wl = session.query(Watchlist).filter_by(ticker="AU").first()
             assert wl.stage == "triggered"
@@ -254,12 +254,12 @@ class TestExecuteIsDBDriven:
             session.commit()
 
         EPNewsPlugin().job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
-        mock_client.place_limit_order.assert_not_called()
+        mock_client.place_oto_order.assert_not_called()
 
     def test_execute_no_ready_rows_returns_early(self, db_engine, mock_client, patch_main):
         result = EPNewsPlugin().job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
         assert "No entries" in (result or "")
-        mock_client.place_limit_order.assert_not_called()
+        mock_client.place_oto_order.assert_not_called()
 
     def test_replay_does_not_double_submit(self, db_engine, mock_client, patch_main):
         """Guard against `job_execute` running twice before the first run's
@@ -282,7 +282,7 @@ class TestExecuteIsDBDriven:
 
         EPNewsPlugin().job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
 
-        mock_client.place_limit_order.assert_not_called()
+        mock_client.place_oto_order.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +327,7 @@ def test_full_lifecycle_survives_restart_between_confirm_and_execute(
     del plugin1
     EPNewsPlugin().job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
 
-    mock_client.place_limit_order.assert_called_once()
+    mock_client.place_oto_order.assert_called_once()
     with get_session(db_engine) as session:
         wl = session.query(Watchlist).filter_by(ticker="STAA").first()
         assert wl.stage == "triggered"

@@ -157,19 +157,29 @@ def _await_fill_and_setup_stop(
     ticker, signal, shares, broker_order_id, order_db_id, client, db_engine, notify
 ):
     """
-    Runs in a background thread after an entry order is submitted.
+    Runs in a background thread after an OTO entry order is submitted.
 
-    Waits for fill confirmation, then:
+    Waits for the parent fill, then:
       - Updates the Order record with actual fill price
       - Creates the Position record
-      - Places a GTC stop order with the broker
+      - Discovers the child stop's broker id (Alpaca submits the stop
+        automatically when the OTO parent fills — see
+        ``AlpacaClient.place_oto_order``) and persists it to the Position
+
+    The previous implementation placed the stop as a separate naked
+    StopOrderRequest *after* fill, which Alpaca's wash-trade detector
+    rejected (error 40310000) when an opposite-side order already
+    existed on the same ticker. The OTO bundles entry + stop in one
+    submission and bypasses that rule.
     """
     from db.models import Order, Position
 
     fill = _wait_for_fill(client, broker_order_id, timeout_secs=60)
 
     if fill is None:
-        # Order didn't fill — cancel it and clean up
+        # Order didn't fill — cancel it and clean up. Cancelling the OTO
+        # parent before fill prevents the child stop from ever activating,
+        # so no separate stop cleanup is needed.
         logger.info("Entry order for %s did not fill within timeout — cancelling", ticker)
         try:
             client.cancel_order(broker_order_id)
@@ -199,15 +209,15 @@ def _await_fill_and_setup_stop(
             order.filled_avg_price = actual_price
             session.commit()
 
-    # Create position record IMMEDIATELY so the position tracker can monitor it
-    # (stop_order_id will be updated after stop placement)
+    # Create position record IMMEDIATELY so the position tracker can monitor it.
+    # stop_order_id is filled in below from the OTO child leg.
     with get_session(db_engine) as session:
         pos = Position(
             ticker=ticker,
             setup_type=signal.setup_type,
             side=signal.side,
             entry_order_id=order_db_id,
-            stop_order_id=None,  # will be set after stop placement
+            stop_order_id=None,  # filled in from OTO child below
             shares=filled_qty,
             entry_price=actual_price,
             stop_price=signal.stop_price,
@@ -218,46 +228,70 @@ def _await_fill_and_setup_stop(
         pos_db_id = pos.id
 
     logger.info(
-        "Position opened: %s %s %d @ %.2f stop=%.2f (placing stop order...)",
+        "Position opened: %s %s %d @ %.2f stop=%.2f (discovering OTO child stop id...)",
         signal.side, ticker, filled_qty, actual_price, signal.stop_price,
     )
     notify(
         f"ENTRY FILLED: {ticker} ({signal.setup_type})\n"
         f"Side: {signal.side.upper()} {filled_qty} shares @ ${actual_price:.2f}\n"
-        f"Stop: ${signal.stop_price:.2f} (placing broker stop...)\n"
+        f"Stop: ${signal.stop_price:.2f} (OTO child)\n"
         f"Risk/share: ${signal.risk_per_share:.2f}"
     )
 
-    # Place GTC stop order with broker — retry up to 3 times
-    stop_side = "sell" if signal.side == "long" else "buy_to_cover"
+    # Stop placement: prefer the OTO child the broker auto-created at fill
+    # (Alpaca path). If the client returns None — IB's place_oto_order is a
+    # shim that doesn't actually use OTO — fall back to placing a separate
+    # stop order via the legacy two-step pattern.
     broker_stop_id = None
     for attempt in range(1, 4):
         try:
-            broker_stop_id = client.place_stop_order(
-                ticker, stop_side, filled_qty, signal.stop_price
-            )
-            break
+            broker_stop_id = client.get_child_stop_order_id(broker_order_id)
+            if broker_stop_id:
+                logger.info("OTO child stop registered for %s: %s",
+                            ticker, broker_stop_id)
+                break
         except Exception as e:
-            logger.error("Stop order attempt %d/3 failed for %s: %s", attempt, ticker, e)
-            if attempt < 3:
-                time.sleep(2 ** attempt)  # 2s, 4s backoff
+            logger.error("get_child_stop_order_id attempt %d/3 failed for %s: %s",
+                         attempt, ticker, e)
+        if attempt < 3:
+            time.sleep(2 ** attempt)  # 2s, 4s backoff
+
     if broker_stop_id is None:
-        logger.critical("UNPROTECTED POSITION: %s %d shares @ %.2f — stop order failed",
+        # OTO child not present (or client doesn't implement OTO). Fall back
+        # to placing a separate stop. This path is exercised by the IB bot
+        # and as a defensive backstop on Alpaca.
+        stop_side = "sell" if signal.side == "long" else "buy_to_cover"
+        for attempt in range(1, 4):
+            try:
+                broker_stop_id = client.place_stop_order(
+                    ticker, stop_side, filled_qty, signal.stop_price
+                )
+                logger.info("Fallback stop order placed for %s: %s",
+                            ticker, broker_stop_id)
+                break
+            except Exception as e:
+                logger.error("Fallback stop attempt %d/3 failed for %s: %s",
+                             attempt, ticker, e)
+                if attempt < 3:
+                    time.sleep(2 ** attempt)
+
+    if broker_stop_id is None:
+        # No stop via OTO, no stop via fallback — position is genuinely
+        # unprotected. Alert loudly so the operator can place one manually.
+        logger.critical("UNPROTECTED POSITION: %s %d shares @ %.2f — both OTO discovery and fallback stop failed",
                         ticker, filled_qty, actual_price)
         notify(
             f"CRITICAL — UNPROTECTED POSITION\n"
             f"{ticker}: {filled_qty} shares @ ${actual_price:.2f}\n"
-            f"Stop order FAILED after 3 attempts.\n"
-            f"Manually place stop at ${signal.stop_price:.2f} NOW."
+            f"Both OTO child stop discovery and fallback stop placement failed.\n"
+            f"Manually place a sell-stop at ${signal.stop_price:.2f} NOW."
         )
     else:
-        # Update position with the broker stop order ID
         with get_session(db_engine) as session:
             pos = session.query(Position).filter_by(id=pos_db_id).first()
             if pos:
                 pos.stop_order_id = broker_stop_id
                 session.commit()
-        logger.info("Stop order placed for %s: %s", ticker, broker_stop_id)
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +312,12 @@ def execute_entry(ticker, signal, shares, client, db_engine, notify, watchlist_s
 
     order_side = "buy" if signal.side == "long" else "sell_short"
     try:
-        broker_order_id = client.place_limit_order(
-            ticker, order_side, shares, signal.entry_price
+        # OTO instead of plain limit: bundles entry + stop in one submission
+        # so Alpaca's wash-trade detector (error 40310000) doesn't reject the
+        # entry when an opposite-side stop already lives on the same ticker.
+        # See AlpacaClient.place_oto_order docstring for the full rationale.
+        broker_order_id = client.place_oto_order(
+            ticker, order_side, shares, signal.entry_price, signal.stop_price,
         )
     except Exception as e:
         # Loud failure — don't swallow. Telegram fires via caller's _track_job.

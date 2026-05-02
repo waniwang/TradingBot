@@ -39,7 +39,7 @@ def db_engine():
 @pytest.fixture
 def mock_client():
     client = MagicMock()
-    client.place_limit_order.return_value = "broker-id-123"
+    client.place_oto_order.return_value = "broker-id-123"
     client.get_portfolio_value.return_value = 100_000.0
     # resolve_execution_price (added 2026-04-22) fetches a live quote before
     # placing each order. Default stub returns a quote whose mid sits at or just
@@ -274,8 +274,8 @@ class TestExecuteIsDBDriven:
 
         plugin.job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
 
-        mock_client.place_limit_order.assert_called_once()
-        args = mock_client.place_limit_order.call_args.args
+        mock_client.place_oto_order.assert_called_once()
+        args = mock_client.place_oto_order.call_args.args
         assert args[0] == "AU"
         assert args[1] == "buy"
         assert args[3] == 22.0  # entry price from meta
@@ -299,7 +299,7 @@ class TestExecuteIsDBDriven:
             session.commit()
 
         EPEarningsPlugin().job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
-        mock_client.place_limit_order.assert_not_called()
+        mock_client.place_oto_order.assert_not_called()
 
     def test_execute_handles_both_today_ab_and_yesterday_c_in_one_pass(
         self, db_engine, mock_client, patch_main,
@@ -310,14 +310,14 @@ class TestExecuteIsDBDriven:
 
         EPEarningsPlugin().job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
 
-        assert mock_client.place_limit_order.call_count == 2
-        ordered = {c.args[0] for c in mock_client.place_limit_order.call_args_list}
+        assert mock_client.place_oto_order.call_count == 2
+        ordered = {c.args[0] for c in mock_client.place_oto_order.call_args_list}
         assert ordered == {"AB1", "C1"}
 
     def test_execute_no_ready_rows_returns_early(self, db_engine, mock_client, patch_main):
         result = EPEarningsPlugin().job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
         assert "No entries" in (result or "")
-        mock_client.place_limit_order.assert_not_called()
+        mock_client.place_oto_order.assert_not_called()
 
     def test_replay_does_not_double_submit(self, db_engine, mock_client, patch_main):
         """Guard against `job_execute` running twice before the first run's
@@ -340,7 +340,7 @@ class TestExecuteIsDBDriven:
 
         EPEarningsPlugin().job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
 
-        mock_client.place_limit_order.assert_not_called()
+        mock_client.place_oto_order.assert_not_called()
 
     def test_execute_marks_row_triggered_after_order(self, db_engine, mock_client, patch_main):
         _seed_ready(db_engine, ticker="AU", ep_strategy="A", scan_date=_today_et())
@@ -358,7 +358,7 @@ class TestExecuteIsDBDriven:
 
         EPEarningsPlugin().job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
 
-        assert mock_client.place_limit_order.call_count == 1
+        assert mock_client.place_oto_order.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +411,7 @@ def test_full_lifecycle_survives_restart_between_confirm_and_execute(
     plugin2 = EPEarningsPlugin()
     plugin2.job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
 
-    mock_client.place_limit_order.assert_called_once()
+    mock_client.place_oto_order.assert_called_once()
     with get_session(db_engine) as session:
         wl = session.query(Watchlist).filter_by(ticker="STAA").first()
         assert wl.stage == "triggered"

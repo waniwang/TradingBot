@@ -30,12 +30,13 @@ try:
         LimitOrderRequest,
         MarketOrderRequest,
         StopOrderRequest,
+        StopLossRequest,
         ReplaceOrderRequest,
         GetOrdersRequest,
         GetCalendarRequest,
         GetAssetsRequest,
     )
-    from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus, AssetStatus, AssetClass
+    from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus, AssetStatus, AssetClass, OrderClass
     from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.historical.screener import ScreenerClient
     from alpaca.data.requests import (
@@ -271,6 +272,97 @@ class AlpacaClient:
         logger.info("Limit order placed: %s %s %d @ %.2f → id=%s",
                     side, ticker, shares, price, order_id)
         return order_id
+
+    def place_oto_order(
+        self,
+        ticker: str,
+        side: str,
+        shares: int,
+        entry_price: float,
+        stop_price: float,
+    ) -> str:
+        """
+        Submit a single atomic OTO (One-Triggers-Other) order:
+        - Parent: limit entry at ``entry_price``, DAY TIF
+        - Child:  stop-loss at ``stop_price`` (sent automatically if/when
+                  the parent fills, becomes GTC)
+
+        Why OTO instead of separate limit + stop calls:
+        Alpaca's wash-trade detector rejects a naked buy/sell submitted
+        against a ticker that already has an opposite-side stop/market
+        order live (error 40310000, "potential wash trade detected. use
+        complex orders"). Bundling entry + stop in a single OTO signals
+        intent and bypasses the rule. See incident 2026-05-01 for the
+        first batch of wash-trade rejections that drove this change.
+
+        Returns the parent order id. The child stop's id is not known
+        until the parent fills — discover it later via
+        ``get_child_stop_order_id(parent_id)``.
+
+        ``side`` is the entry side ("buy" / "sell_short"); the stop
+        child's side is inferred (sell-stop for longs, buy-to-cover for
+        shorts) automatically by Alpaca.
+        """
+        if not ALPACA_AVAILABLE:
+            stub_id = f"STUB-OTO-{ticker}-{int(time.time())}"
+            logger.info("[stub] place_oto_order %s %s %d @ %.2f stop %.2f → %s",
+                        side, ticker, shares, entry_price, stop_price, stub_id)
+            return stub_id
+
+        order_side = self._resolve_side(side)
+        req = LimitOrderRequest(
+            symbol=ticker,
+            qty=shares,
+            side=order_side,
+            # Bracket/OTO support DAY or GTC; DAY matches the strategy's
+            # "fill at close or skip" semantics — child stop becomes GTC
+            # automatically once the parent fills.
+            time_in_force=TimeInForce.DAY,
+            limit_price=round(entry_price, 2),
+            order_class=OrderClass.OTO,
+            stop_loss=StopLossRequest(stop_price=round(stop_price, 2)),
+        )
+        order = self._trade.submit_order(req)
+        order_id = str(order.id)
+        logger.info(
+            "OTO order placed: %s %s %d entry=%.2f stop=%.2f → parent_id=%s",
+            side, ticker, shares, entry_price, stop_price, order_id,
+        )
+        return order_id
+
+    def get_child_stop_order_id(self, parent_id: str) -> str | None:
+        """
+        Look up the child stop order belonging to an OTO parent. Returns
+        the stop-leg's broker order id, or None if the parent hasn't yet
+        triggered the child (e.g. parent still working/cancelled before
+        fill).
+
+        Implementation: query the parent with the SDK's nested helper —
+        ``GetOrderByIdRequest(nested=True)`` — and pick the leg whose
+        order_type is ``stop``. There is normally exactly one stop leg
+        in an OTO; if there are zero, the parent never triggered the
+        child (return None); if there are more than one (defensive), we
+        return the first stop-typed leg.
+        """
+        if not ALPACA_AVAILABLE:
+            return f"STUB-STOP-CHILD-{parent_id}"
+
+        from alpaca.trading.requests import GetOrderByIdRequest
+        try:
+            order = self._trade.get_order_by_id(
+                parent_id, GetOrderByIdRequest(nested=True),
+            )
+        except Exception as e:
+            logger.warning("get_child_stop_order_id(%s): query failed: %s", parent_id, e)
+            return None
+
+        legs = getattr(order, "legs", None) or []
+        for leg in legs:
+            leg_type = getattr(leg, "order_type", None) or getattr(leg, "type", None)
+            leg_type_str = leg_type.value if hasattr(leg_type, "value") else str(leg_type or "")
+            if "stop" in leg_type_str.lower():
+                return str(leg.id)
+        return None
 
     def place_stop_order(
         self, ticker: str, side: str, shares: int, stop_price: float

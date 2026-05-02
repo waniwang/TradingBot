@@ -388,6 +388,32 @@ class IBClient:
                     side, ticker, shares, price, order_id)
         return order_id
 
+    def place_oto_order(
+        self,
+        ticker: str,
+        side: str,
+        shares: int,
+        entry_price: float,
+        stop_price: float,
+    ) -> str:
+        """
+        Compatibility shim for the OTO entry API (added 2026-05-01 to address
+        Alpaca wash-trade rejection). IB's bracket-order semantics differ
+        enough that we don't translate here — instead we just submit the
+        plain limit, and let ``core/execution._await_fill_and_setup_stop``
+        fall back to placing the stop separately when
+        ``get_child_stop_order_id`` returns None.
+
+        ``stop_price`` is accepted but unused on the IB path; the stop is
+        re-derived from ``signal.stop_price`` in the post-fill phase.
+        """
+        return self.place_limit_order(ticker, side, shares, entry_price)
+
+    def get_child_stop_order_id(self, parent_id: str) -> str | None:
+        """No OTO on IB → no auto-created child stop. Returning None signals
+        the caller to fall back to placing a separate stop order."""
+        return None
+
     def place_stop_order(
         self, ticker: str, side: str, shares: int, stop_price: float
     ) -> str:

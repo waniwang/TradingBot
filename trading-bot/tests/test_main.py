@@ -522,11 +522,11 @@ class TestExecuteEntryErrorHandling:
         )
 
     def test_order_failure_notifies_and_raises(self):
-        """Fix 1: when place_limit_order raises, notify fires and exception propagates."""
+        """Fix 1: when place_oto_order raises, notify fires and exception propagates."""
         from main import _execute_entry
 
         client = MagicMock()
-        client.place_limit_order.side_effect = RuntimeError("Alpaca rejected: insufficient buying power")
+        client.place_oto_order.side_effect = RuntimeError("Alpaca rejected: insufficient buying power")
         notify = MagicMock()
 
         with pytest.raises(RuntimeError, match="insufficient buying power"):
@@ -561,7 +561,7 @@ class TestMarkTriggeredFailure:
         main_module._db_engine = engine
 
         client = MagicMock()
-        client.place_limit_order.return_value = "test-order-id"
+        client.place_oto_order.return_value = "test-order-id"
         notify = MagicMock()
 
         from signals.base import SignalResult
