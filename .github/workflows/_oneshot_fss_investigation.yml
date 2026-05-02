@@ -1,0 +1,94 @@
+name: One-shot — investigate FSS (IB didn't attempt)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  investigate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inline FSS diagnostic on Linode
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            DATABASE_IB_URL=sqlite:////opt/trading-bot/trading-bot/trading_bot_ib.db \
+            .venv/bin/python <<'PY'
+            import os, sys, yaml, pytz
+            from datetime import datetime, date, timedelta
+            from pathlib import Path
+            ROOT = Path('/opt/trading-bot/trading-bot')
+            sys.path.insert(0, str(ROOT))
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from db.models import Watchlist, Order, Position, JobExecution, get_session, init_db
+
+            ET = pytz.timezone('America/New_York')
+
+            alpaca_url = 'sqlite:////opt/trading-bot/trading-bot/trading_bot.db'
+            ib_url = 'sqlite:////opt/trading-bot/trading-bot/trading_bot_ib.db'
+            alpaca_engine = init_db(alpaca_url)
+            ib_engine = create_engine(ib_url)
+            IbSession = sessionmaker(bind=ib_engine)
+
+            target_date = date(2026, 5, 1)
+            print(f'=== FSS investigation for {target_date} ===\n')
+
+            # 1. Alpaca Watchlist row(s) for FSS
+            print('--- Alpaca Watchlist rows for FSS (recent) ---')
+            with get_session(alpaca_engine) as s:
+                rows = s.query(Watchlist).filter(
+                    Watchlist.ticker == 'FSS',
+                    Watchlist.scan_date >= target_date - timedelta(days=7),
+                ).order_by(Watchlist.scan_date.desc()).all()
+                for r in rows:
+                    print(f'  id={r.id} scan_date={r.scan_date} setup={r.setup_type} stage={r.stage} ep={(r.meta or {}).get("ep_strategy", "—")} updated_at={r.updated_at} stage_changed_at={r.stage_changed_at} notes={r.notes!r}')
+
+            # 2. IB Order/Position for FSS today
+            print('\n--- IB Orders for FSS today ---')
+            start_utc = ET.localize(datetime.combine(target_date, datetime.min.time())).astimezone(pytz.UTC).replace(tzinfo=None)
+            end_utc = start_utc + timedelta(days=1)
+            with IbSession() as ib:
+                orders = ib.query(Order).filter(
+                    Order.ticker == 'FSS',
+                    Order.created_at >= start_utc,
+                    Order.created_at < end_utc,
+                ).all()
+                if not orders:
+                    print('  (none — IB never placed an FSS order today)')
+                for o in orders:
+                    print(f'  id={o.id} side={o.side} qty={o.qty} status={o.status} created={o.created_at}')
+                positions = ib.query(Position).filter(Position.ticker == 'FSS').all()
+                print('\n--- IB Positions for FSS (any date) ---')
+                if not positions:
+                    print('  (none — IB has never opened an FSS position)')
+                for p in positions:
+                    print(f'  id={p.id} setup={p.setup_type} side={p.side} shares={p.shares} entry={p.entry_price} stop={p.stop_price} is_open={p.is_open} opened={p.opened_at}')
+
+            # 3. IB JobExecution rows for ep_news_execute today
+            print('\n--- IB JobExecution rows for ep_news_execute on target date ---')
+            with IbSession() as ib:
+                jobs = ib.query(JobExecution).filter(
+                    JobExecution.job_id == 'ep_news_execute',
+                    JobExecution.trade_date == target_date,
+                ).order_by(JobExecution.started_at).all()
+                for j in jobs:
+                    started = j.started_at.strftime('%H:%M:%S') if j.started_at else '?'
+                    print(f'  {started}  status={j.status:8s}  result={j.result_summary or "-"}')
+
+            # 4. Also IB ep_news_day2_confirm
+            print('\n--- IB JobExecution rows for ep_news_day2_confirm on target date ---')
+            with IbSession() as ib:
+                jobs = ib.query(JobExecution).filter(
+                    JobExecution.job_id == 'ep_news_day2_confirm',
+                    JobExecution.trade_date == target_date,
+                ).order_by(JobExecution.started_at).all()
+                for j in jobs:
+                    started = j.started_at.strftime('%H:%M:%S') if j.started_at else '?'
+                    print(f'  {started}  status={j.status:8s}  result={j.result_summary or "-"}')
+            PY
