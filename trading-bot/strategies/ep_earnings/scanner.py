@@ -67,13 +67,25 @@ def scan_ep_earnings(
     # Phase A: Alpaca snapshot gap pre-screen (full tradable universe in ~5s)
     # ---------------------------------------------------------------
     from scanner.gap_screen import scan_snapshot_gaps
+    from core.retry import with_network_retries
 
-    universe = client.get_tradable_universe()
-    movers = scan_snapshot_gaps(
-        client,
-        min_gap_pct=min_gap_pct,
-        min_price=min_price,
-        universe=universe,
+    # Wrap each network call with retries. Two scan failures in 3 days
+    # (2026-04-29 SSL handshake, 2026-05-01 connection reset by peer) wiped
+    # out the day's A/B candidate slate — both were transient transport-layer
+    # blips. with_network_retries only retries on those (real bugs still
+    # propagate immediately).
+    universe = with_network_retries(
+        lambda: client.get_tradable_universe(),
+        label="ep_earnings.get_tradable_universe",
+    )
+    movers = with_network_retries(
+        lambda: scan_snapshot_gaps(
+            client,
+            min_gap_pct=min_gap_pct,
+            min_price=min_price,
+            universe=universe,
+        ),
+        label="ep_earnings.scan_snapshot_gaps",
     )
     if not movers:
         logger.warning("EP Earnings scan: no gap candidates from snapshot scan")
@@ -81,7 +93,10 @@ def scan_ep_earnings(
 
     symbols = [m["symbol"] for m in movers]
     # Reuse the same snapshot data for downstream filters (prev_high, today volumes, etc.)
-    snapshots = client.get_snapshots(symbols)
+    snapshots = with_network_retries(
+        lambda: client.get_snapshots(symbols),
+        label="ep_earnings.get_snapshots",
+    )
 
     candidates = []
     for sym in symbols:
@@ -141,7 +156,10 @@ def scan_ep_earnings(
     tickers_to_check = [c["ticker"] for c in candidates]
     # Let fetch errors propagate — falling back to bars={} silently drops the whole
     # universe and the outer job would report "0 candidates" as a success.
-    bars = client.get_daily_bars_batch(tickers_to_check, days=300)
+    bars = with_network_retries(
+        lambda: client.get_daily_bars_batch(tickers_to_check, days=300),
+        label="ep_earnings.get_daily_bars_batch",
+    )
 
     filtered_b = []
     for c in candidates:

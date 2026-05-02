@@ -69,20 +69,31 @@ def scan_ep_news(
     # Phase A: Alpaca snapshot gap pre-screen (full tradable universe in ~5s)
     # ---------------------------------------------------------------
     from scanner.gap_screen import scan_snapshot_gaps
+    from core.retry import with_network_retries
 
-    universe = client.get_tradable_universe()
-    movers = scan_snapshot_gaps(
-        client,
-        min_gap_pct=min_gap_pct,
-        min_price=min_price,
-        universe=universe,
+    # See ep_earnings/scanner.py for the full rationale on retries here.
+    universe = with_network_retries(
+        lambda: client.get_tradable_universe(),
+        label="ep_news.get_tradable_universe",
+    )
+    movers = with_network_retries(
+        lambda: scan_snapshot_gaps(
+            client,
+            min_gap_pct=min_gap_pct,
+            min_price=min_price,
+            universe=universe,
+        ),
+        label="ep_news.scan_snapshot_gaps",
     )
     if not movers:
         logger.warning("EP News scan: no gap candidates from snapshot scan")
         return []
 
     symbols = [m["symbol"] for m in movers]
-    snapshots = client.get_snapshots(symbols)
+    snapshots = with_network_retries(
+        lambda: client.get_snapshots(symbols),
+        label="ep_news.get_snapshots",
+    )
 
     candidates = []
     for sym in symbols:
@@ -142,7 +153,10 @@ def scan_ep_news(
     tickers_to_check = [c["ticker"] for c in candidates]
     # Let fetch errors propagate — falling back to bars={} silently drops the whole
     # universe and the outer job would report "0 candidates" as a success.
-    bars = client.get_daily_bars_batch(tickers_to_check, days=300)
+    bars = with_network_retries(
+        lambda: client.get_daily_bars_batch(tickers_to_check, days=300),
+        label="ep_news.get_daily_bars_batch",
+    )
 
     filtered_b = []
     for c in candidates:
