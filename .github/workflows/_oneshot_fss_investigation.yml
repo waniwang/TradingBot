@@ -13,6 +13,7 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
           script: |
             set -e
             cd /opt/trading-bot/trading-bot
