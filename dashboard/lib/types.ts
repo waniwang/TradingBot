@@ -18,6 +18,8 @@ export interface Portfolio {
   daily_pnl_pct: number;
   daily_realized: number;
   daily_unrealized: number;
+  ytd_realized: number;
+  ytd_realized_pct: number;
   open_positions: number;
   max_positions: number;
   trades_today: number;

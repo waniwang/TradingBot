@@ -6,10 +6,9 @@ import { PortfolioCards } from "@/components/dashboard/portfolio-cards";
 import { PositionsTable } from "@/components/dashboard/positions-table";
 import { TradeAttempts } from "@/components/dashboard/trade-attempts";
 import { PipelineStatus } from "@/components/dashboard/pipeline-status";
-import { RiskMeter } from "@/components/dashboard/risk-meter";
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
-import type { BotStatus, Portfolio, OpenPosition, TradeAttempt, PipelineData, RiskData, MarketData, MarketIndex } from "@/lib/types";
+import type { BotStatus, Portfolio, OpenPosition, TradeAttempt, PipelineData, MarketData, MarketIndex } from "@/lib/types";
 
 export default function OverviewPage() {
   const [status, setStatus] = useState<BotStatus | null>(null);
@@ -17,7 +16,6 @@ export default function OverviewPage() {
   const [positions, setPositions] = useState<OpenPosition[]>([]);
   const [attempts, setAttempts] = useState<TradeAttempt[]>([]);
   const [pipeline, setPipeline] = useState<PipelineData | null>(null);
-  const [riskData, setRiskData] = useState<RiskData | null>(null);
   const [marketIndices, setMarketIndices] = useState<MarketIndex[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -26,13 +24,12 @@ export default function OverviewPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, p, pos, att, pipe, rd, mkt] = await Promise.all([
+      const [s, p, pos, att, pipe, mkt] = await Promise.all([
         fetchAPI<BotStatus>("/api/status"),
         fetchAPI<Portfolio>("/api/portfolio"),
         fetchAPI<OpenPosition[]>("/api/positions"),
         fetchAPI<TradeAttempt[]>("/api/attempts/today"),
         fetchAPI<PipelineData>("/api/pipeline"),
-        fetchAPI<RiskData>("/api/risk"),
         fetchAPI<MarketData>("/api/market"),
       ]);
       setStatus(s);
@@ -40,7 +37,6 @@ export default function OverviewPage() {
       setPositions(pos);
       setAttempts(att);
       setPipeline(pipe);
-      setRiskData(rd);
       setMarketIndices(mkt.indices || []);
       setLastUpdated(new Date());
       setError(null);
@@ -74,10 +70,7 @@ export default function OverviewPage() {
       <main className="flex-1 space-y-6 p-6">
         <PipelineStatus data={pipeline} />
 
-        <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
-          <PortfolioCards data={portfolio} />
-          <RiskMeter data={riskData} />
-        </div>
+        <PortfolioCards data={portfolio} />
 
         <section>
           <h2 className="mb-3 text-sm font-medium text-muted-foreground">

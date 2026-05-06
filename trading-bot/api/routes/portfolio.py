@@ -6,7 +6,7 @@ from datetime import datetime, date
 
 from fastapi import APIRouter
 
-from db.models import Position, get_session
+from db.models import DailyPnl, Position, get_session
 from api.deps import get_db_engine, get_alpaca, get_config
 
 router = APIRouter()
@@ -52,6 +52,29 @@ def get_portfolio():
         total_daily_pnl = daily_realized + daily_unrealized
         daily_pnl_pct = (total_daily_pnl / portfolio_value * 100) if portfolio_value else 0.0
 
+        # YTD realized P&L
+        year_start = datetime.combine(date(date.today().year, 1, 1), datetime.min.time())
+        closed_ytd = (
+            session.query(Position)
+            .filter(Position.is_open == False, Position.closed_at >= year_start)
+            .all()
+        )
+        ytd_realized = sum(p.realized_pnl or 0.0 for p in closed_ytd)
+
+        # YTD % uses first DailyPnl portfolio_value of the year as the baseline.
+        # Falls back to current portfolio value minus YTD realized if no daily history.
+        first_pnl_of_year = (
+            session.query(DailyPnl)
+            .filter(DailyPnl.trade_date >= year_start.date())
+            .order_by(DailyPnl.trade_date)
+            .first()
+        )
+        if first_pnl_of_year and first_pnl_of_year.portfolio_value:
+            ytd_baseline = first_pnl_of_year.portfolio_value
+        else:
+            ytd_baseline = portfolio_value - ytd_realized
+        ytd_realized_pct = (ytd_realized / ytd_baseline * 100) if ytd_baseline else 0.0
+
         return {
             "portfolio_value": portfolio_value,
             "cash": cash,
@@ -59,6 +82,8 @@ def get_portfolio():
             "daily_pnl_pct": daily_pnl_pct,
             "daily_realized": daily_realized,
             "daily_unrealized": daily_unrealized,
+            "ytd_realized": ytd_realized,
+            "ytd_realized_pct": ytd_realized_pct,
             "open_positions": len(open_positions),
             "max_positions": config["risk"]["max_positions"],
             "trades_today": len(closed_today),

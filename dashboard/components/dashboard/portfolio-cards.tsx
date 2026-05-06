@@ -25,6 +25,13 @@ export function PortfolioCards({ data }: { data: Portfolio | null }) {
       subColor: data.daily_pnl_pct >= 0 ? "text-profit" : "text-loss",
     },
     {
+      title: "YTD Realized",
+      value: formatCurrency(data.ytd_realized, true),
+      sub: `${data.ytd_realized_pct >= 0 ? "+" : ""}${data.ytd_realized_pct.toFixed(2)}%`,
+      color: data.ytd_realized >= 0 ? "text-profit" : "text-loss",
+      subColor: data.ytd_realized_pct >= 0 ? "text-profit" : "text-loss",
+    },
+    {
       title: "Open Positions",
       value: `${data.open_positions}`,
       sub: `max ${data.max_positions}`,
@@ -37,7 +44,7 @@ export function PortfolioCards({ data }: { data: Portfolio | null }) {
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
       {cards.map((c) => (
         <Card key={c.title}>
           <CardHeader className="pb-2">
@@ -63,8 +70,8 @@ export function PortfolioCards({ data }: { data: Portfolio | null }) {
 
 function PortfolioSkeleton() {
   return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-      {Array.from({ length: 5 }).map((_, i) => (
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+      {Array.from({ length: 6 }).map((_, i) => (
         <Card key={i}>
           <CardHeader className="pb-2">
             <div className="h-3 w-20 animate-pulse rounded bg-muted" />
