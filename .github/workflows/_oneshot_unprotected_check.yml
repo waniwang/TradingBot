@@ -1,0 +1,78 @@
+name: One-shot — list unprotected Alpaca positions
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: List unprotected positions on Alpaca
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            .venv/bin/python <<'PY'
+            import os
+            from alpaca.trading.client import TradingClient
+            from alpaca.trading.requests import GetOrdersRequest
+            from alpaca.trading.enums import QueryOrderStatus
+
+            tc = TradingClient(
+                api_key=os.environ['ALPACA_API_KEY'],
+                secret_key=os.environ['ALPACA_SECRET_KEY'],
+                paper=True,
+            )
+
+            positions = tc.get_all_positions()
+            open_orders = tc.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500))
+
+            # Index open stops by symbol → list of (qty, stop_price, tif, id)
+            stops_by_symbol: dict[str, list] = {}
+            for o in open_orders:
+                otype = getattr(o, 'order_type', None) or getattr(o, 'type', None)
+                otype_str = (otype.value if hasattr(otype, 'value') else str(otype or '')).lower()
+                if 'stop' not in otype_str:
+                    continue
+                tif = getattr(o, 'time_in_force', None)
+                tif_str = (tif.value if hasattr(tif, 'value') else str(tif or '')).upper()
+                stops_by_symbol.setdefault(o.symbol, []).append({
+                    'qty': int(float(o.qty)),
+                    'stop_price': float(o.stop_price) if o.stop_price else None,
+                    'tif': tif_str,
+                    'id': str(o.id),
+                })
+
+            # Strategy stops: 7% below entry for ep_earnings_a/b, ~7% for ep_news
+            print('=== Open Alpaca positions — stop coverage ===\n')
+            print(f'{"ticker":7s} {"qty":>5s} {"avg_entry":>11s} {"sugg_stop_-7%":>14s} {"covered_qty":>11s} {"stop_tif":>10s} {"stop_price":>11s} status')
+            print('-' * 100)
+
+            for p in positions:
+                sym = p.symbol
+                qty = int(float(p.qty))
+                entry = float(p.avg_entry_price)
+                suggested = round(entry * 0.93, 2)
+                stops = stops_by_symbol.get(sym, [])
+                covered_qty = sum(s['qty'] for s in stops)
+                tifs = ','.join(s['tif'] for s in stops) if stops else '-'
+                prices = ','.join(f"${s['stop_price']:.2f}" for s in stops if s['stop_price']) if stops else '-'
+
+                if covered_qty >= qty:
+                    if all(s['tif'] == 'GTC' for s in stops):
+                        status = 'OK (GTC, full)'
+                    else:
+                        status = 'WARNING (covered but DAY-TIF — will expire EOD)'
+                elif covered_qty == 0:
+                    status = 'NAKED — needs GTC stop'
+                else:
+                    status = f'PARTIAL — only {covered_qty}/{qty} covered'
+
+                print(f'{sym:7s} {qty:>5d} ${entry:>10.2f} ${suggested:>13.2f} {covered_qty:>11d} {tifs:>10s} {prices:>11s} {status}')
+            PY
