@@ -90,12 +90,12 @@ jobs:
             ROOT = Path('/opt/trading-bot/trading-bot')
             sys.path.insert(0, str(ROOT))
             from db.models import Position, get_session, init_db
-            from executor.alpaca_client import AlpacaClient
+            from alpaca.trading.client import TradingClient
 
-            client = AlpacaClient(
+            tc = TradingClient(
                 api_key=os.environ['ALPACA_API_KEY'],
                 secret_key=os.environ['ALPACA_SECRET_KEY'],
-                base_url=os.environ.get('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'),
+                paper=True,
             )
             eng = init_db('sqlite:////opt/trading-bot/trading-bot/trading_bot.db')
             today = date.today()
@@ -107,18 +107,27 @@ jobs:
                     print(f'  {p.ticker:6s}  setup={p.setup_type:18s}  STOP_ORDER_ID MISSING')
                     continue
                 try:
-                    o = client._trade.get_order_by_id(p.stop_order_id)
+                    o = tc.get_order_by_id(p.stop_order_id)
                     tif = getattr(o, 'time_in_force', None)
                     tif_str = tif.value if hasattr(tif, 'value') else str(tif)
                     status = getattr(o, 'status', None)
                     status_str = status.value if hasattr(status, 'value') else str(status)
                     otype = getattr(o, 'order_type', None) or getattr(o, 'type', None)
                     otype_str = otype.value if hasattr(otype, 'value') else str(otype)
-                    flag = '✓' if tif_str.lower() == 'gtc' else '✗ DAY (BUG)'
+                    flag = 'OK-GTC' if tif_str.lower() == 'gtc' else f'BUG-{tif_str}'
                     print(f'  {p.ticker:6s}  setup={p.setup_type:18s}  type={otype_str:6s}  tif={tif_str:4s}  status={status_str:12s}  {flag}')
                 except Exception as e:
                     print(f'  {p.ticker:6s}  ERROR querying broker: {e}')
             PY
+
+            echo
+            echo '=== 3b. Raw journal: any execution log line for today entries ==='
+            for ticker in ROK WAT AMD CRI DVA; do
+              echo "--- $ticker ---"
+              journalctl -u trading-bot --since today --no-pager 2>/dev/null \
+                | grep -E " $ticker(\b|:)" | tail -10 || echo "  (no journal lines)"
+              echo
+            done
 
             echo
             echo '=== 4. Verdict checklist ==='
