@@ -1,0 +1,94 @@
+name: One-shot — verify OTO→GTC stop replacement
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inline OTO/GTC verification on Linode
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+
+            echo '=== 1. Bot service journal — OTO/GTC log lines (last 60 min) ==='
+            echo
+            echo '--- Alpaca bot ---'
+            journalctl -u trading-bot --since "60 min ago" --no-pager 2>/dev/null \
+              | grep -E "OTO order placed|OTO child stop.*is DAY-TIF|GTC stop placed|UNPROTECTED|cancel_order" \
+              | tail -60 || echo '(no matching log lines)'
+            echo
+            echo '--- IB bot ---'
+            journalctl -u trading-bot-ib --since "60 min ago" --no-pager 2>/dev/null \
+              | grep -E "OTO order placed|OTO child stop.*is DAY-TIF|GTC stop placed|UNPROTECTED|Stop order placed" \
+              | tail -60 || echo '(no matching log lines)'
+
+            echo
+            echo '=== 2. Today JobExecution: ep_*_execute on Alpaca DB ==='
+            .venv/bin/python <<'PY'
+            import sys
+            from datetime import date
+            from pathlib import Path
+            ROOT = Path('/opt/trading-bot/trading-bot')
+            sys.path.insert(0, str(ROOT))
+            from db.models import JobExecution, Position, Order, get_session, init_db
+
+            today = date.today()
+            for label, url in [
+                ('ALPACA', 'sqlite:////opt/trading-bot/trading-bot/trading_bot.db'),
+                ('IB    ', 'sqlite:////opt/trading-bot/trading-bot/trading_bot_ib.db'),
+            ]:
+                eng = init_db(url) if 'trading_bot.db' in url else None
+                if eng is None:
+                    from sqlalchemy import create_engine
+                    eng = create_engine(url)
+                with get_session(eng) as s:
+                    print(f'\n--- {label} JobExecution today (ep_*_execute) ---')
+                    jobs = s.query(JobExecution).filter(
+                        JobExecution.job_id.in_(['ep_earnings_execute', 'ep_news_execute']),
+                        JobExecution.trade_date == today,
+                    ).order_by(JobExecution.started_at).all()
+                    for j in jobs:
+                        st = j.started_at.strftime('%H:%M:%S') if j.started_at else '?'
+                        print(f'  {st}  {j.job_id:22s} status={j.status:8s} {j.result_summary or "-"}')
+                    if not jobs:
+                        print('  (no execute jobs today)')
+
+                    print(f'\n--- {label} Positions opened today ---')
+                    positions = s.query(Position).filter(Position.opened_at >= today).all()
+                    for p in positions:
+                        print(f'  id={p.id:3d}  {p.ticker:6s}  setup={p.setup_type:18s}  '
+                              f'shares={p.shares:5d}  entry=${p.entry_price:.2f}  '
+                              f'stop=${p.stop_price:.2f}  stop_order_id={p.stop_order_id or "MISSING"}')
+                    if not positions:
+                        print('  (no positions opened today)')
+
+                    print(f'\n--- {label} Orders created today ---')
+                    orders = s.query(Order).filter(Order.created_at >= today).order_by(Order.created_at).all()
+                    for o in orders:
+                        ct = o.created_at.strftime('%H:%M:%S') if o.created_at else '?'
+                        print(f'  {ct}  {o.ticker:6s}  side={o.side:11s}  type={o.order_type:6s}  '
+                              f'qty={o.qty:5d}  status={o.status:18s}  broker_id={o.broker_order_id or "-"}')
+                    if not orders:
+                        print('  (no orders today)')
+            PY
+
+            echo
+            echo '=== 3. Verdict checklist ==='
+            echo 'Look for in section 1 (Alpaca bot logs), per ticker:'
+            echo '  ✓ "OTO order placed: ..."        — entry submitted'
+            echo '  ✓ "OTO child stop ... DAY-TIF"   — fix detected the DAY child'
+            echo '  ✓ "GTC stop placed for ..."      — replacement landed'
+            echo '  ✗ "UNPROTECTED POSITION"         — should NOT appear'
+            echo
+            echo 'Look for in section 2:'
+            echo '  ✓ Each Position has a stop_order_id (not MISSING)'
+            echo '  ✓ Status of execute jobs = success'
