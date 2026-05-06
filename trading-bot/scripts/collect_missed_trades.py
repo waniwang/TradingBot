@@ -3,8 +3,18 @@
 Collect every "trade the bot should have taken but didn't" into a single CSV
 that downstream systems (Google Sheets, dashboards, audits) can read.
 
-What counts as a missed trade
------------------------------
+Two data sources, unified into one CSV via a `category` column:
+
+  1. Watchlist rows tagged [bot-failure] — bugs that prevented a trade.
+     category = "bot-bug"
+
+  2. RiskSkip rows (block_reason=max_positions) — trade triggered but the
+     position cap was full. The bot was working as configured; the row is
+     surfaced so the operator can see the cost of the cap and decide whether
+     to raise it. category = "max-positions"
+
+What counts as a missed trade (category=bot-bug)
+------------------------------------------------
 A Watchlist row that was tagged [bot-failure] AND, when we replay it against
 historical daily bars, would have confirmed and entered. Per-strategy:
 
@@ -18,28 +28,26 @@ historical daily bars, would have confirmed and entered. Per-strategy:
     We re-check using the historical daily bar for day-2: would current_price
     have exceeded gap_day_close? If yes → would_confirm=True → missed trade.
 
-Failure dates we cover
-----------------------
-* 2026-04-23 (HCSG, VICR, MAS, GEV, MCRI, LBTYB, TFX) — first incident
-* 2026-04-24 — same bug, different tickers
-* 2026-04-27 (MXL, INTC, WKC, CHE, APOG, AMD, PDFS) — same bug, third hit;
-  the fix landed mid-3:50 PM execute window so today's confirms were lost.
-The collector reads whatever is in the DB regardless of date, so older or
-newer incidents get folded in automatically.
+What counts as a risk skip (category=max-positions)
+---------------------------------------------------
+A RiskSkip row written by ep_earnings/ep_news job_execute when the position
+cap was full at the moment of execute (3:50 PM ET). The trade had already
+triggered all setup conditions — would_confirm is always "yes" for these.
 
 Output
 ------
 CSV at docs/missed_trades.csv with columns:
-    date              gap day (YYYY-MM-DD ET)
-    failure_time      when day-2 confirm flipped the row to expired (UTC ISO)
+    date              ET date of the event
+    failure_time      ISO timestamp of the event (UTC)
     ticker
     strategy          ep_earnings_a / ep_earnings_b / ep_earnings_c
                       ep_news_a / ep_news_b / ep_news_c
-    intended_entry    the price the bot WOULD have entered at (day-2 close)
+    intended_entry    the price the bot WOULD have entered at
     intended_stop     intended_entry * (1 - stop_pct/100)
-    would_confirm     "yes" / "no" — did day-2 close > gap-day close?
+    would_confirm     "yes" / "no" / "unknown" — only meaningful for bot-bug
     reason            short text describing why the bot didn't trade
-    incident_commit   git commit that fixed the relevant bug (for traceability)
+    incident_commit   git commit that fixed the relevant bug (bot-bug only)
+    category          "bot-bug" or "max-positions"
 
 Idempotent: running twice rewrites the file with the same content (the data
 is fully derived from the DB, no incremental state). The nightly cron is
@@ -68,7 +76,7 @@ ROOT = Path(__file__).resolve().parent.parent
 REPO_ROOT = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
-from db.models import Watchlist, get_session, init_db
+from db.models import RiskSkip, Watchlist, get_session, init_db
 from executor.alpaca_client import AlpacaClient
 
 TAG = "[bot-failure]"
@@ -190,6 +198,7 @@ def _row_to_csv(row: Watchlist, client) -> dict | None:
             "would_confirm": "unknown",
             "reason": _short_reason(row),
             "incident_commit": INCIDENT_COMMITS.get(failure_date, ""),
+            "category": "bot-bug",
         }
 
     day2_close = _historical_day2_close(client, row.ticker, failure_date)
@@ -206,6 +215,7 @@ def _row_to_csv(row: Watchlist, client) -> dict | None:
             "would_confirm": "unknown",
             "reason": _short_reason(row) + " (day-2 bar unavailable)",
             "incident_commit": INCIDENT_COMMITS.get(failure_date, ""),
+            "category": "bot-bug",
         }
 
     would_confirm = day2_close > gap_close
@@ -221,6 +231,34 @@ def _row_to_csv(row: Watchlist, client) -> dict | None:
         "would_confirm": "yes" if would_confirm else "no",
         "reason": _short_reason(row),
         "incident_commit": INCIDENT_COMMITS.get(failure_date, ""),
+        "category": "bot-bug",
+    }
+
+
+def _risk_skip_to_csv(row: RiskSkip) -> dict:
+    """Map a RiskSkip row to a CSV-ready dict.
+
+    For risk skips, would_confirm is always "yes" — the trade had already
+    triggered all setup conditions (we only call can_enter() at the execute
+    step, after day-2 confirm + signal eval). The block was the cap, not the
+    setup. The reason field summarizes the cap state at skip time.
+    """
+    fake_meta = {"ep_strategy": row.ep_strategy} if row.ep_strategy else {}
+    intended_entry = f"{row.intended_entry:.2f}" if row.intended_entry is not None else ""
+    intended_stop = f"{row.intended_stop:.2f}" if row.intended_stop is not None else ""
+    cap_note = row.notes or ""
+    reason = f"Position cap full at execute time ({cap_note})" if cap_note else "Position cap full at execute time"
+    return {
+        "date": row.occurred_date.isoformat(),
+        "failure_time": row.occurred_at.isoformat() + "Z",
+        "ticker": row.ticker,
+        "strategy": _strategy_label(row.setup_type, fake_meta),
+        "intended_entry": intended_entry,
+        "intended_stop": intended_stop,
+        "would_confirm": "yes",
+        "reason": reason,
+        "incident_commit": "",
+        "category": "max-positions",
     }
 
 
@@ -268,12 +306,22 @@ def main() -> int:
                 continue
             rows.append(csv_row)
 
+        skip_rows = (
+            session.query(RiskSkip)
+            .order_by(RiskSkip.occurred_at.asc(), RiskSkip.ticker.asc())
+            .all()
+        )
+        for skip in skip_rows:
+            rows.append(_risk_skip_to_csv(skip))
+
+    rows.sort(key=lambda r: (r["date"], r["failure_time"], r["ticker"]))
+
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "date", "failure_time", "ticker", "strategy",
         "intended_entry", "intended_stop", "would_confirm",
-        "reason", "incident_commit",
+        "reason", "incident_commit", "category",
     ]
     with output_path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -283,7 +331,11 @@ def main() -> int:
     logger.info("-" * 78)
     logger.info("Wrote %d rows to %s", len(rows), output_path)
     yes_count = sum(1 for r in rows if r["would_confirm"] == "yes")
+    bug_count = sum(1 for r in rows if r["category"] == "bot-bug")
+    skip_count = sum(1 for r in rows if r["category"] == "max-positions")
     logger.info("  would-have-entered: %d", yes_count)
+    logger.info("  bot-bug rows: %d", bug_count)
+    logger.info("  max-positions rows: %d", skip_count)
     logger.info("  unknown / no day-2 bar: %d",
                 sum(1 for r in rows if r["would_confirm"] == "unknown"))
     if not args.include_rejects:

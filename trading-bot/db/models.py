@@ -17,6 +17,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, Session
@@ -266,6 +267,91 @@ class DailyPnl(Base):
     num_winners: Mapped[int] = mapped_column(Integer, default=0)
     num_losers: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class RiskSkip(Base):
+    """Trades that triggered but were skipped by the risk manager.
+
+    Inserted by EP earnings + EP news job_execute when can_enter() returns False.
+    Today only `block_reason="max_positions"` is recorded — other reasons
+    (daily/weekly loss halt) trigger separate handling. The unique constraint
+    gives free idempotency for the 3:50-3:59 PM retry loop: 20 retries on the
+    same blocked ticker collapse to one row.
+    """
+
+    __tablename__ = "risk_skips"
+    __table_args__ = (
+        UniqueConstraint(
+            "occurred_date", "ticker", "setup_type", "ep_strategy", "block_reason",
+            name="uq_risk_skip_dedup",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    occurred_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    setup_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    ep_strategy: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    block_reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    intended_entry: Mapped[float | None] = mapped_column(Float, nullable=True)
+    intended_stop: Mapped[float | None] = mapped_column(Float, nullable=True)
+    portfolio_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    open_position_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+def record_risk_skip(
+    engine,
+    *,
+    ticker: str,
+    setup_type: str,
+    ep_strategy: str | None,
+    block_reason: str,
+    intended_entry: float | None,
+    intended_stop: float | None,
+    portfolio_value: float | None,
+    open_position_count: int | None,
+    notes: str | None = None,
+) -> bool:
+    """Insert a RiskSkip row, idempotent per ET-day.
+
+    Dedup key: (occurred_date_et, ticker, setup_type, ep_strategy, block_reason).
+    Returns True if a new row was inserted, False if today's identical skip
+    was already recorded (the 3:50-3:59 retry loop hits the same block 20
+    times — only the first call writes a row).
+    """
+    import pytz
+    et = pytz.timezone("America/New_York")
+    now_utc = datetime.utcnow()
+    occurred_date = datetime.now(et).date()
+
+    with get_session(engine) as session:
+        existing = session.query(RiskSkip).filter_by(
+            occurred_date=occurred_date,
+            ticker=ticker,
+            setup_type=setup_type,
+            ep_strategy=ep_strategy,
+            block_reason=block_reason,
+        ).first()
+        if existing is not None:
+            return False
+        row = RiskSkip(
+            occurred_at=now_utc,
+            occurred_date=occurred_date,
+            ticker=ticker,
+            setup_type=setup_type,
+            ep_strategy=ep_strategy,
+            block_reason=block_reason,
+            intended_entry=intended_entry,
+            intended_stop=intended_stop,
+            portfolio_value=portfolio_value,
+            open_position_count=open_position_count,
+            notes=notes,
+        )
+        session.add(row)
+        session.commit()
+        return True
 
 
 def get_engine(db_url: str | None = None):

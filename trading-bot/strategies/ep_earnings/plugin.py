@@ -338,6 +338,23 @@ class EPEarningsPlugin:
             weekly_pnl = _compute_current_weekly_pnl(db_engine)
             can_enter, reason = risk.can_enter(open_count, daily_pnl, weekly_pnl, portfolio_value)
             if not can_enter:
+                if reason == "max_positions":
+                    from db.models import record_risk_skip
+                    stop_pct_skip = float(entry.get("stop_loss_pct", 7.0))
+                    intended_entry_skip = float(entry["entry_price"])
+                    intended_stop_skip = round(intended_entry_skip * (1 - stop_pct_skip / 100), 4)
+                    record_risk_skip(
+                        db_engine,
+                        ticker=ticker,
+                        setup_type="ep_earnings",
+                        ep_strategy=ep_strategy,
+                        block_reason="max_positions",
+                        intended_entry=intended_entry_skip,
+                        intended_stop=intended_stop_skip,
+                        portfolio_value=portfolio_value,
+                        open_position_count=open_count,
+                        notes=f"open={open_count}/cap={risk.max_positions}",
+                    )
                 logger.info("EP earnings: %s (%s) blocked by risk manager: %s", ticker, ep_strategy, reason)
                 if notify:
                     notify(f"EP EARNINGS BLOCKED: {ticker} ({ep_strategy}) - {reason}")
