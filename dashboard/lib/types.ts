@@ -360,15 +360,29 @@ export interface RiskData {
 }
 
 export interface PerformanceSummary {
-  total_pnl: number;
+  /** Sum of realized P&L over the window, divided by the starting portfolio
+   *  value (first DailyPnl row of the window). */
+  total_return_pct: number;
+  total_pnl_dollars: number;
   win_rate: number;
   total_trades: number;
-  best_day: number;
-  worst_day: number;
-  avg_win: number;
-  avg_loss: number;
+  /** Average R-multiple per trade. R = realized_pnl / initial_risk_$. */
+  expectancy_r: number;
   profit_factor: number;
-  strategy_breakdown: Record<string, { trades: number; pnl: number; winners: number }>;
+  best_trade_r: number;
+  best_trade_pnl: number;
+  worst_trade_r: number;
+  worst_trade_pnl: number;
+  avg_win_r: number;
+  avg_win_dollars: number;
+  avg_loss_r: number;
+  avg_loss_dollars: number;
+  /** Per-strategy breakdown. Key includes A/B/C suffix for EP variants
+   *  (e.g. "EP Earnings A", "EP News B"). */
+  strategy_breakdown: Record<
+    string,
+    { trades: number; win_rate: number; total_pnl: number; avg_r: number }
+  >;
 }
 
 export interface StrategyLastRun {

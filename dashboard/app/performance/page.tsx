@@ -61,45 +61,76 @@ export default function PerformancePage() {
         <EquityChart data={pnl} />
 
         {summary && Object.keys(summary.strategy_breakdown).length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm font-medium">By Strategy</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                {Object.entries(summary.strategy_breakdown).map(([name, stats]) => (
-                  <div
-                    key={name}
-                    className="rounded-lg border border-border p-3"
-                  >
-                    <p className="text-xs font-medium text-muted-foreground">{name}</p>
-                    <p className={`mt-1 text-lg font-bold tabular-nums ${stats.pnl >= 0 ? "text-profit" : "text-loss"}`}>
-                      ${stats.pnl.toFixed(2)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {stats.trades} trades &middot; {stats.trades > 0 ? Math.round((stats.winners / stats.trades) * 100) : 0}% win
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+          <StrategyBreakdown breakdown={summary.strategy_breakdown} />
         )}
       </main>
     </div>
   );
 }
 
+function formatR(r: number): string {
+  return `${r >= 0 ? "+" : ""}${r.toFixed(2)}R`;
+}
+
+function formatDollars(value: number, signed = false): string {
+  const abs = Math.abs(value).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  if (signed) return `${value >= 0 ? "+" : "-"}$${abs}`;
+  return value < 0 ? `-$${abs}` : `$${abs}`;
+}
+
 function StatsCards({ summary }: { summary: PerformanceSummary }) {
   const cards = [
-    { title: "Total P&L", value: `$${summary.total_pnl.toFixed(2)}`, color: summary.total_pnl >= 0 ? "text-profit" : "text-loss" },
-    { title: "Win Rate", value: `${summary.win_rate.toFixed(1)}%`, color: "" },
-    { title: "Total Trades", value: `${summary.total_trades}`, color: "" },
-    { title: "Profit Factor", value: `${summary.profit_factor.toFixed(2)}`, color: "" },
-    { title: "Best Day", value: `$${summary.best_day.toFixed(2)}`, color: "text-profit" },
-    { title: "Worst Day", value: `$${summary.worst_day.toFixed(2)}`, color: "text-loss" },
-    { title: "Avg Win", value: `$${summary.avg_win.toFixed(2)}`, color: "text-profit" },
-    { title: "Avg Loss", value: `$${summary.avg_loss.toFixed(2)}`, color: "text-loss" },
+    {
+      title: "Total Return",
+      value: `${summary.total_return_pct >= 0 ? "+" : ""}${summary.total_return_pct.toFixed(2)}%`,
+      sub: formatDollars(summary.total_pnl_dollars, true),
+      color: summary.total_return_pct >= 0 ? "text-profit" : "text-loss",
+    },
+    {
+      title: "Expectancy",
+      value: formatR(summary.expectancy_r),
+      sub: "avg R per trade",
+      color: summary.expectancy_r >= 0 ? "text-profit" : "text-loss",
+    },
+    {
+      title: "Win Rate",
+      value: `${summary.win_rate.toFixed(1)}%`,
+      sub: `${summary.total_trades} trade${summary.total_trades === 1 ? "" : "s"}`,
+      color: "",
+    },
+    {
+      title: "Profit Factor",
+      value: summary.profit_factor.toFixed(2),
+      sub: "wins$ / losses$",
+      color: "",
+    },
+    {
+      title: "Avg Win",
+      value: formatR(summary.avg_win_r),
+      sub: formatDollars(summary.avg_win_dollars, true),
+      color: "text-profit",
+    },
+    {
+      title: "Avg Loss",
+      value: formatR(summary.avg_loss_r),
+      sub: formatDollars(summary.avg_loss_dollars, true),
+      color: "text-loss",
+    },
+    {
+      title: "Best Trade",
+      value: formatR(summary.best_trade_r),
+      sub: formatDollars(summary.best_trade_pnl, true),
+      color: "text-profit",
+    },
+    {
+      title: "Worst Trade",
+      value: formatR(summary.worst_trade_r),
+      sub: formatDollars(summary.worst_trade_pnl, true),
+      color: "text-loss",
+    },
   ];
 
   return (
@@ -111,9 +142,56 @@ function StatsCards({ summary }: { summary: PerformanceSummary }) {
           </CardHeader>
           <CardContent>
             <div className={`text-xl font-bold tabular-nums ${c.color}`}>{c.value}</div>
+            <p className="mt-1 text-xs text-muted-foreground tabular-nums">{c.sub}</p>
           </CardContent>
         </Card>
       ))}
     </div>
+  );
+}
+
+function StrategyBreakdown({
+  breakdown,
+}: {
+  breakdown: PerformanceSummary["strategy_breakdown"];
+}) {
+  // Sort by avg_r descending so the strongest strategies surface first.
+  const entries = Object.entries(breakdown).sort(
+    (a, b) => b[1].avg_r - a[1].avg_r,
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-medium">By Strategy (avg R per trade)</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {entries.map(([name, stats]) => (
+            <div key={name} className="rounded-lg border border-border p-3">
+              <p className="text-xs font-medium text-muted-foreground">{name}</p>
+              <p
+                className={`mt-1 text-lg font-bold tabular-nums ${
+                  stats.avg_r >= 0 ? "text-profit" : "text-loss"
+                }`}
+              >
+                {formatR(stats.avg_r)}
+              </p>
+              <p
+                className={`text-xs tabular-nums ${
+                  stats.total_pnl >= 0 ? "text-profit" : "text-loss"
+                }`}
+              >
+                {formatDollars(stats.total_pnl, true)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {stats.trades} trade{stats.trades === 1 ? "" : "s"} &middot;{" "}
+                {stats.win_rate.toFixed(0)}% win
+              </p>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
