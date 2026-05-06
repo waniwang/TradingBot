@@ -11,12 +11,27 @@ function ProgressBar({
 }: {
   label: string;
   value: number;
-  limit: number;
+  limit: number | null;
   formatValue: string;
 }) {
+  // When the limit is null/0, the kill switch is disabled — show the
+  // current P&L without a progress bar so we don't suggest a fake threshold.
+  if (limit === null || limit === 0) {
+    return (
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs text-muted-foreground">{label}</span>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {formatValue} / no limit
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   // limit is negative (e.g. -3%), value can be positive or negative
   // ratio: how far toward the limit (0 = no loss, 1 = at limit)
-  const ratio = limit !== 0 ? Math.min(1, Math.max(0, value / limit)) : 0;
+  const ratio = Math.min(1, Math.max(0, value / limit));
   const pct = Math.round(ratio * 100);
 
   // Color transitions: green (0-50%) → amber (50-80%) → red (80-100%)
@@ -68,7 +83,9 @@ export function RiskMeter({ data }: { data: RiskData | null }) {
         <div className="flex items-center justify-between pt-1">
           <span className="text-xs text-muted-foreground">Positions</span>
           <span className="text-xs tabular-nums text-muted-foreground">
-            {data.open_positions} / {data.max_positions}
+            {data.max_positions === null
+              ? `${data.open_positions} / no cap`
+              : `${data.open_positions} / ${data.max_positions}`}
           </span>
         </div>
       </CardContent>

@@ -34,7 +34,7 @@ export function PortfolioCards({ data }: { data: Portfolio | null }) {
     {
       title: "Open Positions",
       value: `${data.open_positions}`,
-      sub: `max ${data.max_positions}`,
+      sub: data.max_positions === null ? "no cap" : `max ${data.max_positions}`,
     },
     {
       title: "Trades Today",

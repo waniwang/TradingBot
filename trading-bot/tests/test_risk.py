@@ -242,3 +242,54 @@ class TestCanEnter:
             ok, reason = rm.can_enter(0, 0, 0, 100_000)
         assert ok is False
         assert reason == "before_trading_window"
+
+
+# ---------------------------------------------------------------------------
+# Disabled-limit behavior (max_positions / daily_loss / weekly_loss == 0)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def disabled_config():
+    """All three position/loss limits disabled via the 0 sentinel."""
+    return {
+        "risk": {
+            "risk_per_trade_pct": 0.3,
+            "max_positions": 0,
+            "max_position_pct": 15.0,
+            "daily_loss_limit_pct": 0,
+            "weekly_loss_limit_pct": 0,
+        }
+    }
+
+
+class TestDisabledLimits:
+    def test_max_positions_zero_allows_unlimited(self, disabled_config):
+        rm = RiskManager(disabled_config)
+        # Even with 100 already open, new entries must be allowed.
+        assert rm.check_max_positions(100) is True
+        assert rm.check_max_positions(0) is True
+
+    def test_daily_loss_zero_allows_any_drawdown(self, disabled_config):
+        rm = RiskManager(disabled_config)
+        # Even a -50% day must not block.
+        assert rm.check_daily_loss(-50_000, 100_000) is True
+
+    def test_weekly_loss_zero_allows_any_drawdown(self, disabled_config):
+        rm = RiskManager(disabled_config)
+        assert rm.check_weekly_loss(-90_000, 100_000) is True
+
+    def test_can_enter_passes_in_trading_window(self, disabled_config):
+        """With all three disabled, can_enter only checks the trading
+        window — no exposure or P&L gate fires."""
+        rm = RiskManager(disabled_config)
+        fake_time = ET.localize(datetime.now().replace(hour=10, minute=0))
+        with patch("risk.manager.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_time
+            ok, reason = rm.can_enter(
+                open_position_count=99,
+                daily_pnl=-99_000,
+                weekly_pnl=-99_000,
+                portfolio_value=100_000,
+            )
+        assert ok is True, f"expected pass, got blocked: {reason}"
+        assert reason == ""

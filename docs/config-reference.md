@@ -14,11 +14,11 @@ alpaca:
   secret_key: YOUR_ALPACA_SECRET_KEY
 
 risk:
-  risk_per_trade_pct: 0.4      # % of portfolio risked per trade
-  max_positions: 4             # max concurrent open positions
-  max_position_pct: 15.0       # max single position as % of portfolio notional
-  daily_loss_limit_pct: 3.0    # halt day if daily loss exceeds this %
-  weekly_loss_limit_pct: 5.0   # halt week if weekly loss exceeds this %
+  risk_per_trade_pct: 0.3      # % of portfolio risked per trade
+  max_positions: 0             # 0 = disabled (no concurrent-position cap)
+  max_position_pct: 8.0        # max single position as % of portfolio notional
+  daily_loss_limit_pct: 0      # 0 = disabled (no daily-loss kill switch)
+  weekly_loss_limit_pct: 0     # 0 = disabled (no weekly-loss kill switch)
 
 strategies:
   enabled:                                   # which setups to scan & trade
@@ -99,13 +99,13 @@ Can also be set via env vars `ALPACA_API_KEY` and `ALPACA_SECRET_KEY`.
 ### `risk`
 | Key | Default | Description |
 |---|---|---|
-| `risk_per_trade_pct` | `0.4` | % of portfolio value risked per trade |
-| `max_positions` | `4` | Max concurrent open positions |
-| `max_position_pct` | `15.0` | Max single position notional as % of portfolio |
-| `daily_loss_limit_pct` | `3.0` | Daily loss % that halts trading for the day |
-| `weekly_loss_limit_pct` | `5.0` | Weekly loss % that halts trading for the week |
+| `risk_per_trade_pct` | `0.3` | % of portfolio value risked per trade |
+| `max_positions` | `0` | Max concurrent open positions; **`0` disables the cap** |
+| `max_position_pct` | `8.0` | Max single position notional as % of portfolio |
+| `daily_loss_limit_pct` | `0` | Daily loss % that halts trading for the day; **`0` disables the kill switch** |
+| `weekly_loss_limit_pct` | `0` | Weekly loss % that halts trading for the week; **`0` disables the kill switch** |
 
-For live trading start, use `risk_per_trade_pct: 0.5` and `max_positions: 2`.
+The bot defaults to having no position-count cap and no daily/weekly P&L kill switches — `max_position_pct` and `risk_per_trade_pct` are the only sizing constraints. For live trading you may want to re-enable the kill switches; set them to non-zero values such as `daily_loss_limit_pct: 3.0` and `weekly_loss_limit_pct: 5.0`.
 
 ---
 

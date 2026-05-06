@@ -21,7 +21,8 @@ export interface Portfolio {
   ytd_realized: number;
   ytd_realized_pct: number;
   open_positions: number;
-  max_positions: number;
+  // null when the position cap is disabled (max_positions=0 in config)
+  max_positions: number | null;
   trades_today: number;
 }
 
@@ -352,11 +353,14 @@ export interface MarketData {
 
 export interface RiskData {
   daily_pnl: number;
-  daily_limit_pct: number;
+  // null when the daily-loss kill switch is disabled
+  daily_limit_pct: number | null;
   weekly_pnl: number;
-  weekly_limit_pct: number;
+  // null when the weekly-loss kill switch is disabled
+  weekly_limit_pct: number | null;
   open_positions: number;
-  max_positions: number;
+  // null when the position cap is disabled
+  max_positions: number | null;
 }
 
 export interface PerformanceSummary {

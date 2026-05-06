@@ -52,9 +52,10 @@ Strategy Scanners (premarket)     Strategy Signals (market open)    Monitor (int
 └── parabolic_short/scanner.py
          ↓                               ↓                              ↓
     Watchlist Manager ─────────→ Risk Manager ──────────────→ Alpaca Executor
-    (scanner/watchlist_manager.py)  (0.4% risk/trade,           (limit entries,
-                                     max 4 positions,            GTC stop orders)
-                                     15% max position)
+    (scanner/watchlist_manager.py)  (0.3% risk/trade,           (limit entries,
+                                     8% max position notional,   GTC stop orders)
+                                     position cap + daily/weekly
+                                     loss limits DISABLED)
 ```
 
 **Data sources:** Alpaca snapshots for gap scanning (IEX daily-snapshot coverage is ~99.7% — the "~2%" figure applies only to realtime intraday trade streams), yfinance for fundamentals (market cap, quoteType, earnings calendar), Alpaca 1m candles for intraday signals. Full Alpaca capability + quirks cheat sheet: [docs/alpaca-api.md](docs/alpaca-api.md).

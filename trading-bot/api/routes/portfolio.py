@@ -85,6 +85,8 @@ def get_portfolio():
             "ytd_realized": ytd_realized,
             "ytd_realized_pct": ytd_realized_pct,
             "open_positions": len(open_positions),
-            "max_positions": config["risk"]["max_positions"],
+            # max_positions == 0 → cap is disabled; surface as None so the
+            # dashboard can render "—" rather than "X / 0".
+            "max_positions": (config["risk"]["max_positions"] or None),
             "trades_today": len(closed_today),
         }

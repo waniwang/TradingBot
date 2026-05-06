@@ -54,11 +54,20 @@ def get_risk():
         # Open positions count
         open_count = session.query(Position).filter(Position.is_open == True).count()
 
-    # Read limits from config or use defaults
-    # These match the defaults in config.yaml: daily -3%, weekly -5%, max 4 positions
-    daily_limit_pct = -3.0
-    weekly_limit_pct = -5.0
-    max_positions = 4
+    # Read limits live from config.yaml so the dashboard reflects whatever
+    # is currently configured. A value of 0 (or <=0) means the limit is
+    # disabled — return null so the frontend can render "—" instead of
+    # showing a stale or meaningless threshold.
+    from api.deps import get_config
+    cfg = get_config()
+    risk_cfg = cfg.get("risk", {})
+    daily_raw = float(risk_cfg.get("daily_loss_limit_pct", 0) or 0)
+    weekly_raw = float(risk_cfg.get("weekly_loss_limit_pct", 0) or 0)
+    max_pos_raw = int(risk_cfg.get("max_positions", 0) or 0)
+
+    daily_limit_pct = -daily_raw if daily_raw > 0 else None
+    weekly_limit_pct = -weekly_raw if weekly_raw > 0 else None
+    max_positions = max_pos_raw if max_pos_raw > 0 else None
 
     return {
         "daily_pnl": round(daily_pnl, 2),

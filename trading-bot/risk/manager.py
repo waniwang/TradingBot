@@ -75,7 +75,14 @@ class RiskManager:
     # ------------------------------------------------------------------
 
     def check_max_positions(self, open_position_count: int) -> bool:
-        """True if we can open another position."""
+        """True if we can open another position.
+
+        ``max_positions <= 0`` in config disables this check entirely
+        (always returns True). Used to operate without a hard
+        concurrent-position cap.
+        """
+        if self.max_positions <= 0:
+            return True
         ok = open_position_count < self.max_positions
         if not ok:
             logger.info(
@@ -122,7 +129,13 @@ class RiskManager:
     def check_daily_loss(
         self, daily_pnl: float, portfolio_value: float
     ) -> bool:
-        """True if daily loss is within the allowed limit."""
+        """True if daily loss is within the allowed limit.
+
+        ``daily_loss_limit_pct <= 0`` in config disables this check
+        entirely (always returns True).
+        """
+        if self.daily_loss_limit_pct <= 0:
+            return True
         loss_pct = daily_pnl / portfolio_value * 100  # negative if losing
         ok = loss_pct > -self.daily_loss_limit_pct
         if not ok:
@@ -135,7 +148,13 @@ class RiskManager:
     def check_weekly_loss(
         self, weekly_pnl: float, portfolio_value: float
     ) -> bool:
-        """True if weekly loss is within the allowed limit."""
+        """True if weekly loss is within the allowed limit.
+
+        ``weekly_loss_limit_pct <= 0`` in config disables this check
+        entirely (always returns True).
+        """
+        if self.weekly_loss_limit_pct <= 0:
+            return True
         loss_pct = weekly_pnl / portfolio_value * 100
         ok = loss_pct > -self.weekly_loss_limit_pct
         if not ok:
