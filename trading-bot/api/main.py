@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 from api.deps import get_config
 get_config()
 
-from api.routes import status, portfolio, positions, watchlist, signals, performance, pipeline, risk, market, doctor, strategies
+from api.routes import status, portfolio, positions, watchlist, attempts, performance, pipeline, risk, market, doctor, strategies
 
 API_KEY = os.environ.get("DASHBOARD_API_KEY", "dev-key")
 
@@ -55,7 +55,7 @@ app.include_router(status.router, prefix="/api")
 app.include_router(portfolio.router, prefix="/api")
 app.include_router(positions.router, prefix="/api")
 app.include_router(watchlist.router, prefix="/api")
-app.include_router(signals.router, prefix="/api")
+app.include_router(attempts.router, prefix="/api")
 app.include_router(performance.router, prefix="/api")
 app.include_router(pipeline.router, prefix="/api")
 app.include_router(risk.router, prefix="/api")

@@ -85,7 +85,8 @@ export interface WatchlistData {
     ready: number;
     watching: number;
     filled: number;
-    cancelled: number;
+    order_failed: number;
+    bot_error: number;
     expired: number;
   };
   active: WatchlistCandidate[];
@@ -93,32 +94,50 @@ export interface WatchlistData {
   watching: WatchlistCandidate[];
   /** Triggered rows with a Position (open or closed) — order actually filled. */
   filled: WatchlistCandidate[];
-  /** Triggered rows whose latest Order is cancelled/rejected, OR expired rows
-   * tagged [bot-failure] in notes (snapshot/fetch errors at day-2 confirm). */
-  cancelled: WatchlistCandidate[];
+  /** Triggered rows whose latest Order is cancelled/rejected by the broker. */
+  order_failed: WatchlistCandidate[];
+  /** Bot infrastructure failure at day-2 confirm (snapshot/fetch error) —
+   * never reached the broker. Signals a bug or transient infra issue, not a
+   * market outcome. */
+  bot_error: WatchlistCandidate[];
   /** Expired rows from legitimate day-2 rejection (price <= gap-day close). */
   expired: WatchlistCandidate[];
 }
 
-export interface SignalToday {
+/** A single attempt by the bot to enter a position. One row = one Signal,
+ *  enriched with the latest Order + the Position (if filled). */
+export type TradeAttemptOutcome =
+  | "filled_open"
+  | "filled_closed"
+  | "submitted"
+  | "did_not_fill"
+  | "broker_rejected";
+
+export interface TradeAttempt {
   id: number;
-  time: string;
   fired_at: string;
   ticker: string;
   setup: string;
-  entry: number;
-  stop: number;
-  gap_pct: number | null;
-  acted: boolean;
+  setup_raw: string;
   /** A / B / A+B / C — only set for EP strategies; null otherwise. */
   variation: string | null;
-  /** Latest Order row status — pending/submitted/filled/partially_filled/cancelled/rejected.
-   * null if no order was placed (acted=false). "acted=true + cancelled" is the "order
-   * submitted but never filled" case (e.g. limit didn't print). */
+  /** The signal's intended limit price. */
+  entry_intended: number;
+  stop: number;
+  gap_pct: number | null;
+  /** Actual fill price from the broker (null if not yet filled). */
+  entry_actual: number | null;
+  exit: number | null;
+  pnl: number | null;
+  days: number | null;
+  outcome: TradeAttemptOutcome;
+  /** Short human-readable detail — exit reason for closed trades, "limit not
+   *  reached" for unfilled, etc. */
+  detail: string | null;
+  // Raw status fields kept for debugging tooltips
   order_status: string | null;
-  filled_qty: number | null;
-  filled_avg_price: number | null;
   order_qty: number | null;
+  filled_qty: number | null;
 }
 
 export interface DailyPnl {

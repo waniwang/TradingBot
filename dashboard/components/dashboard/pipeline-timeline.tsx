@@ -162,11 +162,13 @@ export const STATUS_STYLES: Record<StepStatus, { dot: string; line: string; text
     line: "bg-border",
     text: "text-muted-foreground",
   },
-  // Missed = scheduled but no execution row. Rendered identically to failed.
+  // Missed = scheduled but no execution row. Distinct from failed (which ran
+  // and threw): hollow red ring instead of solid red dot, so the timeline
+  // makes the operational difference visible at a glance.
   missed: {
-    dot: "bg-loss border-loss",
+    dot: "bg-transparent border-loss",
     line: "bg-border",
-    text: "text-foreground",
+    text: "text-loss",
   },
 };
 

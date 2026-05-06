@@ -48,6 +48,7 @@ export function getStatusLabel(
   failureReason: string | null = null
 ): string {
   if (failureReason === "timeout") return "timed out";
+  if (status === "missed") return "missed (never ran)";
   return status;
 }
 

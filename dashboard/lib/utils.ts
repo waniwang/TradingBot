@@ -31,27 +31,29 @@ export function formatRelativeTime(iso: string | null | undefined, now: number =
 export function stageLabel(stage: string | null | undefined): string {
   const s = (stage ?? "").toLowerCase();
   switch (s) {
-    case "active":    return "Candidates";
-    case "ready":     return "Queued";
-    case "watching":  return "Awaiting Day-2";
-    case "triggered": return "Entered";
-    case "filled":    return "Filled";
-    case "cancelled": return "Cancelled";
-    case "expired":   return "Expired";
-    default:          return stage ?? "-";
+    case "active":       return "Candidates";
+    case "ready":        return "Queued";
+    case "watching":     return "Awaiting Day-2";
+    case "triggered":    return "Entered";
+    case "filled":       return "Filled";
+    case "order_failed": return "Order Failed";
+    case "bot_error":    return "Bot Error";
+    case "expired":      return "Expired";
+    default:             return stage ?? "-";
   }
 }
 
 export function stageTooltip(stage: string | null | undefined): string {
   const s = (stage ?? "").toLowerCase();
   switch (s) {
-    case "active":    return "Scan pool — passed filters, awaiting execution decision";
-    case "ready":     return "Queued for the next execute window";
-    case "watching":  return "Awaiting day-2 price confirmation (EP Strategy C)";
-    case "triggered": return "Order placed with the broker";
-    case "filled":    return "Order filled — position opened";
-    case "cancelled": return "Order cancelled/rejected, or bot failed to trigger (e.g. snapshot error at day-2 confirm)";
-    case "expired":   return "Day-2 price did not confirm (price <= gap-day close)";
-    default:          return "";
+    case "active":       return "Scan pool — passed filters, awaiting execution decision";
+    case "ready":        return "Queued for the next execute window";
+    case "watching":     return "Awaiting day-2 price confirmation (EP Strategy C)";
+    case "triggered":    return "Order placed with the broker";
+    case "filled":       return "Order filled — position opened";
+    case "order_failed": return "Broker cancelled or rejected the order (e.g. limit didn't print, broker refused)";
+    case "bot_error":    return "Bot infrastructure failure before the order was placed (e.g. snapshot/fetch error at day-2 confirm). Indicates a bug or transient infra issue, not a market outcome.";
+    case "expired":      return "Day-2 price did not confirm (price <= gap-day close)";
+    default:             return "";
   }
 }

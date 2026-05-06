@@ -79,9 +79,13 @@ export default function WatchlistPage() {
                 {stageLabel("filled")}
                 <Badge variant="secondary" className="text-xs">{data.counts.filled}</Badge>
               </TabsTrigger>
-              <TabsTrigger value="cancelled" className="gap-2" title={stageTooltip("cancelled")}>
-                {stageLabel("cancelled")}
-                <Badge variant="secondary" className="text-xs">{data.counts.cancelled}</Badge>
+              <TabsTrigger value="order_failed" className="gap-2" title={stageTooltip("order_failed")}>
+                {stageLabel("order_failed")}
+                <Badge variant="secondary" className="text-xs">{data.counts.order_failed}</Badge>
+              </TabsTrigger>
+              <TabsTrigger value="bot_error" className="gap-2" title={stageTooltip("bot_error")}>
+                {stageLabel("bot_error")}
+                <Badge variant="secondary" className="text-xs">{data.counts.bot_error}</Badge>
               </TabsTrigger>
               <TabsTrigger value="expired" className="gap-2" title={stageTooltip("expired")}>
                 {stageLabel("expired")}
@@ -101,8 +105,11 @@ export default function WatchlistPage() {
             <TabsContent value="filled" className="mt-4">
               <CandidateTable candidates={data.filled} bucket="filled" />
             </TabsContent>
-            <TabsContent value="cancelled" className="mt-4">
-              <CandidateTable candidates={data.cancelled} bucket="cancelled" />
+            <TabsContent value="order_failed" className="mt-4">
+              <CandidateTable candidates={data.order_failed} bucket="order_failed" />
+            </TabsContent>
+            <TabsContent value="bot_error" className="mt-4">
+              <CandidateTable candidates={data.bot_error} bucket="bot_error" />
             </TabsContent>
             <TabsContent value="expired" className="mt-4">
               <CandidateTable candidates={data.expired} bucket="expired" />
@@ -127,8 +134,12 @@ function stageBadgeClasses(bucket: string | undefined): string {
       return "bg-yellow-500/20 text-yellow-400";
     case "filled":
       return "bg-profit/20 text-profit";
-    case "cancelled":
+    case "order_failed":
       return "bg-loss/20 text-loss";
+    // Bot Error gets an orange tint to read as "operator action needed"
+    // rather than market outcome — distinct from order_failed's red.
+    case "bot_error":
+      return "bg-orange-500/20 text-orange-400";
     case "expired":
       return "bg-muted text-muted-foreground";
     default:

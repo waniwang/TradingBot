@@ -12,14 +12,26 @@ import {
   Workflow,
 } from "lucide-react";
 
-const NAV_ITEMS = [
-  { href: "/", label: "Overview", icon: LayoutDashboard },
-  { href: "/strategies", label: "Strategies", icon: Layers2 },
-  { href: "/positions", label: "Positions", icon: Briefcase },
-  { href: "/watchlist", label: "Watchlist", icon: Eye },
-  { href: "/pipeline", label: "Pipeline", icon: Workflow },
-  { href: "/performance", label: "Performance", icon: TrendingUp },
-  { href: "/history", label: "History", icon: History },
+type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
+
+const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
+  {
+    label: "Today",
+    items: [
+      { href: "/", label: "Overview", icon: LayoutDashboard },
+      { href: "/positions", label: "Positions", icon: Briefcase },
+      { href: "/watchlist", label: "Watchlist", icon: Eye },
+      { href: "/pipeline", label: "Pipeline", icon: Workflow },
+    ],
+  },
+  {
+    label: "Review",
+    items: [
+      { href: "/history", label: "History", icon: History },
+      { href: "/performance", label: "Performance", icon: TrendingUp },
+      { href: "/strategies", label: "Strategies", icon: Layers2 },
+    ],
+  },
 ];
 
 export function Sidebar() {
@@ -32,26 +44,33 @@ export function Sidebar() {
           Trading Bot
         </span>
       </div>
-      <nav className="flex flex-1 flex-col gap-1 p-3">
-        {NAV_ITEMS.map((item) => {
-          const active = item.href === "/"
-            ? pathname === "/"
-            : pathname.startsWith(item.href);
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                active
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-              }`}
-            >
-              <item.icon className="h-4 w-4" />
-              {item.label}
-            </Link>
-          );
-        })}
+      <nav className="flex flex-1 flex-col gap-4 p-3">
+        {NAV_GROUPS.map((group) => (
+          <div key={group.label} className="flex flex-col gap-1">
+            <div className="px-3 pt-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+              {group.label}
+            </div>
+            {group.items.map((item) => {
+              const active = item.href === "/"
+                ? pathname === "/"
+                : pathname.startsWith(item.href);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                    active
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                      : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                  }`}
+                >
+                  <item.icon className="h-4 w-4" />
+                  {item.label}
+                </Link>
+              );
+            })}
+          </div>
+        ))}
       </nav>
     </aside>
   );

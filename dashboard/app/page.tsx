@@ -4,20 +4,18 @@ import { useEffect, useState, useCallback } from "react";
 import { Header } from "@/components/layout/header";
 import { PortfolioCards } from "@/components/dashboard/portfolio-cards";
 import { PositionsTable } from "@/components/dashboard/positions-table";
-import { EquityChart } from "@/components/dashboard/equity-chart";
-import { RecentSignals } from "@/components/dashboard/recent-signals";
+import { TradeAttempts } from "@/components/dashboard/trade-attempts";
 import { PipelineStatus } from "@/components/dashboard/pipeline-status";
 import { RiskMeter } from "@/components/dashboard/risk-meter";
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
-import type { BotStatus, Portfolio, OpenPosition, DailyPnl, SignalToday, PipelineData, RiskData, MarketData, MarketIndex } from "@/lib/types";
+import type { BotStatus, Portfolio, OpenPosition, TradeAttempt, PipelineData, RiskData, MarketData, MarketIndex } from "@/lib/types";
 
 export default function OverviewPage() {
   const [status, setStatus] = useState<BotStatus | null>(null);
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [positions, setPositions] = useState<OpenPosition[]>([]);
-  const [pnl, setPnl] = useState<DailyPnl[]>([]);
-  const [signals, setSignals] = useState<SignalToday[]>([]);
+  const [attempts, setAttempts] = useState<TradeAttempt[]>([]);
   const [pipeline, setPipeline] = useState<PipelineData | null>(null);
   const [riskData, setRiskData] = useState<RiskData | null>(null);
   const [marketIndices, setMarketIndices] = useState<MarketIndex[]>([]);
@@ -28,12 +26,11 @@ export default function OverviewPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, p, pos, pnlData, sig, pipe, rd, mkt] = await Promise.all([
+      const [s, p, pos, att, pipe, rd, mkt] = await Promise.all([
         fetchAPI<BotStatus>("/api/status"),
         fetchAPI<Portfolio>("/api/portfolio"),
         fetchAPI<OpenPosition[]>("/api/positions"),
-        fetchAPI<DailyPnl[]>("/api/performance/pnl"),
-        fetchAPI<SignalToday[]>("/api/signals/today"),
+        fetchAPI<TradeAttempt[]>("/api/attempts/today"),
         fetchAPI<PipelineData>("/api/pipeline"),
         fetchAPI<RiskData>("/api/risk"),
         fetchAPI<MarketData>("/api/market"),
@@ -41,8 +38,7 @@ export default function OverviewPage() {
       setStatus(s);
       setPortfolio(p);
       setPositions(pos);
-      setPnl(pnlData);
-      setSignals(sig);
+      setAttempts(att);
       setPipeline(pipe);
       setRiskData(rd);
       setMarketIndices(mkt.indices || []);
@@ -90,13 +86,14 @@ export default function OverviewPage() {
           <PositionsTable positions={positions} />
         </section>
 
-        <EquityChart data={pnl} />
-
         <section>
           <h2 className="mb-3 text-sm font-medium text-muted-foreground">
-            Signals Today
+            Today&apos;s Attempts
           </h2>
-          <RecentSignals signals={signals} />
+          <TradeAttempts
+            attempts={attempts}
+            emptyMessage="No attempts fired today"
+          />
         </section>
       </main>
     </div>

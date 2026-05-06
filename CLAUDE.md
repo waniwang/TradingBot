@@ -203,7 +203,11 @@ trading-bot/api/    → FastAPI backend (Linode, port 8000)
 
 **Frontend** (`dashboard/`): Next.js 16, TypeScript, Tailwind v4, shadcn/ui, Recharts. Dark theme. Auto-refresh (30s market hours, 5m off hours). Pages: Overview (pipeline timeline, portfolio, risk meter, positions, equity chart, signals), Positions, Watchlist, Performance, History.
 
-**API** (`trading-bot/api/`): Read-only FastAPI endpoints. Shares DB models with bot. Auth via `X-API-Key` header. Endpoints: `/api/status`, `/api/portfolio`, `/api/positions`, `/api/positions/closed`, `/api/watchlist`, `/api/signals/today`, `/api/performance/pnl`, `/api/performance/summary`, `/api/pipeline`, `/api/pipeline/history`, `/api/pipeline/job-detail`, `/api/risk`, `/api/market`.
+**API** (`trading-bot/api/`): Read-only FastAPI endpoints. Shares DB models with bot. Auth via `X-API-Key` header. Endpoints: `/api/status`, `/api/portfolio`, `/api/positions`, `/api/positions/closed`, `/api/watchlist`, `/api/attempts`, `/api/attempts/today`, `/api/performance/pnl`, `/api/performance/summary`, `/api/pipeline`, `/api/pipeline/history`, `/api/pipeline/job-detail`, `/api/risk`, `/api/market`.
+
+**Trade Attempts model**: `/api/attempts` joins Signal + latest Order + Position into one row per attempt. The `outcome` field is the operator-facing label — replaces the old "what does Signal mean vs Position" confusion. Outcomes: `filled_open` (filled, position open), `filled_closed` (filled, position closed), `submitted` (working at broker), `did_not_fill` (`Order.status=cancelled` — limit didn't print, bot timed out), `broker_rejected` (`Order.status=rejected`). The legacy `/api/signals/today` and `/api/signals/history` endpoints have been removed; use `/api/attempts/today` and `/api/attempts?limit=N` instead. We deliberately do not split GTC `expired` from `did_not_fill` today because the bot only places day orders — if GTC orders are added, introduce an `expired` outcome then.
+
+**Watchlist buckets**: `/api/watchlist` groups rows into seven buckets: `active`, `ready`, `watching`, `filled`, `order_failed`, `bot_error`, `expired`. The old single `cancelled` bucket has been split — `order_failed` is broker-side (cancelled/rejected order), `bot_error` is infrastructure-side (snapshot/fetch error at day-2 confirm, marked with `[bot-failure]` tag in `Watchlist.notes`). Different operator responses (market reality vs. bug to fix), so they're rendered with distinct colors and separate tabs.
 
 **Dev workflow:**
 ```bash

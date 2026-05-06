@@ -10,8 +10,8 @@ from api.deps import get_db_engine, get_enabled_strategies
 router = APIRouter()
 
 # Tag written into Watchlist.notes by day2_confirm when the snapshot fetch errors
-# or returns no data. Lets the dashboard split expired rows into "Expired"
-# (legitimate price rejection) vs "Cancelled" (bot/broker failure).
+# or returns no data. Lets the dashboard surface infrastructure failures in their
+# own "Bot Error" bucket, separate from broker-side "Order Failed" rejections.
 BOT_FAILURE_TAG = "[bot-failure]"
 
 
@@ -146,36 +146,35 @@ def get_watchlist():
         triggered = base_query.filter(Watchlist.stage == "triggered").all()
         expired_all = base_query.filter(Watchlist.stage == "expired").all()
 
-        # Derive filled / cancelled from triggered rows + Order/Position state.
+        # Derive filled / order_failed from triggered rows + Order/Position state.
         # Skip candidate-pool artifacts (see _is_execution_row).
         filled: list[Watchlist] = []
-        cancelled_from_triggered: list[Watchlist] = []
+        order_failed: list[Watchlist] = []
         for row in triggered:
             if not _is_execution_row(row):
                 continue
             if _ticker_has_position(session, row.ticker, row.setup_type):
                 filled.append(row)
             elif _latest_order_status(session, row.ticker) in ("cancelled", "rejected"):
-                cancelled_from_triggered.append(row)
+                order_failed.append(row)
             else:
                 # Triggered + no position + no terminal-failure order = in-flight
                 # (submitted/pending). Show in Filled optimistically; it'll flip
-                # once the fill comes through (or to Cancelled on timeout).
+                # to Order Failed if the broker times out the limit.
                 filled.append(row)
 
-        # Split expired: [bot-failure] tag → Cancelled; everything else → Expired.
-        cancelled_from_expired: list[Watchlist] = []
+        # Split expired: [bot-failure] tag → Bot Error (infra fault before any
+        # broker call); everything else → Expired (legitimate day-2 rejection).
+        bot_error: list[Watchlist] = []
         expired: list[Watchlist] = []
         for row in expired_all:
             if not _is_execution_row(row):
                 continue
             notes = row.notes or ""
             if BOT_FAILURE_TAG in notes:
-                cancelled_from_expired.append(row)
+                bot_error.append(row)
             else:
                 expired.append(row)
-
-        cancelled = cancelled_from_triggered + cancelled_from_expired
 
     # Dedup: active wins over ready; ready wins over watching — but only suppress
     # watching rows that are NOT day-2-confirm C candidates. EP strategies
@@ -200,7 +199,8 @@ def get_watchlist():
     ready_filtered = _newest_first(ready_filtered)
     watching_filtered = _newest_first(watching_filtered)
     filled = _newest_first(filled)
-    cancelled = _newest_first(cancelled)
+    order_failed = _newest_first(order_failed)
+    bot_error = _newest_first(bot_error)
     expired = _newest_first(expired)
 
     return {
@@ -209,13 +209,15 @@ def get_watchlist():
             "ready": len(ready_filtered),
             "watching": len(watching_filtered),
             "filled": len(filled),
-            "cancelled": len(cancelled),
+            "order_failed": len(order_failed),
+            "bot_error": len(bot_error),
             "expired": len(expired),
         },
         "active": [_format_candidate(r) for r in active],
         "ready": [_format_candidate(r) for r in ready_filtered],
         "watching": [_format_candidate(r) for r in watching_filtered],
         "filled": [_format_candidate(r) for r in filled],
-        "cancelled": [_format_candidate(r) for r in cancelled],
+        "order_failed": [_format_candidate(r) for r in order_failed],
+        "bot_error": [_format_candidate(r) for r in bot_error],
         "expired": [_format_candidate(r) for r in expired],
     }

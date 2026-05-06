@@ -2,20 +2,14 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { Header } from "@/components/layout/header";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { fetchAPI } from "@/lib/api";
 import { useAutoRefresh } from "@/lib/hooks";
-import { RecentSignals } from "@/components/dashboard/recent-signals";
-import { VariationBadge } from "@/components/strategies/variation-badge";
-import type { BotStatus, ClosedPosition, SignalToday } from "@/lib/types";
+import { TradeAttempts } from "@/components/dashboard/trade-attempts";
+import type { BotStatus, TradeAttempt } from "@/lib/types";
 
 export default function HistoryPage() {
   const [status, setStatus] = useState<BotStatus | null>(null);
-  const [trades, setTrades] = useState<ClosedPosition[]>([]);
-  const [signals, setSignals] = useState<SignalToday[]>([]);
+  const [attempts, setAttempts] = useState<TradeAttempt[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -23,14 +17,12 @@ export default function HistoryPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, t, sig] = await Promise.all([
+      const [s, a] = await Promise.all([
         fetchAPI<BotStatus>("/api/status"),
-        fetchAPI<ClosedPosition[]>("/api/positions/closed?limit=100"),
-        fetchAPI<SignalToday[]>("/api/signals/history?limit=100"),
+        fetchAPI<TradeAttempt[]>("/api/attempts?limit=100"),
       ]);
       setStatus(s);
-      setTrades(t);
-      setSignals(sig);
+      setAttempts(a);
       setLastUpdated(new Date());
       setError(null);
     } catch (e) {
@@ -46,10 +38,17 @@ export default function HistoryPage() {
     refresh();
   }, [refresh]);
 
-  // Stats
-  const totalPnl = trades.reduce((sum, t) => sum + t.pnl, 0);
-  const winners = trades.filter((t) => t.pnl > 0).length;
-  const winRate = trades.length > 0 ? (winners / trades.length) * 100 : 0;
+  // Stats over filled & closed attempts only — that's where P&L is meaningful.
+  const closed = attempts.filter((a) => a.outcome === "filled_closed" && a.pnl != null);
+  const totalPnl = closed.reduce((sum, a) => sum + (a.pnl ?? 0), 0);
+  const winners = closed.filter((a) => (a.pnl ?? 0) > 0).length;
+  const winRate = closed.length > 0 ? (winners / closed.length) * 100 : 0;
+  const filledCount = attempts.filter(
+    (a) => a.outcome === "filled_open" || a.outcome === "filled_closed",
+  ).length;
+  const failedCount = attempts.filter(
+    (a) => a.outcome === "did_not_fill" || a.outcome === "broker_rejected",
+  ).length;
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -62,104 +61,35 @@ export default function HistoryPage() {
         autoRefreshPaused={paused}
         onToggleAutoRefresh={() => setPaused(!paused)}
       />
-      <main className="flex-1 space-y-8 p-6">
-        <section className="space-y-4">
-          <div className="flex items-baseline justify-between">
-            <h2 className="text-lg font-semibold">Signal History</h2>
-            <div className="text-sm text-muted-foreground">
-              {signals.length} signals
-            </div>
-          </div>
-          <RecentSignals
-            signals={signals}
-            showDate
-            emptyMessage="No signals recorded yet"
-          />
-        </section>
-
+      <main className="flex-1 space-y-4 p-6">
         <div className="flex items-baseline justify-between">
-          <h2 className="text-lg font-semibold">Trade History</h2>
+          <div>
+            <h2 className="text-lg font-semibold">Trade Attempts</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Every order the bot tried to place — filled, unfilled, or rejected.
+            </p>
+          </div>
           <div className="flex gap-4 text-sm text-muted-foreground">
-            <span>{trades.length} trades</span>
-            <span className={totalPnl >= 0 ? "text-profit" : "text-loss"}>
-              P&L: ${totalPnl.toFixed(2)}
-            </span>
-            <span>Win: {winRate.toFixed(0)}%</span>
+            <span>{attempts.length} attempts</span>
+            <span>{filledCount} filled</span>
+            {failedCount > 0 && (
+              <span className="text-loss">{failedCount} failed</span>
+            )}
+            {closed.length > 0 && (
+              <>
+                <span className={totalPnl >= 0 ? "text-profit" : "text-loss"}>
+                  P&L: {totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(2)}
+                </span>
+                <span>Win: {winRate.toFixed(0)}%</span>
+              </>
+            )}
           </div>
         </div>
-
-        {trades.length === 0 ? (
-          <div className="rounded-lg border border-border p-8 text-center text-sm text-muted-foreground">
-            No closed trades yet
-          </div>
-        ) : (
-          <div className="rounded-lg border border-border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Ticker</TableHead>
-                  <TableHead>Setup</TableHead>
-                  <TableHead>Side</TableHead>
-                  <TableHead className="text-right">Entry</TableHead>
-                  <TableHead className="text-right">Exit</TableHead>
-                  <TableHead className="text-right">P&L</TableHead>
-                  <TableHead className="text-right">Days</TableHead>
-                  <TableHead>Reason</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {trades.map((t) => (
-                  <TableRow key={t.id}>
-                    <TableCell className="tabular-nums text-muted-foreground">
-                      {t.date
-                        ? new Date(t.date).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            year: "2-digit",
-                          })
-                        : "-"}
-                    </TableCell>
-                    <TableCell className="font-medium">{t.ticker}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1.5">
-                        <Badge variant="outline" className="text-xs">{t.setup}</Badge>
-                        <VariationBadge value={t.variation} />
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={t.side === "LONG" ? "default" : "destructive"}
-                        className="text-xs"
-                      >
-                        {t.side}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      ${t.entry.toFixed(2)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {t.exit != null ? `$${t.exit.toFixed(2)}` : "-"}
-                    </TableCell>
-                    <TableCell
-                      className={`text-right tabular-nums font-medium ${
-                        t.pnl >= 0 ? "text-profit" : "text-loss"
-                      }`}
-                    >
-                      {t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(2)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{t.days}</TableCell>
-                    <TableCell>
-                      <Badge variant="secondary" className="text-xs capitalize">
-                        {t.reason || "-"}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
+        <TradeAttempts
+          attempts={attempts}
+          showDate
+          emptyMessage="No attempts recorded yet"
+        />
       </main>
     </div>
   );
