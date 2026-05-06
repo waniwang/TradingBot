@@ -1,12 +1,13 @@
-date,failure_time,ticker,strategy,intended_entry,intended_stop,would_confirm,reason,incident_commit
-2026-04-23,2026-04-23T21:33:17.697482Z,GEV,ep_earnings_c,1149.41,1068.95,yes,fetch_current_price returned None during day-2 confirm,756390a
-2026-04-23,2026-04-23T21:33:17.697482Z,LBTYB,ep_news_c,17.36,16.14,yes,fetch_current_price returned None during day-2 confirm,756390a
-2026-04-23,2026-04-23T21:33:17.697482Z,MAS,ep_earnings_c,75.44,70.16,yes,fetch_current_price returned None during day-2 confirm,756390a
-2026-04-23,2026-04-23T21:33:17.697482Z,MCRI,ep_earnings_c,117.14,108.94,yes,fetch_current_price returned None during day-2 confirm,756390a
-2026-04-23,2026-04-23T21:33:17.697482Z,TFX,ep_news_c,136.76,127.19,yes,fetch_current_price returned None during day-2 confirm,756390a
-2026-04-24,2026-04-24T19:45:29.767480Z,NOK,ep_earnings_c,10.45,9.72,yes,fetch_current_price returned None during day-2 confirm,756390a
-2026-04-27,2026-04-27T19:35:29.310534Z,INTC,ep_earnings_c,84.99,79.04,yes,fetch_current_price returned None during day-2 confirm,756390a
-2026-04-27,2026-04-27T19:35:29.310537Z,WKC,ep_earnings_c,26.27,24.43,yes,fetch_current_price returned None during day-2 confirm,756390a
-2026-04-27,2026-04-27T19:35:29.310538Z,CHE,ep_earnings_c,422.80,393.20,yes,fetch_current_price returned None during day-2 confirm,756390a
-2026-04-30,2026-04-30T22:11:53.591208Z,AMD,ep_news_a,,,unknown,fetch_current_price returned None during day-2 confirm,
-2026-04-30,2026-04-30T22:11:53.591208Z,MCRI,ep_earnings_a,,,unknown,fetch_current_price returned None during day-2 confirm,
+date,failure_time,ticker,strategy,intended_entry,intended_stop,would_confirm,reason,incident_commit,category
+2026-04-23,2026-04-23T21:33:17.697482Z,GEV,ep_earnings_c,1149.41,1068.95,yes,fetch_current_price returned None during day-2 confirm,756390a,bot-bug
+2026-04-23,2026-04-23T21:33:17.697482Z,LBTYB,ep_news_c,17.36,16.14,yes,fetch_current_price returned None during day-2 confirm,756390a,bot-bug
+2026-04-23,2026-04-23T21:33:17.697482Z,MAS,ep_earnings_c,75.44,70.16,yes,fetch_current_price returned None during day-2 confirm,756390a,bot-bug
+2026-04-23,2026-04-23T21:33:17.697482Z,MCRI,ep_earnings_c,117.14,108.94,yes,fetch_current_price returned None during day-2 confirm,756390a,bot-bug
+2026-04-23,2026-04-23T21:33:17.697482Z,TFX,ep_news_c,136.76,127.19,yes,fetch_current_price returned None during day-2 confirm,756390a,bot-bug
+2026-04-24,2026-04-24T19:45:29.767480Z,NOK,ep_earnings_c,10.45,9.72,yes,fetch_current_price returned None during day-2 confirm,756390a,bot-bug
+2026-04-27,2026-04-27T19:35:29.310534Z,INTC,ep_earnings_c,84.99,79.04,yes,fetch_current_price returned None during day-2 confirm,756390a,bot-bug
+2026-04-27,2026-04-27T19:35:29.310537Z,WKC,ep_earnings_c,26.27,24.43,yes,fetch_current_price returned None during day-2 confirm,756390a,bot-bug
+2026-04-27,2026-04-27T19:35:29.310538Z,CHE,ep_earnings_c,422.80,393.20,yes,fetch_current_price returned None during day-2 confirm,756390a,bot-bug
+2026-04-30,2026-04-30T22:11:53.591208Z,AMD,ep_news_a,,,unknown,fetch_current_price returned None during day-2 confirm,,bot-bug
+2026-04-30,2026-04-30T22:11:53.591208Z,MCRI,ep_earnings_a,,,unknown,fetch_current_price returned None during day-2 confirm,,bot-bug
+2026-05-01,2026-05-01T19:39:00Z,NVCR,ep_news_b,14.59,13.13,yes,Position cap full at execute time (open=20/cap=20 (backfilled from journald)),,max-positions
