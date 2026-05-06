@@ -238,17 +238,25 @@ def _await_fill_and_setup_stop(
         f"Risk/share: ${signal.risk_per_share:.2f}"
     )
 
-    # Stop placement: prefer the OTO child the broker auto-created at fill
-    # (Alpaca path). If the client returns None — IB's place_oto_order is a
-    # shim that doesn't actually use OTO — fall back to placing a separate
-    # stop order via the legacy two-step pattern.
-    broker_stop_id = None
+    # Stop placement.
+    #
+    # Alpaca path: place_oto_order auto-creates a child stop on parent fill,
+    # but that child INHERITS the parent's DAY TIF — it expires at EOD on
+    # the entry day, leaving the position unprotected overnight (this caused
+    # the 2026-05-06 batch of "stop expired at broker" reconcile alerts on
+    # NVT/FTRE/IMOS/CYTK/STRL/WAT). The OTO order class is still required
+    # at submit time to bypass Alpaca's wash-trade detector (error
+    # 40310000) — we just need to swap the DAY child for a GTC stop after
+    # the parent fills.
+    #
+    # IB path: get_child_stop_order_id returns None (the IB shim doesn't
+    # use OTO), so the cancel block is a no-op and we go straight to
+    # place_stop_order, which is already GTC on the IB client.
+    oto_child_id = None
     for attempt in range(1, 4):
         try:
-            broker_stop_id = client.get_child_stop_order_id(broker_order_id)
-            if broker_stop_id:
-                logger.info("OTO child stop registered for %s: %s",
-                            ticker, broker_stop_id)
+            oto_child_id = client.get_child_stop_order_id(broker_order_id)
+            if oto_child_id:
                 break
         except Exception as e:
             logger.error("get_child_stop_order_id attempt %d/3 failed for %s: %s",
@@ -256,34 +264,52 @@ def _await_fill_and_setup_stop(
         if attempt < 3:
             time.sleep(2 ** attempt)  # 2s, 4s backoff
 
-    if broker_stop_id is None:
-        # OTO child not present (or client doesn't implement OTO). Fall back
-        # to placing a separate stop. This path is exercised by the IB bot
-        # and as a defensive backstop on Alpaca.
-        stop_side = "sell" if signal.side == "long" else "buy_to_cover"
-        for attempt in range(1, 4):
-            try:
-                broker_stop_id = client.place_stop_order(
-                    ticker, stop_side, filled_qty, signal.stop_price
-                )
-                logger.info("Fallback stop order placed for %s: %s",
-                            ticker, broker_stop_id)
-                break
-            except Exception as e:
-                logger.error("Fallback stop attempt %d/3 failed for %s: %s",
-                             attempt, ticker, e)
-                if attempt < 3:
-                    time.sleep(2 ** attempt)
+    if oto_child_id:
+        # Cancel the DAY-TIF OTO child so we can submit a GTC replacement.
+        # Without the cancel the GTC submit hits "qty_available=0" because
+        # all shares are reserved for the existing child stop.
+        logger.info(
+            "OTO child stop %s for %s is DAY-TIF — cancelling so we can replace with GTC",
+            oto_child_id, ticker,
+        )
+        try:
+            client.cancel_order(oto_child_id)
+        except Exception as e:
+            logger.error("cancel_order(%s) for %s failed: %s — continuing to GTC place anyway",
+                         oto_child_id, ticker, e)
+        # Brief pause so Alpaca releases the share quantity before we resubmit.
+        # If we skip this, place_stop_order can race the cancel and fail.
+        time.sleep(1.0)
+
+    # Place a GTC stop. Runs in BOTH the cancel-and-replace case (Alpaca,
+    # post-OTO-fill) AND the no-OTO-child case (IB, or defensive backstop).
+    broker_stop_id = None
+    stop_side = "sell" if signal.side == "long" else "buy_to_cover"
+    for attempt in range(1, 4):
+        try:
+            broker_stop_id = client.place_stop_order(
+                ticker, stop_side, filled_qty, signal.stop_price
+            )
+            logger.info("GTC stop placed for %s: %s", ticker, broker_stop_id)
+            break
+        except Exception as e:
+            logger.error("place_stop_order attempt %d/3 failed for %s: %s",
+                         attempt, ticker, e)
+            if attempt < 3:
+                time.sleep(2 ** attempt)
 
     if broker_stop_id is None:
-        # No stop via OTO, no stop via fallback — position is genuinely
-        # unprotected. Alert loudly so the operator can place one manually.
-        logger.critical("UNPROTECTED POSITION: %s %d shares @ %.2f — both OTO discovery and fallback stop failed",
+        # No GTC stop — position is genuinely unprotected. Alert loudly so
+        # the operator can place one manually. Note: if the OTO child
+        # cancel succeeded above this means truly naked (worse than
+        # current state); if cancel failed the OTO child may still be
+        # alive but is DAY-TIF so it expires at EOD anyway.
+        logger.critical("UNPROTECTED POSITION: %s %d shares @ %.2f — GTC stop placement failed",
                         ticker, filled_qty, actual_price)
         notify(
             f"CRITICAL — UNPROTECTED POSITION\n"
             f"{ticker}: {filled_qty} shares @ ${actual_price:.2f}\n"
-            f"Both OTO child stop discovery and fallback stop placement failed.\n"
+            f"GTC stop placement failed after 3 attempts.\n"
             f"Manually place a sell-stop at ${signal.stop_price:.2f} NOW."
         )
     else:
