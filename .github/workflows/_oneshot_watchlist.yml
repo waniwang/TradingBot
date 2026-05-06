@@ -1,0 +1,58 @@
+name: One-shot — dump current watchlist
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inline watchlist dump on Linode
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            .venv/bin/python <<'PY'
+            import sys
+            from collections import defaultdict
+            from datetime import date, timedelta
+            from pathlib import Path
+            ROOT = Path('/opt/trading-bot/trading-bot')
+            sys.path.insert(0, str(ROOT))
+            from db.models import Watchlist, get_session, init_db
+
+            engine = init_db('sqlite:////opt/trading-bot/trading-bot/trading_bot.db')
+            cutoff = date.today() - timedelta(days=14)
+
+            print('=== Alpaca DB watchlist (last 14d, grouped) ===\n')
+            buckets = defaultdict(list)
+            with get_session(engine) as s:
+                rows = (s.query(Watchlist)
+                          .filter(Watchlist.scan_date >= cutoff)
+                          .order_by(Watchlist.scan_date.desc(), Watchlist.ticker.asc())
+                          .all())
+                for r in rows:
+                    meta = r.meta or {}
+                    buckets[(r.setup_type, r.stage)].append((
+                        r.scan_date, r.ticker, meta.get('ep_strategy', '—'), r.id,
+                    ))
+
+            order = ['ready', 'triggered', 'watching', 'active', 'expired']
+            stages_seen = sorted({k[1] for k in buckets}, key=lambda s: (order.index(s) if s in order else 99))
+
+            for stage in stages_seen:
+                for (setup, st), items in sorted(buckets.items()):
+                    if st != stage: continue
+                    print(f'[{setup} / {stage}]  ({len(items)} rows)')
+                    for scan_date, ticker, ep, _id in items[:30]:
+                        print(f'  {scan_date}  {ticker:6s}  ep={ep}  id={_id}')
+                    if len(items) > 30:
+                        print(f'  ... +{len(items) - 30} more')
+                    print()
+            PY
