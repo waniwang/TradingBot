@@ -322,6 +322,15 @@ class IBClient:
             return 100_000.0
         return self._account_value("AvailableFunds")
 
+    def get_buying_power(self) -> float:
+        """Available buying power. IB exposes this directly as ``BuyingPower``;
+        symmetric with ``AlpacaClient.get_buying_power`` so the EP execute
+        path can pre-flight against either broker. Trade-path; exceptions
+        propagate."""
+        if not IB_AVAILABLE:
+            return 100_000.0
+        return self._account_value("BuyingPower")
+
     def get_open_positions(self) -> list[dict]:
         if not IB_AVAILABLE or not self._connected:
             return []

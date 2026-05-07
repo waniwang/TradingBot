@@ -381,6 +381,46 @@ class EPNewsPlugin:
                 logger.info("EP news: %s (%s) position size = 0, skipping", ticker, ep_strategy)
                 continue
 
+            # Pre-flight buying-power check — see ep_earnings/plugin.py for
+            # the rationale. 2026-05-07: WRBY (B) hit insufficient_bp twice
+            # in the retry loop. Same fix.
+            cost_basis = shares * use_entry
+            try:
+                buying_power = client.get_buying_power()
+            except Exception as e:
+                logger.warning(
+                    "EP news: %s BP pre-flight fetch failed: %s — submitting anyway",
+                    ticker, e,
+                )
+                if notify:
+                    notify(f"BP CHECK FAILED for {ticker}: {type(e).__name__}: {e}")
+                buying_power = None
+
+            if buying_power is not None and cost_basis > buying_power:
+                from db.models import record_risk_skip
+                record_risk_skip(
+                    db_engine,
+                    ticker=ticker,
+                    setup_type="ep_news",
+                    ep_strategy=ep_strategy,
+                    block_reason="insufficient_bp",
+                    intended_entry=use_entry,
+                    intended_stop=use_stop,
+                    portfolio_value=portfolio_value,
+                    open_position_count=open_count,
+                    notes=f"cost=${cost_basis:,.0f} > BP=${buying_power:,.0f}",
+                )
+                logger.info(
+                    "EP news: %s (%s) BP=$%.0f < cost=$%.0f — skipping",
+                    ticker, ep_strategy, buying_power, cost_basis,
+                )
+                if notify:
+                    notify(
+                        f"INSUFFICIENT BP: {ticker} ({ep_strategy}) "
+                        f"cost=${cost_basis:,.0f} > BP=${buying_power:,.0f} — skipping"
+                    )
+                continue
+
             signal = SignalResult(
                 ticker=ticker,
                 setup_type=setup_type,

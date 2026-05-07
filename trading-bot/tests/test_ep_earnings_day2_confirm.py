@@ -41,6 +41,10 @@ def mock_client():
     client = MagicMock()
     client.place_oto_order.return_value = "broker-id-123"
     client.get_portfolio_value.return_value = 100_000.0
+    # Default BP to portfolio_value so existing tests pass — the BP
+    # pre-flight in plugin.job_execute requires a numeric return. Tests
+    # covering the BP-exhaustion path override this.
+    client.get_buying_power.return_value = 100_000.0
     # resolve_execution_price (added 2026-04-22) fetches a live quote before
     # placing each order. Default stub returns a quote whose mid sits at or just
     # below the default seeded entry ($22.0) so the helper falls back to the
@@ -359,6 +363,74 @@ class TestExecuteIsDBDriven:
         EPEarningsPlugin().job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
 
         assert mock_client.place_oto_order.call_count == 1
+
+    def test_execute_skips_when_buying_power_below_cost_basis(
+        self, db_engine, mock_client, patch_main,
+    ):
+        """Regression for 2026-05-07 NBIX 4× failure loop.
+
+        When ``cost_basis = shares * entry_price`` exceeds the broker's
+        ``buying_power``, Alpaca returns HTTP 403 / code 40310000 and the
+        order raises an exception that propagates to ``_track_job`` →
+        Telegram JOB FAILED. The retry loop pounds the broker once per
+        minute until BP frees up. NBIX hit this 4 times and never filled
+        because BP stayed below cost the whole window.
+
+        Fix: pre-flight check ``buying_power`` before placing the order;
+        if cost > BP, record a ``RiskSkip(insufficient_bp)`` and skip
+        cleanly. The next retry minute re-evaluates — if BP recovered,
+        the order goes through.
+        """
+        from db.models import RiskSkip
+
+        _seed_ready(
+            db_engine, ticker="NBIX", ep_strategy="C",
+            scan_date=_today_et() - timedelta(days=1),
+            entry_price=149.0, stop_price=138.57,
+        )
+        # 28 shares × $149 = $4,172 cost basis. BP = $533 (matches the
+        # actual 2026-05-07 server state at the time NBIX failed).
+        mock_client.get_buying_power.return_value = 533.0
+
+        EPEarningsPlugin().job_execute(
+            _config(), mock_client, db_engine, notify=lambda m: None,
+        )
+
+        # No order was placed — pre-flight skipped it.
+        mock_client.place_oto_order.assert_not_called()
+
+        # And a RiskSkip row records the skip so the missed-trades CSV
+        # surfaces it under block_reason="insufficient_bp".
+        with get_session(db_engine) as session:
+            skips = session.query(RiskSkip).filter_by(ticker="NBIX").all()
+            assert len(skips) == 1, f"expected 1 RiskSkip row, got {len(skips)}"
+            sk = skips[0]
+            assert sk.block_reason == "insufficient_bp"
+            assert sk.ep_strategy == "C"
+            assert sk.setup_type == "ep_earnings"
+            assert "BP=$533" in sk.notes
+            assert sk.intended_entry == pytest.approx(149.0)
+
+    def test_execute_proceeds_when_bp_fetch_fails(
+        self, db_engine, mock_client, patch_main,
+    ):
+        """If get_buying_power() raises (transient API hiccup), don't
+        silently block the trade — let the broker decide. Loud-but-not-
+        fatal: notify so the operator sees the gap, but submit anyway.
+        Worse to skip a valid trade than to risk one extra 403 the broker
+        already protects us from.
+        """
+        _seed_ready(db_engine, ticker="AU", ep_strategy="A",
+                    scan_date=_today_et())
+        mock_client.get_buying_power.side_effect = RuntimeError("BP API down")
+        sent: list[str] = []
+
+        EPEarningsPlugin().job_execute(
+            _config(), mock_client, db_engine, notify=sent.append,
+        )
+
+        mock_client.place_oto_order.assert_called_once()
+        assert any("BP CHECK FAILED" in m and "AU" in m for m in sent), sent
 
     def test_execute_retries_after_cancel_re_picks_triggered_row(
         self, db_engine, mock_client, patch_main,

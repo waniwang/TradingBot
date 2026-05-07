@@ -215,6 +215,22 @@ class AlpacaClient:
             return 100_000.0
         return float(self._trade.get_account().cash)
 
+    def get_buying_power(self) -> float:
+        """Available buying power for new orders.
+
+        For Reg-T margin accounts this is roughly ``2 * equity - long_market_value``;
+        for cash accounts it equals settled cash. Alpaca rejects orders with
+        ``cost_basis > buying_power`` as HTTP 403 / code 40310000
+        ("insufficient buying power"). The bot pre-flight checks this in
+        ``ep_*/plugin.job_execute`` so we record a ``RiskSkip`` row instead
+        of repeatedly hitting a JOB FAILED Telegram alert (2026-05-07: NBIX
+        cycled through 4 retries against a $533 BP after the cap-disable
+        change drove the account to the Reg-T margin ceiling).
+        """
+        if not ALPACA_AVAILABLE:
+            return 100_000.0
+        return float(self._trade.get_account().buying_power)
+
     def get_open_positions(self) -> list[dict]:
         """Return list of current open positions from Alpaca."""
         if not ALPACA_AVAILABLE:

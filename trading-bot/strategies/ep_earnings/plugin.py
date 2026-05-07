@@ -391,6 +391,55 @@ class EPEarningsPlugin:
                 logger.info("EP earnings: %s (%s) position size = 0, skipping", ticker, ep_strategy)
                 continue
 
+            # Pre-flight buying-power check. Alpaca rejects orders where
+            # cost_basis > buying_power as HTTP 403 / code 40310000 — those
+            # surface as JOB FAILED on Telegram and the retry loop pounds
+            # the broker once per minute until BP frees up (or the window
+            # closes). 2026-05-07: NBIX hit 4 such failures vs ~$2.5K BP
+            # after the cap-disable drove the account to Reg-T margin.
+            # Record a RiskSkip + skip cleanly instead — surfaces on the
+            # missed-trades CSV as block_reason="insufficient_bp".
+            cost_basis = shares * use_entry
+            try:
+                buying_power = client.get_buying_power()
+            except Exception as e:
+                # Fall through to broker if BP fetch fails — letting the
+                # broker decide is still loud but avoids silently blocking
+                # on a transient Alpaca read error. notify so the gap is
+                # visible.
+                logger.warning(
+                    "EP earnings: %s BP pre-flight fetch failed: %s — submitting anyway",
+                    ticker, e,
+                )
+                if notify:
+                    notify(f"BP CHECK FAILED for {ticker}: {type(e).__name__}: {e}")
+                buying_power = None
+
+            if buying_power is not None and cost_basis > buying_power:
+                from db.models import record_risk_skip
+                record_risk_skip(
+                    db_engine,
+                    ticker=ticker,
+                    setup_type="ep_earnings",
+                    ep_strategy=ep_strategy,
+                    block_reason="insufficient_bp",
+                    intended_entry=use_entry,
+                    intended_stop=use_stop,
+                    portfolio_value=portfolio_value,
+                    open_position_count=open_count,
+                    notes=f"cost=${cost_basis:,.0f} > BP=${buying_power:,.0f}",
+                )
+                logger.info(
+                    "EP earnings: %s (%s) BP=$%.0f < cost=$%.0f — skipping",
+                    ticker, ep_strategy, buying_power, cost_basis,
+                )
+                if notify:
+                    notify(
+                        f"INSUFFICIENT BP: {ticker} ({ep_strategy}) "
+                        f"cost=${cost_basis:,.0f} > BP=${buying_power:,.0f} — skipping"
+                    )
+                continue
+
             signal = SignalResult(
                 ticker=ticker,
                 setup_type=setup_type,

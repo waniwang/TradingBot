@@ -80,6 +80,8 @@ def mock_ib_client():
     re-test it here."""
     client = MagicMock()
     client.get_portfolio_value.return_value = 100_000.0
+    # BP pre-flight in plugin.job_execute requires a numeric return.
+    client.get_buying_power.return_value = 100_000.0
     client.is_market_open.return_value = True
     client.get_realtime_quote.side_effect = lambda t: {
         "ticker": t, "bid": 21.90, "ask": 22.00, "last_price": 21.95,

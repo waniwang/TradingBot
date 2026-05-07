@@ -39,6 +39,10 @@ def mock_client():
     client = MagicMock()
     client.place_oto_order.return_value = "broker-id-news"
     client.get_portfolio_value.return_value = 100_000.0
+    # Default BP to portfolio_value so existing tests pass — the BP
+    # pre-flight in plugin.job_execute requires a numeric return. Tests
+    # covering the BP-exhaustion path override this.
+    client.get_buying_power.return_value = 100_000.0
     # resolve_execution_price (added 2026-04-22) fetches a live quote before
     # placing each order. Default stub keeps mid at or just below the seeded
     # entry ($22.0) so the helper returns the scan entry unchanged — keeps
@@ -283,6 +287,33 @@ class TestExecuteIsDBDriven:
         EPNewsPlugin().job_execute(_config(), mock_client, db_engine, notify=lambda m: None)
 
         mock_client.place_oto_order.assert_not_called()
+
+    def test_execute_skips_when_buying_power_below_cost_basis(
+        self, db_engine, mock_client, patch_main,
+    ):
+        """Regression for 2026-05-07 BP-exhaustion JOB FAILED loop.
+
+        Same fix as ep_earnings — pre-flight check ``buying_power`` and
+        record a ``RiskSkip(insufficient_bp)`` instead of letting the
+        order raise. See ep_earnings test for full rationale.
+        """
+        from db.models import RiskSkip
+
+        _seed_ready(db_engine, ticker="WRBY", ep_strategy="B",
+                    scan_date=_today_et(), entry_price=27.30, stop_price=24.57)
+        mock_client.get_buying_power.return_value = 1000.0  # < cost basis
+
+        EPNewsPlugin().job_execute(
+            _config(), mock_client, db_engine, notify=lambda m: None,
+        )
+
+        mock_client.place_oto_order.assert_not_called()
+        with get_session(db_engine) as session:
+            skips = session.query(RiskSkip).filter_by(ticker="WRBY").all()
+            assert len(skips) == 1
+            assert skips[0].block_reason == "insufficient_bp"
+            assert skips[0].setup_type == "ep_news"
+            assert skips[0].ep_strategy == "B"
 
     def test_execute_retries_after_cancel_re_picks_triggered_row(
         self, db_engine, mock_client, patch_main,
