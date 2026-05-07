@@ -360,6 +360,53 @@ class TestExecuteIsDBDriven:
 
         assert mock_client.place_oto_order.call_count == 1
 
+    def test_execute_retries_after_cancel_re_picks_triggered_row(
+        self, db_engine, mock_client, patch_main,
+    ):
+        """Regression for 2026-05-07 FLEX/SSRM/HL silent drop.
+
+        Sequence: row at stage='ready' → execute places OTO → mark_triggered()
+        flips stage to 'triggered' → limit doesn't print within 60s → order
+        cancelled (Order.status='cancelled', stage stays 'triggered'). The
+        next retry minute (still inside the 15:37–15:59 EP execute window)
+        must re-pick the row and try again.
+
+        Bug: filtering on `stage == "ready"` excluded triggered rows after
+        the first cancel — bot silently dropped the trade for the remaining
+        22 minutes of the window. Fix: include "triggered" in the filter.
+        Replay-guard (recent_order in non-terminal status) is the actual
+        double-submit defense; "cancelled" is terminal so this retry is
+        correctly allowed.
+        """
+        from db.models import Order
+
+        _seed_ready(
+            db_engine, ticker="FLEX", ep_strategy="C",
+            scan_date=_today_et() - timedelta(days=1),
+        )
+        # Simulate the post-cancel state: row already triggered, prior Order
+        # at status='cancelled'. Cancelled is NOT in the replay-guard
+        # non-terminal list, so the new attempt should proceed.
+        with get_session(db_engine) as session:
+            wl = session.query(Watchlist).filter_by(ticker="FLEX").first()
+            wl.stage = "triggered"
+            session.add(Order(
+                ticker="FLEX", side="buy", order_type="limit", qty=31,
+                price=22.0, status="cancelled",
+                broker_order_id="prior-attempt-id",
+                created_at=datetime.utcnow() - timedelta(minutes=2),
+            ))
+            session.commit()
+
+        EPEarningsPlugin().job_execute(
+            _config(), mock_client, db_engine, notify=lambda m: None,
+        )
+
+        mock_client.place_oto_order.assert_called_once()
+        assert mock_client.place_oto_order.call_args.args[0] == "FLEX", (
+            "FLEX (stage='triggered') must be re-picked for retry after cancel"
+        )
+
 
 # ---------------------------------------------------------------------------
 # End-to-end regression test

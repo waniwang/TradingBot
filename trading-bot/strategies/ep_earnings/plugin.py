@@ -254,9 +254,21 @@ class EPEarningsPlugin:
                 # trading day). Without this, a stale "ready" row leftover
                 # from a prior session leaks into the next day's execute.
                 # See `core/trading_calendar.py` for variant-day rationale.
+                #
+                # Stage filter must include BOTH "ready" and "triggered". The
+                # plugin flips a row to "triggered" via mark_triggered() the
+                # moment an OTO order is placed; if that order then cancels
+                # because the limit didn't print, the row stays at "triggered"
+                # and the rest of the 15:37–15:59 retry window must still
+                # re-evaluate it. Filtering on "ready" alone silently dropped
+                # FLEX/SSRM/HL on 2026-05-07 — the stage flip permanently
+                # excluded them after one cancelled attempt. The replay guard
+                # below (recent_order in non-terminal status) is the actual
+                # double-submit defense; "cancelled" is terminal so a new
+                # attempt is correctly allowed.
                 rows = session.query(Watchlist).filter(
                     Watchlist.setup_type == "ep_earnings",
-                    Watchlist.stage == "ready",
+                    Watchlist.stage.in_(["ready", "triggered"]),
                     Watchlist.scan_date >= today - timedelta(days=4),
                     Watchlist.scan_date <= today,
                 ).all()

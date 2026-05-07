@@ -284,6 +284,39 @@ class TestExecuteIsDBDriven:
 
         mock_client.place_oto_order.assert_not_called()
 
+    def test_execute_retries_after_cancel_re_picks_triggered_row(
+        self, db_engine, mock_client, patch_main,
+    ):
+        """Regression for 2026-05-07 cancel-then-drop bug. Same fix as
+        ep_earnings — see that test for the full rationale. Once an EP news
+        row has been triggered and the order cancelled (limit didn't print),
+        the next retry minute must re-pick the row and try again rather than
+        silently skipping it for the rest of the 15:37–15:59 window.
+        """
+        from db.models import Order
+
+        _seed_ready(db_engine, ticker="WRBY", ep_strategy="B",
+                    scan_date=_today_et())
+        with get_session(db_engine) as session:
+            wl = session.query(Watchlist).filter_by(ticker="WRBY").first()
+            wl.stage = "triggered"
+            session.add(Order(
+                ticker="WRBY", side="buy", order_type="limit", qty=107,
+                price=22.0, status="cancelled",
+                broker_order_id="prior-attempt-id",
+                created_at=datetime.utcnow() - timedelta(minutes=2),
+            ))
+            session.commit()
+
+        EPNewsPlugin().job_execute(
+            _config(), mock_client, db_engine, notify=lambda m: None,
+        )
+
+        mock_client.place_oto_order.assert_called_once()
+        assert mock_client.place_oto_order.call_args.args[0] == "WRBY", (
+            "WRBY (stage='triggered') must be re-picked for retry after cancel"
+        )
+
 
 # ---------------------------------------------------------------------------
 # End-to-end regression

@@ -256,9 +256,15 @@ class EPNewsPlugin:
                 # trading day). Without this, a stale "ready" row leftover
                 # from a prior session leaks into the next day's execute —
                 # the 2026-05-01 FSS leak (4/29 C row firing on 5/1).
+                #
+                # Stage filter must include BOTH "ready" and "triggered". See
+                # ep_earnings/plugin.py for the full rationale — same bug, same
+                # fix. Without "triggered" in the filter, a row whose first
+                # order cancels (limit didn't print) gets dropped for the rest
+                # of the 15:37–15:59 retry window.
                 rows = session.query(Watchlist).filter(
                     Watchlist.setup_type == "ep_news",
-                    Watchlist.stage == "ready",
+                    Watchlist.stage.in_(["ready", "triggered"]),
                     Watchlist.scan_date >= today - timedelta(days=4),
                     Watchlist.scan_date <= today,
                 ).all()
