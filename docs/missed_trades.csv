@@ -11,3 +11,23 @@ date,failure_time,ticker,strategy,intended_entry,intended_stop,would_confirm,rea
 2026-04-30,2026-04-30T22:11:53.591208Z,AMD,ep_news_a,,,unknown,fetch_current_price returned None during day-2 confirm,,bot-bug
 2026-04-30,2026-04-30T22:11:53.591208Z,MCRI,ep_earnings_a,,,unknown,fetch_current_price returned None during day-2 confirm,,bot-bug
 2026-05-01,2026-05-01T19:39:00Z,NVCR,ep_news_b,14.59,13.13,yes,Position cap full at execute time (open=20/cap=20 (backfilled from journald)),,max-positions
+2026-05-05,2026-05-05T19:37:08Z,PLOW,ep_earnings_a,51.02,47.45,yes,Position cap full at execute time (open=20/cap=20 (backfilled from journald)),,max-positions
+2026-05-05,2026-05-05T19:37:08Z,WAT,ep_earnings_a,341.49,317.59,yes,Position cap full at execute time (open=20/cap=20 (backfilled from journald)),,max-positions
+2026-05-05,2026-05-05T19:38:00Z,NNNN,ep_news_c,32.70,30.41,yes,Position cap full at execute time (open=22/cap=20 (backfilled from journald)),,max-positions
+2026-05-05,2026-05-05T19:39:00Z,BELFA,ep_news_c,266.25,247.61,yes,Position cap full at execute time (open=22/cap=20 (backfilled from journald)),,max-positions
+2026-05-05,2026-05-05T19:39:00Z,STRL,ep_earnings_a,794.38,738.77,yes,Position cap full at execute time (open=22/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,AMD,ep_earnings_a,418.67,389.36,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,CRI,ep_earnings_a,38.45,35.76,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,DVA,ep_earnings_a,190.38,177.05,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,FLEX,ep_earnings_a,133.09,123.77,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,FLYW,ep_earnings_b,17.47,16.25,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,FTRE,ep_earnings_c,15.36,14.28,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,GEO,ep_earnings_b,22.56,20.98,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,IFF,ep_earnings_a,82.38,76.61,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,LTM,ep_earnings_a,51.47,47.87,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,ROK,ep_earnings_c,458.93,426.80,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,STRL,ep_earnings_c,882.97,821.16,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,VCYT,ep_earnings_b,40.94,38.07,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,WAT,ep_earnings_c,348.24,323.86,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,WLFC,ep_news_c,235.27,218.80,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-06,2026-05-06T19:58:01Z,WOLF,ep_earnings_c,41.59,38.68,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
