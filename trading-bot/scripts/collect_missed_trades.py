@@ -8,10 +8,13 @@ Two data sources, unified into one CSV via a `category` column:
   1. Watchlist rows tagged [bot-failure] — bugs that prevented a trade.
      category = "bot-bug"
 
-  2. RiskSkip rows (block_reason=max_positions) — trade triggered but the
-     position cap was full. The bot was working as configured; the row is
-     surfaced so the operator can see the cost of the cap and decide whether
-     to raise it. category = "max-positions"
+  2. RiskSkip rows — trade triggered but a risk gate blocked execution.
+     The bot was working as configured; the row is surfaced so the operator
+     can see what the gate cost and decide whether to loosen it. category
+     depends on block_reason (see _BLOCK_REASON_LABELS):
+       * block_reason=max_positions   → category="max-positions"
+       * block_reason=insufficient_bp → category="insufficient-bp"
+       * unknown                       → category="risk-skip" (fallback)
 
 What counts as a missed trade (category=bot-bug)
 ------------------------------------------------
@@ -28,11 +31,22 @@ historical daily bars, would have confirmed and entered. Per-strategy:
     We re-check using the historical daily bar for day-2: would current_price
     have exceeded gap_day_close? If yes → would_confirm=True → missed trade.
 
-What counts as a risk skip (category=max-positions)
----------------------------------------------------
-A RiskSkip row written by ep_earnings/ep_news job_execute when the position
-cap was full at the moment of execute (3:50 PM ET). The trade had already
-triggered all setup conditions — would_confirm is always "yes" for these.
+What counts as a risk skip (category=max-positions / insufficient-bp / ...)
+---------------------------------------------------------------------------
+A RiskSkip row written by ep_earnings/ep_news job_execute when a risk gate
+blocked execution at 3:37 PM ET. The trade had already triggered all setup
+conditions — would_confirm is always "yes" for these.
+
+  * max-positions:   the configured max_positions cap was full at execute
+                     time. Currently disabled (commit 6f059f9), so new rows
+                     are not expected; existing rows are backfills from
+                     journald logs of the pre-disable period.
+
+  * insufficient-bp: the broker's buying_power was below the cost basis at
+                     execute time. The pre-flight check (added 2026-05-07
+                     after NBIX/WRBY/LTM hit JOB FAILED 403s on the Reg-T
+                     margin ceiling) writes these instead of letting the
+                     order raise.
 
 Output
 ------
@@ -47,7 +61,7 @@ CSV at docs/missed_trades.csv with columns:
     would_confirm     "yes" / "no" / "unknown" — only meaningful for bot-bug
     reason            short text describing why the bot didn't trade
     incident_commit   git commit that fixed the relevant bug (bot-bug only)
-    category          "bot-bug" or "max-positions"
+    category          "bot-bug" / "max-positions" / "insufficient-bp" / "risk-skip"
 
 Idempotent: running twice rewrites the file with the same content (the data
 is fully derived from the DB, no incremental state). The nightly cron is
@@ -235,19 +249,44 @@ def _row_to_csv(row: Watchlist, client) -> dict | None:
     }
 
 
+# Per-block_reason CSV labels. Each entry is (reason_template, category).
+# `reason_template` is a short human-readable phrase; the row's `notes`
+# field is appended in parentheses if present (carries the cap state /
+# BP-vs-cost figures the bot recorded at skip time).
+#
+# When adding a new RiskSkip block_reason, register it here so the CSV
+# (and the Google Sheet that mirrors it) gets a friendly label instead
+# of falling through to the generic "Risk skip" default.
+_BLOCK_REASON_LABELS: dict[str, tuple[str, str]] = {
+    "max_positions": ("Position cap full at execute time", "max-positions"),
+    "insufficient_bp": ("Buying power exhausted at execute time", "insufficient-bp"),
+}
+
+
 def _risk_skip_to_csv(row: RiskSkip) -> dict:
     """Map a RiskSkip row to a CSV-ready dict.
 
     For risk skips, would_confirm is always "yes" — the trade had already
     triggered all setup conditions (we only call can_enter() at the execute
-    step, after day-2 confirm + signal eval). The block was the cap, not the
-    setup. The reason field summarizes the cap state at skip time.
+    step, after day-2 confirm + signal eval). The block was a risk gate, not
+    the setup. The reason field summarizes the gate state at skip time.
+
+    block_reason → (reason_template, category) is dispatched via
+    _BLOCK_REASON_LABELS. Unknown block_reasons fall through to a generic
+    "Risk skip" / "risk-skip" pair so a new code path that forgets to add
+    a label still surfaces on the tracker (just with less polish).
     """
     fake_meta = {"ep_strategy": row.ep_strategy} if row.ep_strategy else {}
     intended_entry = f"{row.intended_entry:.2f}" if row.intended_entry is not None else ""
     intended_stop = f"{row.intended_stop:.2f}" if row.intended_stop is not None else ""
-    cap_note = row.notes or ""
-    reason = f"Position cap full at execute time ({cap_note})" if cap_note else "Position cap full at execute time"
+
+    label, category = _BLOCK_REASON_LABELS.get(
+        row.block_reason or "",
+        (f"Risk skip ({row.block_reason})" if row.block_reason else "Risk skip", "risk-skip"),
+    )
+    note = row.notes or ""
+    reason = f"{label} ({note})" if note else label
+
     return {
         "date": row.occurred_date.isoformat(),
         "failure_time": row.occurred_at.isoformat() + "Z",
@@ -258,7 +297,7 @@ def _risk_skip_to_csv(row: RiskSkip) -> dict:
         "would_confirm": "yes",
         "reason": reason,
         "incident_commit": "",
-        "category": "max-positions",
+        "category": category,
     }
 
 
