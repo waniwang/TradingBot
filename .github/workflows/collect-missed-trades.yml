@@ -5,6 +5,9 @@ name: Collect missed trades
 # docs/missed_trades.csv. The committed file is the source of truth for the
 # missed-trades tracker. A Google Sheet can sync from the raw GitHub URL via
 # =IMPORTDATA() — no Google API credentials needed on our side.
+#
+# Sheet: "EP TradingBot Missed Trades - Wani & Shay"
+#   https://docs.google.com/spreadsheets/d/1dIRyrtdbQpko9FQTDJmSiHs5yn5d2KB6RjRpLOmwBIA/edit
 
 on:
   workflow_dispatch:
