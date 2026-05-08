@@ -88,6 +88,24 @@ def test_insufficient_bp_reason_and_category(collector):
     assert out["strategy"] == "ep_earnings_c"
 
 
+def test_stage_filter_drop_is_categorized_as_bot_bug(collector):
+    """The 2026-05-07 stage-filter bug (commit 39d6e70) silently dropped
+    FLEX/SSRM/HL after their first cancel. Backfilled rows for that
+    incident use block_reason='stage_filter_drop' and must appear under
+    category='bot-bug' — they were missed because of a bug, not an
+    operator-tunable risk gate."""
+    row = _risk_skip(
+        block_reason="stage_filter_drop",
+        notes="cancelled at 15:38, would have filled at 15:43 (1m bar low=$132.07) — backfilled",
+        ticker="FLEX",
+    )
+    out = collector._risk_skip_to_csv(row)
+
+    assert out["category"] == "bot-bug"
+    assert "Order cancelled by timeout" in out["reason"]
+    assert "would have filled at 15:43" in out["reason"]
+
+
 def test_unknown_block_reason_falls_through_to_risk_skip(collector):
     """A future code path could write a new block_reason without updating
     _BLOCK_REASON_LABELS. The row must still surface — better to ship a

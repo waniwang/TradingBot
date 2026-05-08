@@ -257,9 +257,18 @@ def _row_to_csv(row: Watchlist, client) -> dict | None:
 # When adding a new RiskSkip block_reason, register it here so the CSV
 # (and the Google Sheet that mirrors it) gets a friendly label instead
 # of falling through to the generic "Risk skip" default.
+#
+# `stage_filter_drop` is a special category — used to backfill historical
+# events where a now-fixed code path silently dropped a would-have-filled
+# trade. The 2026-05-07 stage-filter bug (commit 39d6e70) is the canonical
+# example: FLEX/SSRM/HL were placed, cancelled by 60s timeout, then never
+# retried because the bot filtered Watchlist.stage == "ready" only.
+# Categorized as "bot-bug" so it shows alongside other bug-caused misses
+# rather than as an operator-aware risk skip.
 _BLOCK_REASON_LABELS: dict[str, tuple[str, str]] = {
-    "max_positions": ("Position cap full at execute time", "max-positions"),
-    "insufficient_bp": ("Buying power exhausted at execute time", "insufficient-bp"),
+    "max_positions":      ("Position cap full at execute time",                                  "max-positions"),
+    "insufficient_bp":    ("Buying power exhausted at execute time",                             "insufficient-bp"),
+    "stage_filter_drop":  ("Order cancelled by timeout, retry blocked by pre-fix stage filter",  "bot-bug"),
 }
 
 
