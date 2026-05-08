@@ -1,0 +1,84 @@
+name: One-shot — buying power for both bots
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bp:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query buying power on Alpaca and IB
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            .venv/bin/python <<'PY'
+            import os, sys
+            from pathlib import Path
+            ROOT = Path('/opt/trading-bot/trading-bot')
+            sys.path.insert(0, str(ROOT))
+
+            print('=== ALPACA paper account ===')
+            try:
+                from alpaca.trading.client import TradingClient
+                tc = TradingClient(
+                    api_key=os.environ['ALPACA_API_KEY'],
+                    secret_key=os.environ['ALPACA_SECRET_KEY'],
+                    paper=True,
+                )
+                acct = tc.get_account()
+                print(f'  cash                = ${float(acct.cash):>14,.2f}')
+                print(f'  buying_power        = ${float(acct.buying_power):>14,.2f}')
+                print(f'  portfolio_value     = ${float(acct.portfolio_value):>14,.2f}')
+                print(f'  long_market_value   = ${float(acct.long_market_value):>14,.2f}')
+                print(f'  equity              = ${float(acct.equity):>14,.2f}')
+                print(f'  daytrading_BP       = ${float(acct.daytrading_buying_power):>14,.2f}')
+                print(f'  reg_t_BP            = ${float(acct.regt_buying_power):>14,.2f}')
+                print(f'  pattern_day_trader  = {acct.pattern_day_trader}')
+                print(f'  account_status      = {acct.status}')
+            except Exception as e:
+                print(f'  ERROR: {e}')
+
+            print()
+            print('=== IBKR paper account ===')
+            try:
+                import yaml
+                from executor.ib_client import IbClient
+                # Load IB-specific config (config.ib.local.yaml or main config)
+                cfg_path = ROOT / 'config.ib.local.yaml'
+                if not cfg_path.exists():
+                    cfg_path = ROOT / 'config.yaml'
+                with open(cfg_path) as f:
+                    cfg = yaml.safe_load(f)
+                client = IbClient(cfg)
+                client.connect()
+                bp = client.get_buying_power()
+                pv = client.get_portfolio_value()
+                print(f'  buying_power        = ${bp:>14,.2f}')
+                print(f'  portfolio_value     = ${pv:>14,.2f}')
+                # Try to pull more granular fields if available
+                try:
+                    summary = client.ib.accountSummary()
+                    relevant = {'TotalCashValue', 'BuyingPower', 'AvailableFunds',
+                                'NetLiquidation', 'GrossPositionValue', 'ExcessLiquidity',
+                                'EquityWithLoanValue'}
+                    print('  --- raw IB account summary ---')
+                    for row in summary:
+                        if row.tag in relevant:
+                            try:
+                                val = float(row.value)
+                                print(f'  {row.tag:<22s} = ${val:>14,.2f} ({row.currency})')
+                            except (TypeError, ValueError):
+                                print(f'  {row.tag:<22s} = {row.value} ({row.currency})')
+                except Exception as e:
+                    print(f'  (could not pull raw summary: {e})')
+                client.disconnect()
+            except Exception as e:
+                print(f'  ERROR: {e}')
+            PY
