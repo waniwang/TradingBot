@@ -20,6 +20,26 @@ jobs:
             echo '=== 1. config.yaml on server ==='
             grep -E "risk_per_trade|max_positions|max_position_pct|daily_loss|weekly_loss" config.yaml
             echo
+            echo '=== 1b. config.ib.local.yaml — does the IB bot override risk? ==='
+            if [ -f config.ib.local.yaml ]; then
+              # Show the whole risk block (or "no risk: override")
+              if grep -q "^risk:" config.ib.local.yaml; then
+                echo '  IB OVERRIDES the risk block:'
+                awk '/^risk:/{flag=1; print; next} flag && /^[^ ]/{flag=0} flag' config.ib.local.yaml
+              else
+                echo '  (no risk: block in config.ib.local.yaml — IB inherits config.yaml)'
+              fi
+              echo
+              echo '  Full IB config keys at top level:'
+              grep -E "^[a-zA-Z]" config.ib.local.yaml | sed 's/^/    /'
+            else
+              echo '  config.ib.local.yaml does not exist'
+            fi
+            echo
+            echo '=== 1c. systemd unit env: which BOT_CONFIG does trading-bot-ib use? ==='
+            systemctl show trading-bot-ib --property=Environment 2>/dev/null
+            cat /etc/systemd/system/trading-bot-ib.service 2>/dev/null | grep -E "Environment|BOT_CONFIG|ExecStart" | sed 's/^/  /'
+            echo
             echo '=== 2. Currently-open positions per bot ==='
             .venv/bin/python <<'PY'
             import sys
@@ -50,25 +70,63 @@ jobs:
               systemctl show $unit --property=ActiveEnterTimestamp,SubState 2>/dev/null
             done
             echo
-            echo '=== 4. RiskManager-level confirmation: instantiate from live config and report attrs ==='
+            echo '=== 4. RiskManager-level confirmation per bot ==='
             .venv/bin/python <<'PY'
-            import sys
+            import os, sys
             from pathlib import Path
             ROOT = Path('/opt/trading-bot/trading-bot')
             sys.path.insert(0, str(ROOT))
+            sys.path.insert(0, str(ROOT))
+            os.chdir(ROOT)
             import yaml
             from risk.manager import RiskManager
+            # Reuse the actual IB bot config-loading path so any env / YAML
+            # merging (incl. strategy-dir merging) is identical to the
+            # running bot's view.
+            from main_ib import load_config as load_ib_config
 
+            def report(label, cfg):
+                rm = RiskManager(cfg)
+                print(f'\n--- {label} ---')
+                print(f'  risk_per_trade_pct      = {rm.risk_per_trade_pct}')
+                print(f'  max_positions           = {rm.max_positions}  ({"DISABLED" if rm.max_positions <= 0 else "active"})')
+                print(f'  max_position_pct        = {rm.max_position_pct}')
+                print(f'  daily_loss_limit_pct    = {rm.daily_loss_limit_pct}  ({"DISABLED" if rm.daily_loss_limit_pct <= 0 else "active"})')
+                print(f'  weekly_loss_limit_pct   = {rm.weekly_loss_limit_pct}  ({"DISABLED" if rm.weekly_loss_limit_pct <= 0 else "active"})')
+
+            # Alpaca bot loads plain config.yaml
             with open(ROOT / 'config.yaml') as f:
-                cfg = yaml.safe_load(f)
-            rm = RiskManager(cfg)
-            print(f'  risk_per_trade_pct      = {rm.risk_per_trade_pct}')
-            print(f'  max_positions           = {rm.max_positions}  ({"DISABLED" if rm.max_positions <= 0 else "active"})')
-            print(f'  max_position_pct        = {rm.max_position_pct}')
-            print(f'  daily_loss_limit_pct    = {rm.daily_loss_limit_pct}  ({"DISABLED" if rm.daily_loss_limit_pct <= 0 else "active"})')
-            print(f'  weekly_loss_limit_pct   = {rm.weekly_loss_limit_pct}  ({"DISABLED" if rm.weekly_loss_limit_pct <= 0 else "active"})')
-            print()
-            print('  Smoke test: check_max_positions(9999) =', rm.check_max_positions(9999))
-            print('  Smoke test: check_daily_loss(-99000, 100000) =', rm.check_daily_loss(-99000, 100000))
-            print('  Smoke test: check_weekly_loss(-99000, 100000) =', rm.check_weekly_loss(-99000, 100000))
+                cfg_alpaca = yaml.safe_load(f)
+            report('ALPACA (config.yaml)', cfg_alpaca)
+
+            # IB bot uses load_config which respects BOT_CONFIG env. Read the
+            # systemd unit to find what BOT_CONFIG it actually uses.
+            unit = (ROOT.parent / 'trading-bot-ib.service')
+            ib_bot_config_path = None
+            try:
+                import subprocess
+                out = subprocess.check_output(
+                    ['systemctl', 'show', 'trading-bot-ib', '--property=Environment'],
+                    text=True,
+                )
+                for line in out.splitlines():
+                    if 'BOT_CONFIG=' in line:
+                        # Environment=BOT_CONFIG=config.ib.local.yaml ...
+                        for kv in line.replace('Environment=', '').split():
+                            if kv.startswith('BOT_CONFIG='):
+                                ib_bot_config_path = kv.split('=', 1)[1]
+            except Exception as e:
+                print(f'  (could not read systemd env: {e})')
+
+            print(f'\nIB bot effective BOT_CONFIG = {ib_bot_config_path or "(unset → falls back to config.yaml)"}')
+            cfg_ib = load_ib_config(ib_bot_config_path)
+            report('IB (loaded via main_ib.load_config)', cfg_ib)
+
+            # Diff sanity: do the two have the same risk block?
+            if cfg_alpaca.get('risk') == cfg_ib.get('risk'):
+                print('\n  ✓ Both bots load IDENTICAL risk: blocks')
+            else:
+                print('\n  ⚠ DIFFERENT risk: blocks!')
+                print(f'    Alpaca: {cfg_alpaca.get("risk")}')
+                print(f'    IB    : {cfg_ib.get("risk")}')
             PY
