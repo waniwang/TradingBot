@@ -1,0 +1,106 @@
+name: One-shot — sync IB bot risk values to match Alpaca (Option A)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Edit config.ib.local.yaml in place + restart IB bot
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+
+            echo '=== 1. Backup current config.ib.local.yaml ==='
+            ts=$(date -u +%Y%m%d_%H%M%S)
+            cp config.ib.local.yaml "config.ib.local.yaml.bak.$ts"
+            echo "  Backup: config.ib.local.yaml.bak.$ts"
+
+            echo
+            echo '=== 2. BEFORE — risk: block in IB config ==='
+            awk '/^risk:/{flag=1; print; next} flag && /^[^ #]/{flag=0} flag' config.ib.local.yaml
+
+            echo
+            echo '=== 3. Apply new risk values via PyYAML (preserves the rest) ==='
+            .venv/bin/python <<'PY'
+            import yaml
+            from pathlib import Path
+
+            path = Path('/opt/trading-bot/trading-bot/config.ib.local.yaml')
+            with path.open() as f:
+                cfg = yaml.safe_load(f)
+
+            cfg.setdefault('risk', {}).update({
+                'risk_per_trade_pct': 0.3,
+                'max_positions': 0,
+                'max_position_pct': 8.0,
+                'daily_loss_limit_pct': 0,
+                'weekly_loss_limit_pct': 0,
+            })
+
+            with path.open('w') as f:
+                yaml.safe_dump(cfg, f, sort_keys=False, default_flow_style=False)
+            print('  Wrote new risk block.')
+            PY
+
+            echo
+            echo '=== 4. AFTER — risk: block in IB config ==='
+            awk '/^risk:/{flag=1; print; next} flag && /^[^ #]/{flag=0} flag' config.ib.local.yaml
+
+            echo
+            echo '=== 5. Validate YAML still parses + has required keys ==='
+            .venv/bin/python <<'PY'
+            import yaml, sys
+            with open('/opt/trading-bot/trading-bot/config.ib.local.yaml') as f:
+                cfg = yaml.safe_load(f)
+            required = ['environment', 'risk', 'strategies', 'signals', 'exits',
+                        'telegram', 'universe', 'database', 'ibkr', 'database_ib',
+                        'watchlist_source_db_url']
+            missing = [k for k in required if k not in cfg]
+            if missing:
+                print(f'  ✗ MISSING required keys: {missing}')
+                sys.exit(1)
+            r = cfg['risk']
+            assert r['risk_per_trade_pct'] == 0.3
+            assert r['max_positions'] == 0
+            assert r['max_position_pct'] == 8.0
+            assert r['daily_loss_limit_pct'] == 0
+            assert r['weekly_loss_limit_pct'] == 0
+            print('  ✓ All required keys present')
+            print('  ✓ Risk values match expected')
+            PY
+
+            echo
+            echo '=== 6. Restart trading-bot-ib service ==='
+            systemctl restart trading-bot-ib
+            sleep 5
+            systemctl is-active trading-bot-ib
+
+            echo
+            echo '=== 7. Confirm IB bot loaded new config (uptime check) ==='
+            systemctl show trading-bot-ib --property=ActiveEnterTimestamp,SubState
+            echo
+            echo '=== 8. Confirm RiskManager loaded new values ==='
+            .venv/bin/python <<'PY'
+            import os, sys
+            from pathlib import Path
+            ROOT = Path('/opt/trading-bot/trading-bot')
+            sys.path.insert(0, str(ROOT))
+            os.chdir(ROOT)
+            from main_ib import load_config
+            from risk.manager import RiskManager
+            cfg = load_config('config.ib.local.yaml')
+            rm = RiskManager(cfg)
+            print(f'  IB risk_per_trade_pct      = {rm.risk_per_trade_pct}')
+            print(f'  IB max_positions           = {rm.max_positions}  ({"DISABLED" if rm.max_positions <= 0 else "active"})')
+            print(f'  IB max_position_pct        = {rm.max_position_pct}')
+            print(f'  IB daily_loss_limit_pct    = {rm.daily_loss_limit_pct}  ({"DISABLED" if rm.daily_loss_limit_pct <= 0 else "active"})')
+            print(f'  IB weekly_loss_limit_pct   = {rm.weekly_loss_limit_pct}  ({"DISABLED" if rm.weekly_loss_limit_pct <= 0 else "active"})')
+            PY
