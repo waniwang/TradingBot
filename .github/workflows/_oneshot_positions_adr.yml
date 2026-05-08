@@ -110,8 +110,9 @@ jobs:
                 print(f'\n=== {label} ({len(positions)} open positions) ===')
                 print(f'{"#":>2}  {"ticker":<7s}  {"setup":<18s}  '
                       f'{"shares":>6s}  {"entry":>10s}  {"current":>10s}  '
-                      f'{"days":>4s}  {"gain%":>8s}  {"ADR20%":>7s}')
-                print('-' * 100)
+                      f'{"stop":>10s}  {"days":>4s}  {"gain%":>8s}  '
+                      f'{"R":>7s}  {"ADR20%":>7s}')
+                print('-' * 120)
 
                 for i, p in enumerate(positions, 1):
                     cur = prices.get(p.ticker)
@@ -120,11 +121,19 @@ jobs:
                         gain_pct = (cur - p.entry_price) / p.entry_price * 100
                     else:
                         gain_pct = float('nan')
+                    # R = (current - entry) / (entry - stop)
+                    r_mult = None
+                    if cur is not None and p.entry_price and p.stop_price:
+                        risk_per_share = p.entry_price - p.stop_price
+                        if risk_per_share > 0:
+                            r_mult = (cur - p.entry_price) / risk_per_share
                     cur_s = f'${cur:.2f}' if cur is not None else 'N/A'
                     gain_s = f'{gain_pct:+.2f}%' if cur is not None else 'N/A'
+                    r_s = f'{r_mult:+.2f}R' if r_mult is not None else 'N/A'
                     adr = adrs.get(p.ticker)
                     adr_s = f'{adr:.2f}%' if adr is not None else 'N/A'
                     print(f'{i:>2}  {p.ticker:<7s}  {p.setup_type:<18s}  '
                           f'{p.shares:>6d}  ${p.entry_price:>9.2f}  {cur_s:>10s}  '
-                          f'{days:>4d}  {gain_s:>8s}  {adr_s:>7s}')
+                          f'${p.stop_price:>9.2f}  {days:>4d}  {gain_s:>8s}  '
+                          f'{r_s:>7s}  {adr_s:>7s}')
             PY
