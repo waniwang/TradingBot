@@ -1,0 +1,74 @@
+name: One-shot — verify risk config in running bot
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect risk config + open positions on both bots
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            echo '=== 1. config.yaml on server ==='
+            grep -E "risk_per_trade|max_positions|max_position_pct|daily_loss|weekly_loss" config.yaml
+            echo
+            echo '=== 2. Currently-open positions per bot ==='
+            .venv/bin/python <<'PY'
+            import sys
+            from pathlib import Path
+            ROOT = Path('/opt/trading-bot/trading-bot')
+            sys.path.insert(0, str(ROOT))
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from db.models import Position, init_db, get_session
+
+            for label, url in [
+                ('ALPACA', 'sqlite:////opt/trading-bot/trading-bot/trading_bot.db'),
+                ('IB    ', 'sqlite:////opt/trading-bot/trading-bot/trading_bot_ib.db'),
+            ]:
+                if 'trading_bot.db' in url:
+                    eng = init_db(url)
+                else:
+                    eng = create_engine(url)
+                S = sessionmaker(bind=eng)
+                with S() as s:
+                    open_count = s.query(Position).filter(Position.is_open == True).count()
+                    print(f'  {label}  open positions: {open_count}')
+            PY
+            echo
+            echo '=== 3. Bot service uptime (was last restart after the 21:22 UTC config push?) ==='
+            for unit in trading-bot trading-bot-ib; do
+              echo "--- $unit ---"
+              systemctl show $unit --property=ActiveEnterTimestamp,SubState 2>/dev/null
+            done
+            echo
+            echo '=== 4. RiskManager-level confirmation: instantiate from live config and report attrs ==='
+            .venv/bin/python <<'PY'
+            import sys
+            from pathlib import Path
+            ROOT = Path('/opt/trading-bot/trading-bot')
+            sys.path.insert(0, str(ROOT))
+            import yaml
+            from risk.manager import RiskManager
+
+            with open(ROOT / 'config.yaml') as f:
+                cfg = yaml.safe_load(f)
+            rm = RiskManager(cfg)
+            print(f'  risk_per_trade_pct      = {rm.risk_per_trade_pct}')
+            print(f'  max_positions           = {rm.max_positions}  ({"DISABLED" if rm.max_positions <= 0 else "active"})')
+            print(f'  max_position_pct        = {rm.max_position_pct}')
+            print(f'  daily_loss_limit_pct    = {rm.daily_loss_limit_pct}  ({"DISABLED" if rm.daily_loss_limit_pct <= 0 else "active"})')
+            print(f'  weekly_loss_limit_pct   = {rm.weekly_loss_limit_pct}  ({"DISABLED" if rm.weekly_loss_limit_pct <= 0 else "active"})')
+            print()
+            print('  Smoke test: check_max_positions(9999) =', rm.check_max_positions(9999))
+            print('  Smoke test: check_daily_loss(-99000, 100000) =', rm.check_daily_loss(-99000, 100000))
+            print('  Smoke test: check_weekly_loss(-99000, 100000) =', rm.check_weekly_loss(-99000, 100000))
+            PY
