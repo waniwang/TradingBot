@@ -1,0 +1,130 @@
+name: One-shot — open positions + ADR% (both bots)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  positions_adr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull open positions with current price, gain %, and 20D ADR%
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            .venv/bin/python <<'PY'
+            import os, sys
+            from datetime import datetime, date, timedelta
+            from pathlib import Path
+            ROOT = Path('/opt/trading-bot/trading-bot')
+            sys.path.insert(0, str(ROOT))
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from db.models import Position, init_db
+
+            from alpaca.data.historical import StockHistoricalDataClient
+            from alpaca.data.requests import StockLatestTradeRequest, StockBarsRequest
+            from alpaca.data.timeframe import TimeFrame
+
+            data_client = StockHistoricalDataClient(
+                api_key=os.environ['ALPACA_API_KEY'],
+                secret_key=os.environ['ALPACA_SECRET_KEY'],
+            )
+
+            today = date.today()
+
+            def fetch_prices(tickers):
+                if not tickers:
+                    return {}
+                try:
+                    req = StockLatestTradeRequest(symbol_or_symbols=list(tickers))
+                    trades = data_client.get_stock_latest_trade(req)
+                    return {t: float(trades[t].price) for t in trades}
+                except Exception as e:
+                    print(f'  WARN: latest_trade fetch failed: {e}')
+                    return {}
+
+            def fetch_adr_pct(tickers, lookback_days=20):
+                """Kullamagi ADR%: 100 * (mean(high/low over N days) - 1)."""
+                if not tickers:
+                    return {}
+                # Pull ~40 calendar days back to safely get >=20 trading days
+                start = today - timedelta(days=45)
+                try:
+                    req = StockBarsRequest(
+                        symbol_or_symbols=list(tickers),
+                        timeframe=TimeFrame.Day,
+                        start=datetime.combine(start, datetime.min.time()),
+                    )
+                    bars = data_client.get_stock_bars(req)
+                except Exception as e:
+                    print(f'  WARN: daily bars fetch failed: {e}')
+                    return {}
+
+                out = {}
+                bars_dict = bars.data if hasattr(bars, 'data') else {}
+                for t in tickers:
+                    series = bars_dict.get(t, [])
+                    if not series:
+                        out[t] = None
+                        continue
+                    # Last N completed daily bars (most recent end)
+                    recent = series[-lookback_days:]
+                    if len(recent) < lookback_days:
+                        out[t] = None
+                        continue
+                    ratios = [b.high / b.low for b in recent if b.low > 0]
+                    if not ratios:
+                        out[t] = None
+                        continue
+                    out[t] = (sum(ratios) / len(ratios) - 1) * 100
+                return out
+
+            for label, url in [
+                ('ALPACA', 'sqlite:////opt/trading-bot/trading-bot/trading_bot.db'),
+                ('IB    ', 'sqlite:////opt/trading-bot/trading-bot/trading_bot_ib.db'),
+            ]:
+                if 'trading_bot.db' in url and 'trading_bot_ib' not in url:
+                    eng = init_db(url)
+                else:
+                    eng = create_engine(url)
+                S = sessionmaker(bind=eng)
+                with S() as s:
+                    positions = (
+                        s.query(Position)
+                        .filter(Position.is_open == True)
+                        .order_by(Position.opened_at.asc())
+                        .all()
+                    )
+
+                tickers = sorted({p.ticker for p in positions})
+                prices = fetch_prices(tickers)
+                adrs = fetch_adr_pct(tickers, lookback_days=20)
+
+                print(f'\n=== {label} ({len(positions)} open positions) ===')
+                print(f'{"#":>2}  {"ticker":<7s}  {"setup":<18s}  '
+                      f'{"shares":>6s}  {"entry":>10s}  {"current":>10s}  '
+                      f'{"days":>4s}  {"gain%":>8s}  {"ADR20%":>7s}')
+                print('-' * 100)
+
+                for i, p in enumerate(positions, 1):
+                    cur = prices.get(p.ticker)
+                    days = (today - p.opened_at.date()).days if p.opened_at else 0
+                    if cur is not None and p.entry_price:
+                        gain_pct = (cur - p.entry_price) / p.entry_price * 100
+                    else:
+                        gain_pct = float('nan')
+                    cur_s = f'${cur:.2f}' if cur is not None else 'N/A'
+                    gain_s = f'{gain_pct:+.2f}%' if cur is not None else 'N/A'
+                    adr = adrs.get(p.ticker)
+                    adr_s = f'{adr:.2f}%' if adr is not None else 'N/A'
+                    print(f'{i:>2}  {p.ticker:<7s}  {p.setup_type:<18s}  '
+                          f'{p.shares:>6d}  ${p.entry_price:>9.2f}  {cur_s:>10s}  '
+                          f'{days:>4d}  {gain_s:>8s}  {adr_s:>7s}')
+            PY
