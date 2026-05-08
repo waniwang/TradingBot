@@ -49,14 +49,14 @@ jobs:
             print('=== IBKR paper account ===')
             try:
                 import yaml
-                from executor.ib_client import IbClient
+                from executor.ib_client import IBClient
                 # Load IB-specific config (config.ib.local.yaml or main config)
                 cfg_path = ROOT / 'config.ib.local.yaml'
                 if not cfg_path.exists():
                     cfg_path = ROOT / 'config.yaml'
                 with open(cfg_path) as f:
                     cfg = yaml.safe_load(f)
-                client = IbClient(cfg)
+                client = IBClient(cfg)
                 client.connect()
                 bp = client.get_buying_power()
                 pv = client.get_portfolio_value()
