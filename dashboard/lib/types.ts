@@ -371,6 +371,8 @@ export interface PerformanceSummary {
    *  value (first DailyPnl row of the window). */
   total_return_pct: number;
   total_pnl_dollars: number;
+  /** Sum of R-multiples across closed trades in the window. */
+  total_r: number;
   win_rate: number;
   total_trades: number;
   /** Average R-multiple per trade. R = realized_pnl / initial_risk_$. */
@@ -384,6 +386,10 @@ export interface PerformanceSummary {
   avg_win_dollars: number;
   avg_loss_r: number;
   avg_loss_dollars: number;
+  /** Total unrealized P&L across currently-open positions, marked at current price. */
+  unrealized_pnl: number;
+  /** Average R across currently-open positions (using current price as if-exit). */
+  unrealized_avg_r: number;
   /** Per-strategy breakdown. Key includes A/B/C suffix for EP variants
    *  (e.g. "EP Earnings A", "EP News B"). */
   strategy_breakdown: Record<

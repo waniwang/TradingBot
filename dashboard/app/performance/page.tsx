@@ -85,15 +85,15 @@ function StatsCards({ summary }: { summary: PerformanceSummary }) {
   const cards = [
     {
       title: "Total Return",
-      value: `${summary.total_return_pct >= 0 ? "+" : ""}${summary.total_return_pct.toFixed(2)}%`,
+      value: formatR(summary.total_r),
       sub: formatDollars(summary.total_pnl_dollars, true),
-      color: summary.total_return_pct >= 0 ? "text-profit" : "text-loss",
+      color: summary.total_r >= 0 ? "text-profit" : "text-loss",
     },
     {
-      title: "Expectancy",
-      value: formatR(summary.expectancy_r),
-      sub: "avg R per trade",
-      color: summary.expectancy_r >= 0 ? "text-profit" : "text-loss",
+      title: "Unrealized",
+      value: formatR(summary.unrealized_avg_r),
+      sub: formatDollars(summary.unrealized_pnl, true),
+      color: summary.unrealized_pnl >= 0 ? "text-profit" : "text-loss",
     },
     {
       title: "Win Rate",

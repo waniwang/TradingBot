@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter
 
 from db.models import DailyPnl, Position, get_session
-from api.deps import get_db_engine
+from api.deps import get_alpaca, get_db_engine
 from api.variation import resolve_variations_batch
 
 router = APIRouter()
@@ -89,6 +89,7 @@ def get_pnl_history(days: int = 30):
 _EMPTY_SUMMARY = {
     "total_return_pct": 0.0,
     "total_pnl_dollars": 0.0,
+    "total_r": 0.0,
     "win_rate": 0.0,
     "total_trades": 0,
     "expectancy_r": 0.0,
@@ -101,6 +102,8 @@ _EMPTY_SUMMARY = {
     "avg_win_dollars": 0.0,
     "avg_loss_r": 0.0,
     "avg_loss_dollars": 0.0,
+    "unrealized_pnl": 0.0,
+    "unrealized_avg_r": 0.0,
     "strategy_breakdown": {},
 }
 
@@ -168,6 +171,7 @@ def get_performance_summary(days: int = 90):
 
     total_return_pct = (total_pnl / baseline_value * 100) if baseline_value > 0 else 0.0
 
+    total_r = sum(rs) if rs else 0.0
     expectancy_r = sum(rs) / len(rs) if rs else 0.0
     avg_win_r = sum(r for _, r in win_pairs) / len(win_pairs) if win_pairs else 0.0
     avg_loss_r = sum(r for _, r in loss_pairs) / len(loss_pairs) if loss_pairs else 0.0
@@ -217,9 +221,37 @@ def get_performance_summary(days: int = 90):
         for label, b in breakdown.items()
     }
 
+    # Unrealized stats — all currently-open positions, marked at current price.
+    # Not scoped to the window since open positions are point-in-time state.
+    unrealized_pnl = 0.0
+    unrealized_rs: list[float] = []
+    try:
+        alpaca = get_alpaca()
+    except Exception:
+        alpaca = None
+    if alpaca is not None:
+        engine = get_db_engine()
+        with get_session(engine) as session:
+            open_positions = session.query(Position).filter_by(is_open=True).all()
+        for p in open_positions:
+            try:
+                bar = alpaca.get_latest_bar(p.ticker)
+                price = bar["last_price"]
+            except Exception:
+                continue
+            if not price or price <= 0:
+                continue
+            pnl = p.unrealized_pnl(price)
+            unrealized_pnl += pnl
+            risk_per_share = abs(p.entry_price - p.initial_stop_price)
+            if risk_per_share > 0 and p.shares > 0:
+                unrealized_rs.append(pnl / (risk_per_share * p.shares))
+    unrealized_avg_r = sum(unrealized_rs) / len(unrealized_rs) if unrealized_rs else 0.0
+
     return {
         "total_return_pct": round(total_return_pct, 2),
         "total_pnl_dollars": round(total_pnl, 2),
+        "total_r": round(total_r, 2),
         "win_rate": round(win_rate, 1),
         "total_trades": len(closed),
         "expectancy_r": round(expectancy_r, 2),
@@ -232,5 +264,7 @@ def get_performance_summary(days: int = 90):
         "avg_win_dollars": round(avg_win_dollars, 2),
         "avg_loss_r": round(avg_loss_r, 2),
         "avg_loss_dollars": round(avg_loss_dollars, 2),
+        "unrealized_pnl": round(unrealized_pnl, 2),
+        "unrealized_avg_r": round(unrealized_avg_r, 2),
         "strategy_breakdown": strategy_breakdown,
     }
