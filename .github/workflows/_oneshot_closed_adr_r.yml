@@ -1,0 +1,211 @@
+name: One-shot — closed trades by ADR% bucket (R analysis)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  closed_adr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull closed positions, ADR% at entry, and R-multiples
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            .venv/bin/python <<'PY'
+            import os, sys
+            from datetime import datetime, date, timedelta
+            from collections import defaultdict
+            from pathlib import Path
+            ROOT = Path('/opt/trading-bot/trading-bot')
+            sys.path.insert(0, str(ROOT))
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from db.models import Position, init_db
+
+            from alpaca.data.historical import StockHistoricalDataClient
+            from alpaca.data.requests import StockBarsRequest
+            from alpaca.data.timeframe import TimeFrame
+
+            data_client = StockHistoricalDataClient(
+                api_key=os.environ['ALPACA_API_KEY'],
+                secret_key=os.environ['ALPACA_SECRET_KEY'],
+            )
+
+            # 1) Pull all closed positions from both DBs
+            all_rows = []  # list of (bot, position dict-like)
+            for label, url in [
+                ('ALPACA', 'sqlite:////opt/trading-bot/trading-bot/trading_bot.db'),
+                ('IB', 'sqlite:////opt/trading-bot/trading-bot/trading_bot_ib.db'),
+            ]:
+                if url.endswith('trading_bot.db'):
+                    eng = init_db(url)
+                else:
+                    eng = create_engine(url)
+                S = sessionmaker(bind=eng)
+                with S() as s:
+                    closed = (
+                        s.query(Position)
+                        .filter(Position.is_open == False)
+                        .filter(Position.exit_price.isnot(None))
+                        .filter(Position.realized_pnl.isnot(None))
+                        .order_by(Position.opened_at.asc())
+                        .all()
+                    )
+                for p in closed:
+                    all_rows.append({
+                        'bot': label,
+                        'ticker': p.ticker,
+                        'setup': p.setup_type,
+                        'side': p.side,
+                        'shares': p.shares,
+                        'entry': p.entry_price,
+                        'stop': p.initial_stop_price,
+                        'exit': p.exit_price,
+                        'exit_reason': p.exit_reason,
+                        'pnl': p.realized_pnl,
+                        'opened_at': p.opened_at,
+                        'closed_at': p.closed_at,
+                    })
+
+            print(f'Total closed positions: {len(all_rows)}')
+            if not all_rows:
+                print('No closed positions found.')
+                sys.exit(0)
+
+            # 2) Batch-fetch daily bars for all unique tickers, covering full window.
+            tickers = sorted({r['ticker'] for r in all_rows})
+            min_open = min(r['opened_at'] for r in all_rows if r['opened_at']).date()
+            start = min_open - timedelta(days=60)
+            end_dt = max(r['opened_at'] for r in all_rows if r['opened_at'])
+
+            print(f'Fetching daily bars for {len(tickers)} tickers from {start} to {end_dt.date()}...')
+            try:
+                req = StockBarsRequest(
+                    symbol_or_symbols=tickers,
+                    timeframe=TimeFrame.Day,
+                    start=datetime.combine(start, datetime.min.time()),
+                    end=end_dt,
+                )
+                bars = data_client.get_stock_bars(req)
+                bars_dict = bars.data if hasattr(bars, 'data') else {}
+            except Exception as e:
+                print(f'  WARN: bars fetch failed: {e}')
+                bars_dict = {}
+
+            # Index bars by ticker -> sorted list of (date, high, low)
+            ticker_bars = {}
+            for t in tickers:
+                series = bars_dict.get(t, [])
+                ticker_bars[t] = sorted(
+                    [(b.timestamp.date(), b.high, b.low) for b in series],
+                    key=lambda x: x[0],
+                )
+
+            def adr_at(ticker, entry_dt, lookback=20):
+                """ADR% over the 20 trading days BEFORE entry_dt (Kullamagi formula)."""
+                series = ticker_bars.get(ticker, [])
+                if not series or not entry_dt:
+                    return None
+                entry_d = entry_dt.date()
+                prior = [b for b in series if b[0] < entry_d]
+                if len(prior) < lookback:
+                    return None
+                recent = prior[-lookback:]
+                ratios = [hi / lo for (_, hi, lo) in recent if lo > 0]
+                if not ratios:
+                    return None
+                return (sum(ratios) / len(ratios) - 1) * 100
+
+            # 3) Compute R + ADR for each closed trade
+            for r in all_rows:
+                risk_per_share = r['entry'] - r['stop']  # long: positive
+                if risk_per_share <= 0:
+                    r['R'] = None
+                else:
+                    risk_dollars = risk_per_share * r['shares']
+                    r['R'] = (r['pnl'] or 0.0) / risk_dollars
+                r['adr'] = adr_at(r['ticker'], r['opened_at'])
+
+            with_adr = [r for r in all_rows if r['adr'] is not None and r['R'] is not None]
+            without_adr = [r for r in all_rows if r['adr'] is None or r['R'] is None]
+            print(f'With ADR + R: {len(with_adr)}    Excluded: {len(without_adr)}')
+
+            # 4) Bucket analysis
+            BUCKETS = [
+                ('<3%',     0.0, 3.0),
+                ('3-4%',    3.0, 4.0),
+                ('4-5%',    4.0, 5.0),
+                ('5-6%',    5.0, 6.0),
+                ('6-7%',    6.0, 7.0),
+                ('7%+',     7.0, 999.0),
+            ]
+
+            print('\n=== Per-trade R by ADR% bucket ===')
+            print(f'{"bucket":<8s}  {"trades":>6s}  {"win%":>6s}  {"avg R":>7s}  '
+                  f'{"med R":>7s}  {"sum R":>7s}  {"avg gain%":>9s}  {"PF":>6s}')
+            print('-' * 80)
+
+            def stats(rows):
+                Rs = [r['R'] for r in rows]
+                if not Rs:
+                    return None
+                wins = [r for r in Rs if r > 0]
+                losses = [r for r in Rs if r <= 0]
+                win_rate = len(wins) / len(Rs) * 100
+                avg_r = sum(Rs) / len(Rs)
+                med_r = sorted(Rs)[len(Rs)//2]
+                sum_r = sum(Rs)
+                gains = [(r['exit'] - r['entry']) / r['entry'] * 100 for r in rows if r['entry']]
+                avg_gain = sum(gains) / len(gains) if gains else 0.0
+                pos_sum = sum(r for r in Rs if r > 0)
+                neg_sum = abs(sum(r for r in Rs if r < 0))
+                pf = pos_sum / neg_sum if neg_sum > 0 else float('inf')
+                return win_rate, avg_r, med_r, sum_r, avg_gain, pf
+
+            for name, lo, hi in BUCKETS:
+                rows = [r for r in with_adr if lo <= r['adr'] < hi]
+                if not rows:
+                    print(f'{name:<8s}  {0:>6d}  {"-":>6s}  {"-":>7s}  '
+                          f'{"-":>7s}  {"-":>7s}  {"-":>9s}  {"-":>6s}')
+                    continue
+                win_rate, avg_r, med_r, sum_r, avg_gain, pf = stats(rows)
+                pf_s = f'{pf:.2f}' if pf != float('inf') else 'inf'
+                print(f'{name:<8s}  {len(rows):>6d}  {win_rate:>5.1f}%  '
+                      f'{avg_r:>+6.2f}R  {med_r:>+6.2f}R  {sum_r:>+6.1f}R  '
+                      f'{avg_gain:>+8.2f}%  {pf_s:>6s}')
+
+            # Coarser cut: above vs below 5%
+            print('\n=== Above vs below 5% ADR threshold ===')
+            for name, rows in [
+                ('< 5% ADR', [r for r in with_adr if r['adr'] < 5.0]),
+                ('>= 5% ADR', [r for r in with_adr if r['adr'] >= 5.0]),
+            ]:
+                if not rows:
+                    continue
+                win_rate, avg_r, med_r, sum_r, avg_gain, pf = stats(rows)
+                pf_s = f'{pf:.2f}' if pf != float('inf') else 'inf'
+                print(f'{name:<10s}  trades={len(rows):>3d}  win%={win_rate:>5.1f}%  '
+                      f'avg R={avg_r:>+6.2f}  sum R={sum_r:>+6.1f}  '
+                      f'avg gain={avg_gain:>+6.2f}%  PF={pf_s}')
+
+            # Also show by setup_type within each bucket (top-level only, no per-bot)
+            print('\n=== Per-trade detail (sorted by ADR%) ===')
+            print(f'{"bot":<7s}  {"ticker":<6s}  {"setup":<18s}  '
+                  f'{"opened":<11s}  {"ADR%":>6s}  {"R":>7s}  {"gain%":>7s}  '
+                  f'{"days":>4s}  {"reason":<22s}')
+            print('-' * 110)
+            for r in sorted(with_adr, key=lambda x: x['adr']):
+                gain = (r['exit'] - r['entry']) / r['entry'] * 100
+                days = (r['closed_at'] - r['opened_at']).days if r['closed_at'] and r['opened_at'] else 0
+                print(f'{r["bot"]:<7s}  {r["ticker"]:<6s}  {r["setup"]:<18s}  '
+                      f'{r["opened_at"].date().isoformat():<11s}  {r["adr"]:>5.2f}%  '
+                      f'{r["R"]:>+6.2f}R  {gain:>+6.2f}%  {days:>4d}  '
+                      f'{(r["exit_reason"] or "")[:22]:<22s}')
+            PY
