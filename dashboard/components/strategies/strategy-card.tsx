@@ -17,6 +17,23 @@ function timeAgo(iso: string): string {
   return `${days}d ago`;
 }
 
+function formatR(r: number): string {
+  return `${r >= 0 ? "+" : ""}${r.toFixed(2)}R`;
+}
+
+function formatPct(pct: number): string {
+  return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+}
+
+function formatDollars(value: number, signed = false): string {
+  const abs = Math.abs(value).toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
+  if (signed) return `${value >= 0 ? "+" : "-"}$${abs}`;
+  return value < 0 ? `-$${abs}` : `$${abs}`;
+}
+
 export function StrategyCard({ strategy }: { strategy: StrategyInfo }) {
   const { stats, last_run } = strategy;
 
@@ -43,24 +60,47 @@ export function StrategyCard({ strategy }: { strategy: StrategyInfo }) {
             {strategy.description}
           </p>
 
-          {/* Stats row */}
+          {/* Stats row — R as headline, %/$ as subline for both realized + unrealized */}
           <div className="grid grid-cols-4 gap-2 mb-3">
             <div>
               <p className="text-[10px] text-muted-foreground">Win Rate</p>
               <p className="text-sm font-bold tabular-nums">{stats.win_rate}%</p>
+              <p className="text-[10px] text-muted-foreground tabular-nums">
+                {stats.total_closed} trade{stats.total_closed === 1 ? "" : "s"}
+              </p>
             </div>
             <div>
-              <p className="text-[10px] text-muted-foreground">Trades</p>
-              <p className="text-sm font-bold tabular-nums">{stats.total_closed}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-muted-foreground">P&L</p>
+              <p className="text-[10px] text-muted-foreground">Realized</p>
               <p
                 className={`text-sm font-bold tabular-nums ${
                   stats.total_pnl >= 0 ? "text-profit" : "text-loss"
                 }`}
               >
-                ${stats.total_pnl.toFixed(2)}
+                {formatR(stats.realized_avg_r)}
+              </p>
+              <p
+                className={`text-[10px] tabular-nums ${
+                  stats.total_pnl >= 0 ? "text-profit" : "text-loss"
+                }`}
+              >
+                {formatPct(stats.realized_pnl_pct)} · {formatDollars(stats.total_pnl, true)}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground">Unrealized</p>
+              <p
+                className={`text-sm font-bold tabular-nums ${
+                  stats.unrealized_pnl >= 0 ? "text-profit" : "text-loss"
+                }`}
+              >
+                {formatR(stats.unrealized_avg_r)}
+              </p>
+              <p
+                className={`text-[10px] tabular-nums ${
+                  stats.unrealized_pnl >= 0 ? "text-profit" : "text-loss"
+                }`}
+              >
+                {formatPct(stats.unrealized_pnl_pct)} · {formatDollars(stats.unrealized_pnl, true)}
               </p>
             </div>
             <div>

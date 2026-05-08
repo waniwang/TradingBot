@@ -405,6 +405,11 @@ export interface StrategyStats {
   total_closed: number;
   win_rate: number;
   total_pnl: number;
+  realized_avg_r: number;
+  realized_pnl_pct: number;
+  unrealized_pnl: number;
+  unrealized_avg_r: number;
+  unrealized_pnl_pct: number;
 }
 
 export type ParamVariation = "base" | "A" | "B" | "C";
