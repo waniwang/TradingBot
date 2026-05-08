@@ -6,78 +6,104 @@ import type { Portfolio } from "@/lib/types";
 export function PortfolioCards({ data }: { data: Portfolio | null }) {
   if (!data) return <PortfolioSkeleton />;
 
-  const cards = [
-    {
-      title: "Portfolio Value",
-      value: formatCurrency(data.portfolio_value),
-      sub: null,
-    },
-    {
-      title: "Cash",
-      value: formatCurrency(data.cash),
-      sub: null,
-    },
-    {
-      title: "Daily P&L",
-      value: formatCurrency(data.daily_pnl, true),
-      sub: `${data.daily_pnl_pct >= 0 ? "+" : ""}${data.daily_pnl_pct.toFixed(2)}%`,
-      color: data.daily_pnl >= 0 ? "text-profit" : "text-loss",
-      subColor: data.daily_pnl_pct >= 0 ? "text-profit" : "text-loss",
-    },
-    {
-      title: "YTD Realized",
-      value: formatCurrency(data.ytd_realized, true),
-      sub: `${data.ytd_realized_pct >= 0 ? "+" : ""}${data.ytd_realized_pct.toFixed(2)}%`,
-      color: data.ytd_realized >= 0 ? "text-profit" : "text-loss",
-      subColor: data.ytd_realized_pct >= 0 ? "text-profit" : "text-loss",
-    },
-    {
-      title: "Open Positions",
-      value: `${data.open_positions}`,
-      sub: data.max_positions === null ? "no cap" : `max ${data.max_positions}`,
-    },
-    {
-      title: "Trades Today",
-      value: `${data.trades_today}`,
-      sub: null,
-    },
-  ];
+  const unrealizedColor = data.daily_unrealized >= 0 ? "text-profit" : "text-loss";
+  const ytdColor = data.ytd_realized >= 0 ? "text-profit" : "text-loss";
 
   return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-      {cards.map((c) => (
-        <Card key={c.title}>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground">
-              {c.title}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className={`text-2xl font-bold tabular-nums ${c.color || ""}`}>
-              {c.value}
-            </div>
-            {c.sub && (
-              <p className={`mt-1 text-xs ${c.subColor || "text-muted-foreground"}`}>
-                {c.sub}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      ))}
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      {/* Combined Portfolio Value + Cash */}
+      <Card>
+        <CardHeader className="pb-1">
+          <CardTitle className="text-[11px] font-medium text-muted-foreground">
+            Portfolio Value
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-lg font-bold tabular-nums">
+            {formatCurrency(data.portfolio_value)}
+          </div>
+          <p className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
+            Cash {formatCurrency(data.cash)}
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* Unrealized P&L — R is primary, $ is secondary */}
+      <Card>
+        <CardHeader className="pb-1">
+          <CardTitle className="text-[11px] font-medium text-muted-foreground">
+            Unrealized P&L
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className={`text-lg font-bold tabular-nums ${unrealizedColor}`}>
+            {formatR(data.unrealized_avg_r)}
+          </div>
+          <p className={`mt-0.5 text-[11px] tabular-nums ${unrealizedColor}`}>
+            {formatCurrency(data.daily_unrealized, true)} ·{" "}
+            {data.unrealized_pnl_pct >= 0 ? "+" : ""}
+            {data.unrealized_pnl_pct.toFixed(2)}%
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* YTD Realized — R is primary, $ is secondary */}
+      <Card>
+        <CardHeader className="pb-1">
+          <CardTitle className="text-[11px] font-medium text-muted-foreground">
+            YTD Realized
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className={`text-lg font-bold tabular-nums ${ytdColor}`}>
+            {formatR(data.ytd_avg_r)}
+          </div>
+          <p className={`mt-0.5 text-[11px] tabular-nums ${ytdColor}`}>
+            {formatCurrency(data.ytd_realized, true)} ·{" "}
+            {data.ytd_realized_pct >= 0 ? "+" : ""}
+            {data.ytd_realized_pct.toFixed(2)}%
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-1">
+          <CardTitle className="text-[11px] font-medium text-muted-foreground">
+            Open Positions
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-lg font-bold tabular-nums">{data.open_positions}</div>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            {data.max_positions === null ? "no cap" : `max ${data.max_positions}`}
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-1">
+          <CardTitle className="text-[11px] font-medium text-muted-foreground">
+            Trades Today
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-lg font-bold tabular-nums">{data.trades_today}</div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
 function PortfolioSkeleton() {
   return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-      {Array.from({ length: 6 }).map((_, i) => (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      {Array.from({ length: 5 }).map((_, i) => (
         <Card key={i}>
-          <CardHeader className="pb-2">
+          <CardHeader className="pb-1">
             <div className="h-3 w-20 animate-pulse rounded bg-muted" />
           </CardHeader>
           <CardContent>
-            <div className="h-7 w-28 animate-pulse rounded bg-muted" />
+            <div className="h-5 w-24 animate-pulse rounded bg-muted" />
           </CardContent>
         </Card>
       ))}
@@ -95,4 +121,8 @@ function formatCurrency(value: number, showSign = false): string {
     return value >= 0 ? `+${formatted}` : `-${formatted}`;
   }
   return formatted;
+}
+
+function formatR(r: number): string {
+  return `${r >= 0 ? "+" : ""}${r.toFixed(2)}R`;
 }

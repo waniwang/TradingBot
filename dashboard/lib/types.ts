@@ -18,8 +18,11 @@ export interface Portfolio {
   daily_pnl_pct: number;
   daily_realized: number;
   daily_unrealized: number;
+  unrealized_pnl_pct: number;
+  unrealized_avg_r: number;
   ytd_realized: number;
   ytd_realized_pct: number;
+  ytd_avg_r: number;
   open_positions: number;
   // null when the position cap is disabled (max_positions=0 in config)
   max_positions: number | null;

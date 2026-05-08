@@ -12,6 +12,15 @@ from api.deps import get_db_engine, get_alpaca, get_config
 router = APIRouter()
 
 
+def _initial_risk_per_share(p: Position) -> float | None:
+    risk = abs(p.entry_price - p.initial_stop_price)
+    return risk if risk > 0 else None
+
+
+def _avg_r(rs: list[float]) -> float:
+    return sum(rs) / len(rs) if rs else 0.0
+
+
 @router.get("/portfolio")
 def get_portfolio():
     engine = get_db_engine()
@@ -38,16 +47,24 @@ def get_portfolio():
 
         daily_realized = sum(p.realized_pnl or 0.0 for p in closed_today)
 
-        # Unrealized P&L from open positions
+        # Unrealized P&L from open positions + per-position R for the avg.
         daily_unrealized = 0.0
+        unrealized_rs: list[float] = []
         for p in open_positions:
             try:
                 bar = alpaca.get_latest_bar(p.ticker)
                 price = bar["last_price"]
                 if price and price > 0:
-                    daily_unrealized += p.unrealized_pnl(price)
+                    pnl = p.unrealized_pnl(price)
+                    daily_unrealized += pnl
+                    risk_per_share = _initial_risk_per_share(p)
+                    if risk_per_share is not None and p.shares > 0:
+                        unrealized_rs.append(pnl / (risk_per_share * p.shares))
             except Exception:
                 pass
+
+        unrealized_pnl_pct = (daily_unrealized / portfolio_value * 100) if portfolio_value else 0.0
+        unrealized_avg_r = _avg_r(unrealized_rs)
 
         total_daily_pnl = daily_realized + daily_unrealized
         daily_pnl_pct = (total_daily_pnl / portfolio_value * 100) if portfolio_value else 0.0
@@ -60,6 +77,12 @@ def get_portfolio():
             .all()
         )
         ytd_realized = sum(p.realized_pnl or 0.0 for p in closed_ytd)
+        ytd_rs: list[float] = []
+        for p in closed_ytd:
+            risk_per_share = _initial_risk_per_share(p)
+            if risk_per_share is not None and p.shares > 0 and p.realized_pnl is not None:
+                ytd_rs.append(p.realized_pnl / (risk_per_share * p.shares))
+        ytd_avg_r = _avg_r(ytd_rs)
 
         # YTD % uses first DailyPnl portfolio_value of the year as the baseline.
         # Falls back to current portfolio value minus YTD realized if no daily history.
@@ -82,8 +105,11 @@ def get_portfolio():
             "daily_pnl_pct": daily_pnl_pct,
             "daily_realized": daily_realized,
             "daily_unrealized": daily_unrealized,
+            "unrealized_pnl_pct": unrealized_pnl_pct,
+            "unrealized_avg_r": unrealized_avg_r,
             "ytd_realized": ytd_realized,
             "ytd_realized_pct": ytd_realized_pct,
+            "ytd_avg_r": ytd_avg_r,
             "open_positions": len(open_positions),
             # max_positions == 0 → cap is disabled; surface as None so the
             # dashboard can render "—" rather than "X / 0".
