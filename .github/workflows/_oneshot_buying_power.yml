@@ -56,6 +56,9 @@ jobs:
                     cfg_path = ROOT / 'config.yaml'
                 with open(cfg_path) as f:
                     cfg = yaml.safe_load(f)
+                # Use a non-default client_id to avoid colliding with the
+                # running IB bot's connection (which holds client_id 7).
+                cfg.setdefault('ibkr', {})['client_id'] = 99
                 client = IBClient(cfg)
                 client.connect()
                 bp = client.get_buying_power()
