@@ -31,3 +31,19 @@ date,failure_time,ticker,strategy,intended_entry,intended_stop,would_confirm,rea
 2026-05-06,2026-05-06T19:58:01Z,WAT,ep_earnings_c,348.24,323.86,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
 2026-05-06,2026-05-06T19:58:01Z,WLFC,ep_news_c,235.27,218.80,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
 2026-05-06,2026-05-06T19:58:01Z,WOLF,ep_earnings_c,41.59,38.68,yes,Position cap full at execute time (open=21/cap=20 (backfilled from journald)),,max-positions
+2026-05-07,2026-05-07T19:37:00Z,NBIX,ep_earnings_c,148.95,138.52,yes,"Buying power exhausted at execute time (cost=$4,170 > BP=$2,473 (4 retries 15:37-15:46, never filled; 1m bar low touched $148.72 at 15:38 ET → would have filled) — backfilled (pre-636de56 BP pre-flight))",,insufficient-bp
+2026-05-07,2026-05-07T19:38:00Z,FLEX,ep_earnings_c,134.72,125.29,yes,"Order cancelled by timeout, retry blocked by pre-fix stage filter (OTO cancelled at 15:38 (limit=$134.72 didn't print in 60s); 1m bar low=$132.07 at 15:43 ET — would have filled on retry. Bot dropped the row (stage='triggered' not in pre-39d6e70 filter) — backfilled)",,bot-bug
+2026-05-07,2026-05-07T19:38:00Z,HL,ep_earnings_c,18.14,16.87,yes,"Order cancelled by timeout, retry blocked by pre-fix stage filter (OTO cancelled at 15:38 (limit=$18.14 didn't print in 60s); 1m bar low=$17.97 at 15:47 ET — would have filled on retry. Bot dropped the row (stage='triggered' not in pre-39d6e70 filter) — backfilled)",,bot-bug
+2026-05-07,2026-05-07T19:38:00Z,SSRM,ep_earnings_c,32.80,30.50,yes,"Order cancelled by timeout, retry blocked by pre-fix stage filter (OTO cancelled at 15:38 (limit=$32.80 didn't print in 60s); 1m bar low=$32.68 at 15:38 ET — would have filled on retry. Bot dropped the row (stage='triggered' not in pre-39d6e70 filter) — backfilled)",,bot-bug
+2026-05-08,2026-05-08T19:38:00.716708Z,FTNT,ep_earnings_c,113.67,105.71,yes,"Buying power exhausted at execute time (cost=$4,206 > BP=$3,017)",,insufficient-bp
+2026-05-08,2026-05-08T19:38:01.040153Z,EZPW,ep_news_c,33.86,31.49,yes,"Buying power exhausted at execute time (cost=$4,266 > BP=$3,018)",,insufficient-bp
+2026-05-08,2026-05-08T19:38:01.568007Z,ARRY,ep_earnings_c,8.64,8.04,yes,"Buying power exhausted at execute time (cost=$4,320 > BP=$3,016)",,insufficient-bp
+2026-05-08,2026-05-08T19:38:04.550124Z,MNST,ep_earnings_a,86.44,80.39,yes,"Buying power exhausted at execute time (cost=$4,236 > BP=$2,910)",,insufficient-bp
+2026-05-08,2026-05-08T19:38:05.389229Z,CALY,ep_earnings_a,17.53,16.30,yes,"Buying power exhausted at execute time (cost=$4,277 > BP=$2,911)",,insufficient-bp
+2026-05-08,2026-05-08T19:39:00.729629Z,FLNC,ep_earnings_c,24.56,22.84,yes,"Buying power exhausted at execute time (cost=$4,273 > BP=$2,898)",,insufficient-bp
+2026-05-08,2026-05-08T19:39:01.249602Z,SITM,ep_earnings_c,826.65,768.78,yes,"Buying power exhausted at execute time (cost=$4,133 > BP=$2,903)",,insufficient-bp
+2026-05-08,2026-05-08T19:39:04.454287Z,RKLB,ep_earnings_a,102.48,95.31,yes,"Buying power exhausted at execute time (cost=$4,202 > BP=$2,888)",,insufficient-bp
+2026-05-08,2026-05-08T19:40:02.757805Z,MIDD,ep_news_c,165.33,153.76,yes,"Buying power exhausted at execute time (cost=$4,133 > BP=$2,768)",,insufficient-bp
+2026-05-08,2026-05-08T19:40:04.743637Z,PGNY,ep_earnings_b,23.36,21.72,yes,"Buying power exhausted at execute time (cost=$4,252 > BP=$2,764)",,insufficient-bp
+2026-05-08,2026-05-08T19:43:00.723375Z,MTSI,ep_news_c,357.33,332.32,yes,"Buying power exhausted at execute time (cost=$4,288 > BP=$2,882)",,insufficient-bp
+2026-05-08,2026-05-08T19:59:01.923428Z,KLIC,ep_earnings_c,102.52,95.34,yes,"Buying power exhausted at execute time (cost=$4,203 > BP=$2,922)",,insufficient-bp
