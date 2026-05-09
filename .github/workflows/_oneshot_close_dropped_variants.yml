@@ -100,6 +100,8 @@ jobs:
             cfg["alpaca"]["secret_key"] = os.environ["ALPACA_SECRET_KEY"]
 
             alpaca_client = AlpacaClient(cfg)
+            alpaca_client.connect()
+            print(f"[Alpaca] connected ({alpaca_client.env})")
 
             # ───── ib client (separate client_id to avoid colliding with running bot) ─────
             # The running IB bot uses a fixed client_id from config. We pick 99 to be safe.
