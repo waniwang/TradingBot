@@ -1,0 +1,220 @@
+name: One-shot — manually close dropped-variant positions (Alpaca T1+T2, IB T1)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  close_dropped:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close dropped-variant positions per variant + cancel stops
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            .venv/bin/python <<'PY'
+            """
+            Manual close per (ticker, setup_type) — uses the bot's
+            close-position pattern: market-sell exactly the variant's
+            shares, cancel that variant's stop_order_id, mark Position
+            is_open=False with exit_reason="manual".
+
+            Markets are closed Friday night → Monday morning. Market orders
+            queue at the broker and fill at next open. DB rows are marked
+            closed immediately so the reconcile job won't see a phantom
+            position when orders fill Monday.
+
+            Idempotent: skips rows where is_open=False.
+            """
+            import os, sys, time
+            from datetime import datetime
+            from pathlib import Path
+
+            ROOT = Path("/opt/trading-bot/trading-bot")
+            sys.path.insert(0, str(ROOT))
+
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from db.models import Position, init_db
+            from executor.alpaca_client import AlpacaClient
+
+            from alpaca.data.historical import StockHistoricalDataClient
+            from alpaca.data.requests import StockLatestTradeRequest
+
+            # ───── targets ────────────────────────────────────────────────
+            # (bot, ticker, setup_type) tuples
+            ALPACA_T1 = [  # 6 positions — duplicates + dropped variants near flat
+                ("alpaca", "WAT",  "ep_earnings_c"),
+                ("alpaca", "DVA",  "ep_earnings_c"),
+                ("alpaca", "PRG",  "ep_news_c"),
+                ("alpaca", "NVT",  "ep_news_c"),
+                ("alpaca", "PI",   "ep_earnings_c"),
+                ("alpaca", "BRKR", "ep_earnings_c"),
+            ]
+            ALPACA_T2 = [  # 6 positions — dropped variants underwater
+                ("alpaca", "FSS",  "ep_news_c"),
+                ("alpaca", "ROK",  "ep_earnings_c"),
+                ("alpaca", "FLYW", "ep_earnings_c"),
+                ("alpaca", "ULCC", "ep_earnings_c"),
+                ("alpaca", "LTM",  "ep_earnings_c"),
+                ("alpaca", "ICL",  "ep_news_c"),
+            ]
+            IB_T1 = [  # 8 positions — duplicates + dropped variants
+                ("ib", "PWR",  "ep_earnings_c"),
+                ("ib", "MYRG", "ep_earnings_c"),
+                ("ib", "WCC",  "ep_earnings_c"),
+                ("ib", "TTMI", "ep_earnings_c"),
+                ("ib", "PI",   "ep_earnings_c"),
+                ("ib", "PRG",  "ep_news_c"),
+                ("ib", "NVT",  "ep_news_c"),
+                ("ib", "MTSI", "ep_news_c"),
+            ]
+            CLOSURES = ALPACA_T1 + ALPACA_T2 + IB_T1
+
+            # ───── shared price source (Alpaca data API works for any ticker) ─────
+            data_client = StockHistoricalDataClient(
+                api_key=os.environ["ALPACA_API_KEY"],
+                secret_key=os.environ["ALPACA_SECRET_KEY"],
+            )
+
+            def fetch_price(ticker: str) -> float | None:
+                try:
+                    req = StockLatestTradeRequest(symbol_or_symbols=[ticker])
+                    trades = data_client.get_stock_latest_trade(req)
+                    return float(trades[ticker].price) if ticker in trades else None
+                except Exception as e:
+                    print(f"  WARN: price fetch failed for {ticker}: {e}")
+                    return None
+
+            # ───── alpaca client (live trading mode) ─────
+            import yaml
+            with open("config.yaml") as f:
+                cfg = yaml.safe_load(f) or {}
+            cfg.setdefault("alpaca", {})["api_key"] = os.environ["ALPACA_API_KEY"]
+            cfg["alpaca"]["secret_key"] = os.environ["ALPACA_SECRET_KEY"]
+
+            alpaca_client = AlpacaClient(cfg)
+
+            # ───── ib client (separate client_id to avoid colliding with running bot) ─────
+            # The running IB bot uses a fixed client_id from config. We pick 99 to be safe.
+            ib_client = None
+            try:
+                from executor.ib_client import IBClient
+                ib_cfg = {
+                    "ibkr": {
+                        "host": cfg.get("ibkr", {}).get("host", "127.0.0.1"),
+                        "port": cfg.get("ibkr", {}).get("port", 4002),
+                        "client_id": 99,
+                    },
+                }
+                ib_client = IBClient(ib_cfg)
+                ib_client.connect()
+                print("[IB] connected to gateway with client_id=99")
+            except Exception as e:
+                print(f"[IB] connect failed: {e} — IB closes will be skipped")
+                ib_client = None
+
+            ALPACA_DB = "sqlite:////opt/trading-bot/trading-bot/trading_bot.db"
+            IB_DB     = "sqlite:////opt/trading-bot/trading-bot/trading_bot_ib.db"
+
+            # ───── inline close (mirrors monitor/position_tracker._close_position) ─────
+            def do_close(client, session, pos: Position, current_price: float) -> str:
+                remaining_shares = pos.shares - pos.partial_exit_shares
+                if remaining_shares <= 0:
+                    return f"SKIP {pos.ticker} ({pos.setup_type}): no remaining shares"
+
+                # 1) Market close at broker
+                try:
+                    order_id = client.close_position(pos.ticker, remaining_shares, pos.side)
+                except Exception as e:
+                    return f"FAIL {pos.ticker} ({pos.setup_type}): close_position error: {e}"
+
+                # 2) Cancel the variant's stop order
+                stop_status = "no-stop"
+                if pos.stop_order_id:
+                    try:
+                        client.cancel_order(pos.stop_order_id)
+                        stop_status = "stop-cancelled"
+                    except Exception as e:
+                        stop_status = f"stop-cancel-failed: {e}"
+
+                # 3) Compute approximate realized P&L (using current price; broker fill
+                #    will differ slightly. Same approach as bot's stop_hit/max_hold flows.)
+                if pos.side == "long":
+                    pnl = remaining_shares * (current_price - pos.entry_price)
+                else:
+                    pnl = remaining_shares * (pos.entry_price - current_price)
+                if pos.partial_exit_done and pos.partial_exit_price is not None:
+                    if pos.side == "long":
+                        pnl += pos.partial_exit_shares * (pos.partial_exit_price - pos.entry_price)
+                    else:
+                        pnl += pos.partial_exit_shares * (pos.entry_price - pos.partial_exit_price)
+
+                pos.exit_price = current_price
+                pos.exit_reason = "manual"
+                pos.realized_pnl = pnl
+                pos.is_open = False
+                pos.closed_at = datetime.utcnow()
+                session.commit()
+
+                return (
+                    f"OK   {pos.ticker} ({pos.setup_type}): "
+                    f"sold {remaining_shares}sh @ ~${current_price:.2f}, "
+                    f"order={order_id}, {stop_status}, pnl=${pnl:+,.2f}"
+                )
+
+            # ───── main loop ─────
+            def run_for_db(label, db_url, client, items):
+                if not items:
+                    return
+                if client is None:
+                    print(f"\n=== {label}: SKIPPED (no client) — {len(items)} positions ===")
+                    return
+                if "trading_bot.db" in db_url and "_ib" not in db_url:
+                    eng = init_db(db_url)
+                else:
+                    eng = create_engine(db_url)
+                S = sessionmaker(bind=eng)
+                print(f"\n=== {label}: {len(items)} positions ===")
+                with S() as session:
+                    for _, ticker, setup_type in items:
+                        pos = (
+                            session.query(Position)
+                            .filter_by(ticker=ticker, setup_type=setup_type, is_open=True)
+                            .first()
+                        )
+                        if pos is None:
+                            print(f"SKIP {ticker} ({setup_type}): no open position")
+                            continue
+                        price = fetch_price(ticker)
+                        if price is None:
+                            # Fall back to entry price so PnL math works; the broker fill
+                            # will determine the real exit
+                            price = pos.entry_price
+                            print(f"  (using entry_price ${price:.2f} as price fallback for {ticker})")
+                        result = do_close(client, session, pos, price)
+                        print(result)
+
+            run_for_db("ALPACA T1+T2", ALPACA_DB, alpaca_client,
+                       ALPACA_T1 + ALPACA_T2)
+            run_for_db("IB T1",        IB_DB,     ib_client,
+                       IB_T1)
+
+            # Disconnect IB cleanly
+            if ib_client is not None:
+                try:
+                    ib_client.disconnect()
+                except Exception:
+                    pass
+
+            print("\nDONE.")
+            print("Reminder: market orders queue when markets are closed.")
+            print("         They will fill at next open (Monday 9:30 AM ET).")
+            print("         Buying power on Alpaca will free up after fills.")
+            PY
