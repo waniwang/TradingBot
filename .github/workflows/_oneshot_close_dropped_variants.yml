@@ -125,26 +125,34 @@ jobs:
             ALPACA_DB = "sqlite:////opt/trading-bot/trading-bot/trading_bot.db"
             IB_DB     = "sqlite:////opt/trading-bot/trading-bot/trading_bot_ib.db"
 
-            # ───── inline close (mirrors monitor/position_tracker._close_position) ─────
+            # ───── inline close (cancel stop FIRST, then close — Alpaca holds
+            # shares for GTC stops so close_position fails with code 40310000
+            # if we don't free them first) ─────
             def do_close(client, session, pos: Position, current_price: float) -> str:
                 remaining_shares = pos.shares - pos.partial_exit_shares
                 if remaining_shares <= 0:
                     return f"SKIP {pos.ticker} ({pos.setup_type}): no remaining shares"
 
-                # 1) Market close at broker
-                try:
-                    order_id = client.close_position(pos.ticker, remaining_shares, pos.side)
-                except Exception as e:
-                    return f"FAIL {pos.ticker} ({pos.setup_type}): close_position error: {e}"
-
-                # 2) Cancel the variant's stop order
+                # 1) Cancel the variant's stop order FIRST so the broker releases
+                #    those shares from "held_for_orders" before we try to close.
+                #    Note: this differs from monitor/position_tracker._close_position
+                #    which cancels AFTER closing — that path works because stop_hit
+                #    already consumed the stop. Manual closes need cancel-first.
                 stop_status = "no-stop"
                 if pos.stop_order_id:
                     try:
                         client.cancel_order(pos.stop_order_id)
                         stop_status = "stop-cancelled"
+                        # Brief pause so Alpaca propagates the cancel before our close
+                        time.sleep(1.5)
                     except Exception as e:
                         stop_status = f"stop-cancel-failed: {e}"
+
+                # 2) Market close at broker
+                try:
+                    order_id = client.close_position(pos.ticker, remaining_shares, pos.side)
+                except Exception as e:
+                    return f"FAIL {pos.ticker} ({pos.setup_type}): close_position error: {e} ({stop_status})"
 
                 # 3) Compute approximate realized P&L (using current price; broker fill
                 #    will differ slightly. Same approach as bot's stop_hit/max_hold flows.)
