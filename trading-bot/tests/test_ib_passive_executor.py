@@ -75,9 +75,7 @@ def ib_local_engine():
 def mock_ib_client():
     """Stub IBClient — we only need the methods job_execute touches before
     placing an order, and we stop at the entry-resolution / risk-check
-    boundary. The actual order-placement path is exercised in
-    test_ep_earnings_day2_confirm.py against the Alpaca client; we don't
-    re-test it here."""
+    boundary."""
     client = MagicMock()
     client.get_portfolio_value.return_value = 100_000.0
     # BP pre-flight in plugin.job_execute requires a numeric return.
@@ -436,14 +434,13 @@ def test_register_strategy_jobs_skips_named_jobs():
     register_strategy_jobs(
         scheduler, plugins, config={}, client=None, db_engine=None,
         notify=lambda m: None,
-        skip_jobs=("ep_earnings_scan", "ep_earnings_day2_confirm"),
+        skip_jobs=("ep_earnings_scan",),
     )
 
     registered_ids = [
         kw.get("id") for _, kw in scheduler.add_job.call_args_list
     ]
     assert "ep_earnings_scan" not in registered_ids
-    assert "ep_earnings_day2_confirm" not in registered_ids
     assert "ep_earnings_execute" in registered_ids
 
 

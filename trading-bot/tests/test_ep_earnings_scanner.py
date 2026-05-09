@@ -15,7 +15,6 @@ import pandas as pd
 from strategies.ep_earnings.scanner import scan_ep_earnings, _check_earnings_today, _get_ticker_info
 from strategies.ep_earnings.strategy import (
     compute_features,
-    evaluate_strategy_a,
     evaluate_strategy_b,
     evaluate_ep_earnings_strategies,
 )
@@ -615,51 +614,6 @@ class TestComputeFeatures:
             list(df["close"]), list(df["high"]), list(df["low"]),
         )
         assert features["atr_pct"] > 0
-
-
-class TestStrategyA:
-    def _make_passing_features(self):
-        """Features that pass all Strategy A filters."""
-        return {
-            "chg_open_pct": 5.0,       # > 0
-            "close_in_range": 75.0,    # >= 50
-            "downside_from_open": 1.5, # < 3
-            "prev_10d_change_pct": -15.0,  # between -30 and -10
-            "atr_pct": 3.5,
-        }
-
-    def test_passes_all_filters(self):
-        config = _make_strategy_config()
-        features = self._make_passing_features()
-        candidate = _make_candidate()
-        assert evaluate_strategy_a(candidate, features, config) is True
-
-    def test_fails_chg_open_negative(self):
-        config = _make_strategy_config()
-        features = self._make_passing_features()
-        features["chg_open_pct"] = -1.0
-        assert evaluate_strategy_a(_make_candidate(), features, config) is False
-
-    def test_fails_close_in_range_low(self):
-        config = _make_strategy_config()
-        features = self._make_passing_features()
-        features["close_in_range"] = 30.0
-        assert evaluate_strategy_a(_make_candidate(), features, config) is False
-
-    def test_fails_downside_too_high(self):
-        config = _make_strategy_config()
-        features = self._make_passing_features()
-        features["downside_from_open"] = 5.0
-        assert evaluate_strategy_a(_make_candidate(), features, config) is False
-
-    def test_prev_10d_filter_removed(self):
-        """P10D filter was removed 2026-04-21. Any P10D value should pass A."""
-        config = _make_strategy_config()
-        for p10d in [-50.0, -35.0, -5.0, 0.0, 20.0, 50.0]:
-            features = self._make_passing_features()
-            features["prev_10d_change_pct"] = p10d
-            assert evaluate_strategy_a(_make_candidate(), features, config) is True, \
-                f"P10D={p10d} should pass (filter removed)"
 
 
 class TestStrategyB:

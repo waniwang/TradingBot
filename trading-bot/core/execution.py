@@ -57,10 +57,10 @@ def fetch_current_price(client, ticker: str, attempts: int = 3, sleep_secs: floa
     Return the current price for a ticker.
 
     Checks the intraday stream cache first — on_bar populates this throughout
-    the trading day, so day2_confirm at 3:35 PM gets a cache hit and never
-    touches the Alpaca snapshot REST endpoint (which is congested near close).
-    Falls back to REST snapshot with retry only if the cache is cold (e.g. the
-    ticker was added to the watchlist after stream subscription).
+    the trading day, so callers near close get a cache hit and avoid the
+    congested Alpaca snapshot REST endpoint. Falls back to REST snapshot with
+    retry only if the cache is cold (e.g. the ticker was added to the
+    watchlist after stream subscription).
     """
     from core import data_cache
     cached = data_cache.get_intraday_price(ticker)

@@ -35,8 +35,8 @@ Each strategy is a self-contained package under `strategies/<name>/` with its ow
 ```
 strategies/
 ├── breakout/          — scanner_nightly.py, scanner_premarket.py, signal.py, backtest.py
-├── ep_earnings/       — scanner.py, strategy.py (Strategy A+B swing entries)
-├── ep_news/           — scanner.py, strategy.py (news gap swing entries)
+├── ep_earnings/       — scanner.py, strategy.py (Strategy B swing entries; A and C dropped 2026-05-08)
+├── ep_news/           — scanner.py, strategy.py (Strategy A and B swing entries; C dropped 2026-05-08)
 ├── episodic_pivot/    — scanner.py, signal.py, backtest.py
 └── parabolic_short/   — scanner.py, signal.py, exits.py, backtest.py
 ```
@@ -60,7 +60,7 @@ Strategy Scanners (premarket)     Strategy Signals (market open)    Monitor (int
 
 **Data sources:** Alpaca snapshots for gap scanning (IEX daily-snapshot coverage is ~99.7% — the "~2%" figure applies only to realtime intraday trade streams), yfinance for fundamentals (market cap, quoteType, earnings calendar), Alpaca 1m candles for intraday signals. Full Alpaca capability + quirks cheat sheet: [docs/alpaca-api.md](docs/alpaca-api.md).
 
-**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 9:25 AM finalize watchlist → 9:30 AM–4:00 PM intraday monitor (long-running window driven by the Alpaca 1-min bar stream registered at 9:25) → 3:00 PM EP earnings scan + strategy eval → 3:05 PM EP news scan + strategy eval → 3:45 PM EP earnings/news day-2 confirm → 3:50–3:59 PM EP earnings/news execute (retries every minute, idempotent) → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
+**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 9:25 AM finalize watchlist → 9:30 AM–4:00 PM intraday monitor (long-running window driven by the Alpaca 1-min bar stream registered at 9:25) → 3:00 PM EP earnings scan + strategy eval → 3:05 PM EP news scan + strategy eval → 3:50–3:59 PM EP earnings/news execute (retries every minute, idempotent) → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
 
 Pipeline job metadata (descriptions, categories, `time`/`end_time` window, phase) lives exclusively in `api/constants.py::PIPELINE_SCHEDULE`. Edit entries there to change what the dashboard Pipeline page displays. `end_time` is set on jobs that run as a window (intraday monitor, execute retry loops); omit it for point-in-time jobs.
 
@@ -76,13 +76,12 @@ A second bot process (`main_ib.py` → `trading-bot-ib.service` on the Linode) r
 Alpaca bot                         IB bot
 ─────────────                      ──────
 3:00 PM scan        ────────►   reads ready/triggered rows
-3:35 PM day2_confirm ────►      from trading_bot.db at 3:37+
 3:37 PM execute (Alpaca)        executes on IBKR (parallel, idempotent)
 ```
 
 - **Watchlist source**: configured via `config["watchlist_source_db_url"]` (or env `WATCHLIST_SOURCE_DB_URL`). Server config: `sqlite:////opt/trading-bot/trading-bot/trading_bot.db`. Without this key the IB bot falls back to local-DB reads and won't trade (since it doesn't scan).
 - **Idempotency**: each bot's `job_execute` checks ITS OWN local DB (`Order` + `Position` tables) for an existing entry on `(ticker, setup_type)`. Both bots can safely run concurrently — the Alpaca bot tracks Alpaca executions in `trading_bot.db`, IB bot tracks IB executions in `trading_bot_ib.db`.
-- **Skipped jobs**: `main_ib.py` passes `skip_jobs=("ep_earnings_scan", "ep_earnings_day2_confirm", "ep_news_scan", "ep_news_day2_confirm")` to `register_strategy_jobs()`. The IB scheduler runs only `ep_earnings_execute`, `ep_news_execute`, `eod_tasks`, `reconcile_positions`, `ib_watchdog`, `heartbeat`.
+- **Skipped jobs**: `main_ib.py` passes `skip_jobs=("ep_earnings_scan", "ep_news_scan")` to `register_strategy_jobs()`. The IB scheduler runs only `ep_earnings_execute`, `ep_news_execute`, `eod_tasks`, `reconcile_positions`, `ib_watchdog`, `heartbeat`.
 - **Cross-DB reads**: `executor/watchlist_source.py` opens a second SQLAlchemy engine pointing at `trading_bot.db`. Read-only — IB never writes to the Alpaca DB. Trade-paths must remain per-bot (Position/Order/Signal are local).
 - **SQLite WAL**: `trading_bot.db` runs in WAL mode so the IB reader doesn't block Alpaca writes. Set once via `PRAGMA journal_mode=WAL`.
 - **Plan + risks**: see `~/.claude/projects/.../memory/project_ib_passive_executor.md` for the detailed plan, deferred fallback enhancements, and operational runbook.
@@ -96,7 +95,7 @@ On every push to `main`, `.github/workflows/deploy.yml` SSHs into the Linode ser
 | Module | Key functions / classes |
 |--------|----------------------|
 | `core/loader.py` | `load_strategies()`, `get_plugin()`, `get_registry()` — plugin discovery and registry |
-| `core/scheduler.py` | `register_strategy_jobs()` — registers each plugin's scheduled jobs; supports `skip_jobs=` to opt out of named job_ids (used by `main_ib.py` to skip scan + day-2-confirm jobs) |
+| `core/scheduler.py` | `register_strategy_jobs()` — registers each plugin's scheduled jobs; supports `skip_jobs=` to opt out of named job_ids (used by `main_ib.py` to skip scan jobs) |
 | `executor/watchlist_source.py` | `read_ready_entries()` — IB passive executor reads ready/triggered Watchlist rows from the Alpaca DB across processes (no scanning in IB bot) |
 | `core/alerts.py` | `notify_job_failure()` — shared Telegram "JOB FAILED" sender with escalation on notify failure; invoked by both job wrappers |
 | `core/data_cache.py` | Shared data cache for cross-strategy data reuse |
@@ -105,11 +104,11 @@ On every push to `main`, `.github/workflows/deploy.yml` SSHs into the Linode ser
 | `risk/manager.py` | `calculate_position_size()`, `check_exposure()`, `check_daily_loss()`, `check_weekly_loss()` |
 | `executor/alpaca_client.py` | `place_limit_order()`, `place_stop_order()`, `close_position()`, `get_candles_1m()`, `run_screener()`, `get_snapshots()` |
 | `strategies/ep_earnings/scanner.py` | `scan_ep_earnings()` — universe filters: gap >8%, prev close >$3, mcap >$800M, open > prev high, open > 200d SMA, RVOL >1 |
-| `strategies/ep_earnings/strategy.py` | `evaluate_ep_earnings_strategies()`, `evaluate_strategy_a()`, `evaluate_strategy_b()`, `compute_features()` — A/B mutually exclusive (A wins on both) |
-| `strategies/ep_earnings/plugin.py` | `job_scan`, `job_day2_confirm`, `job_execute` — DB-driven A/B/C scheduled lifecycle |
+| `strategies/ep_earnings/strategy.py` | `evaluate_ep_earnings_strategies()`, `evaluate_strategy_b()`, `compute_features()` — Strategy B only |
+| `strategies/ep_earnings/plugin.py` | `job_scan`, `job_execute` — DB-driven Strategy B lifecycle |
 | `strategies/ep_news/scanner.py` | EP news gap scanner |
-| `strategies/ep_news/strategy.py` | News gap swing strategy evaluation — A/B mutually exclusive (A wins on both) |
-| `strategies/ep_news/plugin.py` | `job_scan`, `job_day2_confirm`, `job_execute` — DB-driven A/B/C scheduled lifecycle |
+| `strategies/ep_news/strategy.py` | News gap swing strategy evaluation — A and B mutually exclusive (A wins on overlap) |
+| `strategies/ep_news/plugin.py` | `job_scan`, `job_execute` — DB-driven A/B scheduled lifecycle |
 | `monitor/position_tracker.py` | Stop checks, partial exits, trailing MA close (daily close not intraday), parabolic profit targets, max hold period exit (50d for EP earnings) |
 | `db/models.py` | `Signal`, `Order`, `Position`, `Watchlist`, `DailyPnl`, `JobExecution` — exit reasons: `stop_hit`, `trailing_stop`, `trailing_ma_close`, `parabolic_target`, `max_hold_period`, `manual`, `daily_loss_limit` |
 | `backtest/runner.py` | `BacktestConfig`, `BacktestRunner.run()` — daily bar-by-bar simulation |
@@ -117,12 +116,12 @@ On every push to `main`, `.github/workflows/deploy.yml` SSHs into the Linode ser
 
 ## Conventions
 
-- **No silent error swallowing — every failure must surface**: Errors must fail the pipeline and trigger a Telegram alert. **Do not** write `try/except Exception: logger.warning(...); fallback = {}` (or `= 0.0 / False / None / []`). That pattern marks the job `success` in `JobExecution` and hides the fault from the operator. Every scheduled job is wrapped by `_track_job` (main.py) or `_tracked_strategy_job` (core/scheduler.py), both of which call `core/alerts.py::notify_job_failure` on any uncaught exception — so the correct pattern is **let it propagate**. If you need a Telegram alert from inside a handler without failing the whole job (partial-failure case, e.g. one bad ticker in a loop), call `notify()` directly AND raise a `RuntimeError` with the combined message at the end if the failure is batch-wide; the EP day-2-confirm flows (`strategies/ep_earnings/plugin.py`, `strategies/ep_news/plugin.py`) are the reference pattern. Retries belong at a proper retry layer (e.g. APScheduler cron `minute="50-59"` + idempotency guards), never a silent `except Exception: return default`. Specifically forbidden: `except Exception: return False/0.0/None/{}/[]`, `bars = {}` fallbacks, hardcoded portfolio values, swallowed yfinance/Alpaca API errors. Rule of thumb: if removing the `except` would surface a real bug sooner, remove it
+- **No silent error swallowing — every failure must surface**: Errors must fail the pipeline and trigger a Telegram alert. **Do not** write `try/except Exception: logger.warning(...); fallback = {}` (or `= 0.0 / False / None / []`). That pattern marks the job `success` in `JobExecution` and hides the fault from the operator. Every scheduled job is wrapped by `_track_job` (main.py) or `_tracked_strategy_job` (core/scheduler.py), both of which call `core/alerts.py::notify_job_failure` on any uncaught exception — so the correct pattern is **let it propagate**. If you need a Telegram alert from inside a handler without failing the whole job (partial-failure case, e.g. one bad ticker in a loop), call `notify()` directly AND raise a `RuntimeError` with the combined message at the end if the failure is batch-wide. Retries belong at a proper retry layer (e.g. APScheduler cron `minute="50-59"` + idempotency guards), never a silent `except Exception: return default`. Specifically forbidden: `except Exception: return False/0.0/None/{}/[]`, `bars = {}` fallbacks, hardcoded portfolio values, swallowed yfinance/Alpaca API errors. Rule of thumb: if removing the `except` would surface a real bug sooner, remove it
 - **Trade-path rule (stricter)**: every code path from `job_execute` → `_execute_entry` → `place_limit_order` / `mark_triggered` / `get_portfolio_value` / `calculate_position_size` / `resolve_execution_price` must either (1) let exceptions propagate to `_track_job` or (2) call `notify()` with a descriptive message before logging. Never silently log + return. A wrong-size trade is worse than no trade; a missed DB state update that re-triggers on restart is worse than a loud alert. Trade-path sites already audited: `main.py::_execute_entry`, `strategies/ep_earnings/plugin.py::job_execute`, `strategies/ep_news/plugin.py::job_execute`, `core/execution.py::resolve_execution_price`, `executor/alpaca_client.py::AlpacaClient.__init__` (stub-mode guard). Add to this list when touching trade code
 - **Telegram is best-effort, not guaranteed**: if `notify()` itself fails, `_track_job` and `core/scheduler.py` elevate to `logger.error` and tag `JobExecution.result_summary += " [notify_failed]"` so the gap is visible via the dashboard / doctor endpoint. Don't build parallel alert channels; use this escalation path
 - **Docs first**: Write/update docs before implementing code changes. After any code change, update the relevant README.md (strategy, module, or `docs/`) to keep docs in sync with code
 - **Always commit and push after changes**: After completing any code change (and updating docs), offer to commit and push to `main`. Pushing to `main` triggers the GitHub Actions auto-deploy pipeline (`.github/workflows/deploy.yml`), which deploys to the Linode server. Do not leave changes uncommitted — either commit+push, or explicitly confirm with the user why they should stay local. During market hours, warn before deploying (see `bot.sh deploy`)
-- **Dashboard param descriptions**: Descriptions + phase/variation tags for `config.yaml` `signals:` keys live in `trading-bot/api/param_meta.py`. Update there when adding a new strategy config key, or the Strategies page shows an empty description. A/B/C variation badges on signals/positions/trades are resolved at read time from `Watchlist.meta["ep_strategy"]` via `trading-bot/api/variation.py`. The Watchlist page reads the variation directly off the row (no join needed) — `meta["ep_strategy"]` for A/B/confirmed-C, or inferred as "C" when `stage="watching"` on an EP setup_type (pre day-2-confirm C candidates, which don't have `ep_strategy` set yet)
+- **Dashboard param descriptions**: Descriptions + phase/variation tags for `config.yaml` `signals:` keys live in `trading-bot/api/param_meta.py`. Update there when adding a new strategy config key, or the Strategies page shows an empty description. A/B variation badges on signals/positions/trades are resolved at read time from `Watchlist.meta["ep_strategy"]` via `trading-bot/api/variation.py`. The Watchlist page reads the variation directly off the row (no join needed) — `meta["ep_strategy"]` carries A or B. Legacy C tags on existing positions still resolve via the `_c` setup_type suffix during the post-2026-05-08 transition window.
 - **Plain pandas**: SMA/ATR use `pandas.rolling()` — no pandas-ta (incompatible with Python 3.14)
 - **Python 3.14**: numba-dependent libraries (pandas-ta, vectorbt) won't work
 - **Alpaca BarSet**: use `bars.data` dict, NOT `bars.get()` (BarSet lacks `.get`)
@@ -221,30 +220,42 @@ cd dashboard && npm run dev
 
 ## EP Swing Strategy (Integrated)
 
-EP earnings and EP news swing strategies are now integrated into the bot as strategy plugins (`strategies/ep_earnings/` and `strategies/ep_news/`).
+EP earnings and EP news swing strategies are integrated into the bot as strategy plugins (`strategies/ep_earnings/` and `strategies/ep_news/`).
 
-**Execution is DB-driven and crash-safe.** `job_scan` (15:00) persists A/B as `Watchlist(stage="ready")` and C as `Watchlist(stage="watching")`. `job_day2_confirm` (15:45) flips confirmed C → `stage="ready"` with execution payload in `meta`. `job_execute` (15:50) reads ready rows from the DB — nothing held in memory, so a process restart between scan/confirm and execute is safe. `verify_day.py` Check 19 surfaces any drops.
+**Execution is DB-driven and crash-safe.** `job_scan` (15:00 / 15:05) persists passing entries as `Watchlist(stage="ready")` with the full execution payload in `meta`. `job_execute` (15:37–15:59) reads ready rows from the DB — nothing held in memory, so process restarts between scan and execute are safe. `verify_day.py` Check 19 surfaces any drops.
 
-### EP Earnings Strategy A (Tight Filters): 69% WR, +9.18% avg, PF 5.68
-1. CHG-OPEN% > 0 (positive intraday)
-2. close_in_range >= 50 (closed in top half of range)
-3. downside_from_open < 3% (didn't dip much)
-4. Prev 10D change% between -30% and -10% (sold off before earnings)
-5. Stop: -7% | Hold: 50D
-
-### EP Earnings Strategy B (Relaxed): 61% WR, +11.75% avg, PF 5.62
+### EP Earnings — Strategy B only: 44.7% WR, +4.95% avg, PF 2.57 (2020–2026 corrected)
 1. CHG-OPEN% > 0
 2. close_in_range >= 50
-3. ATR% between 2-5%
-4. Prev 10D change% < -10%
-5. Stop: -7% | Hold: 50D
+3. ATR% (10D) between 2–5%
+4. Stop: -7% | Hold: 50D
 
-### Kill Zones (Avoid)
-- Prev 10D > 0% (ran up into earnings): 31% WR, -7.4% mean
-- CHG-OPEN% < 0 AND close_in_range < 50: 40% WR
+### EP News — Strategy A: 57.6% WR, +11.93% avg, PF 5.34 (2020–2026 corrected)
+1. CHG-OPEN% in (2, 10]
+2. close_in_range >= 50
+3. downside_from_open < 3%
+4. ATR% in [3, 7]
+5. Volume < 3M
+6. Stop: -7% | Hold: 50D
+
+### EP News — Strategy B (relaxed): 49.1% WR, +9.92% avg, PF 4.24 (2020–2026 corrected)
+1. CHG-OPEN% in (2, 10]
+2. close_in_range in [30, 80]
+3. downside_from_open < 6%
+4. ATR% in [3, 7]
+5. Volume < 5M
+6. Stop: -7% | Hold: 50D
+
+A wins over B on overlap (tighter filters). A and B are kept because they catch different regimes — A wins in trending years, B-only wins in choppy/bear years.
+
+### Dropped variants (2026-05-08)
+- **EP Earnings A** dropped after corrected backtest showed A-only trades had PF 1.36 (worse than B alone).
+- **Strategy C** (both setups) dropped after corrected backtest showed PF 1.85 / 2.25 — barely better than buying every gap, while contributing 343 trades/year of capital pressure.
+- **EP News B stop** tightened from -10% to -7% (lifted PF from 3.48 to 4.24).
+- See strategy READMEs for the full audit.
 
 ### Entry Timing
-All filters require the gap day to complete. Entry = Close on gap day (~3:50 PM ET). Forward returns measured from gap day Close.
+Entry = Close on gap day (~3:50 PM ET). Forward returns measured from gap day Close.
 
 ## Documentation Index
 

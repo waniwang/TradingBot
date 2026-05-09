@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 Variation = Literal["base", "A", "B", "C"]
-Phase = Literal["scan", "execute", "day2_confirm"]
+Phase = Literal["scan", "execute"]
 
 
 @dataclass(frozen=True)
@@ -48,39 +48,17 @@ _EP_EARNINGS: list[ParamMeta] = [
     ParamMeta("min_rvol", "base", "scan",
               "Minimum relative volume: today's volume / 14-day average."),
     ParamMeta("stop_loss_pct", "base", "execute",
-              "Default stop-loss % below entry for Strategy A and B."),
+              "Default stop-loss % below entry."),
     ParamMeta("max_hold_days", "base", "execute",
-              "Maximum hold period in calendar days for A/B before forced exit."),
+              "Maximum hold period in calendar days before forced exit."),
 
-    # Strategy A — tight filters
-    ParamMeta("a_min_close_in_range", "A", "scan",
-              "Minimum 'close-in-range' score (0-100). Higher = closed near the day's high."),
-    ParamMeta("a_max_downside_from_open", "A", "scan",
-              "Maximum % the stock dipped below its open on the gap day (tight = ≤3%)."),
-    ParamMeta("a_prev_10d_min", "A", "scan",
-              "Lower bound on prior 10-day change %. Too deep a selloff is excluded."),
-    ParamMeta("a_prev_10d_max", "A", "scan",
-              "Upper bound on prior 10-day change %. Must have dropped at least this much."),
-
-    # Strategy B — relaxed filters
+    # Strategy B — the only remaining variant (A and C dropped 2026-05-08)
     ParamMeta("b_min_close_in_range", "B", "scan",
               "Minimum close-in-range score for Strategy B."),
     ParamMeta("b_atr_pct_min", "B", "scan",
               "Minimum ATR% (14-day ATR as % of price)."),
     ParamMeta("b_atr_pct_max", "B", "scan",
               "Maximum ATR% — rejects very volatile stocks."),
-    ParamMeta("b_prev_10d_max", "B", "scan",
-              "Prior 10-day change % must be below this (must have sold off before earnings)."),
-
-    # Strategy C — bear market / day-2 confirm
-    ParamMeta("c_stop_loss_pct", "C", "execute",
-              "Stop-loss % below entry for Strategy C."),
-    ParamMeta("c_prev_10d_max", "C", "scan",
-              "Prior 10-day change % ceiling for Strategy C candidates."),
-    ParamMeta("c_max_hold_days", "C", "execute",
-              "Max hold period in days for Strategy C (shorter than A/B)."),
-    ParamMeta("c_day2_confirm", "C", "day2_confirm",
-              "Require day-2 price > gap day close before promoting to ready for execution."),
 ]
 
 
@@ -125,9 +103,9 @@ _EP_NEWS: list[ParamMeta] = [
     ParamMeta("a_max_volume_m", "A", "scan",
               "Maximum today's volume in millions of shares."),
 
-    # Strategy B — NEWS-Relaxed (-10% stop)
+    # Strategy B — NEWS-Relaxed (-7% stop, switched from -10% on 2026-05-08)
     ParamMeta("b_stop_loss_pct", "B", "execute",
-              "Stop-loss % below entry for Strategy B (wider than A)."),
+              "Stop-loss % below entry for Strategy B."),
     ParamMeta("b_chg_open_min", "B", "scan",
               "Minimum intraday change-from-open %."),
     ParamMeta("b_chg_open_max", "B", "scan",
@@ -138,28 +116,12 @@ _EP_NEWS: list[ParamMeta] = [
               "Maximum close-in-range score (Strategy B caps the upper end too)."),
     ParamMeta("b_max_downside_from_open", "B", "scan",
               "Maximum % dipped below open (relaxed compared to A)."),
-    ParamMeta("b_prev_10d_max", "B", "scan",
-              "Prior 10-day change % ceiling (relaxed)."),
     ParamMeta("b_atr_pct_min", "B", "scan",
               "Minimum ATR%."),
     ParamMeta("b_atr_pct_max", "B", "scan",
               "Maximum ATR%."),
     ParamMeta("b_max_volume_m", "B", "scan",
               "Maximum today's volume in millions of shares."),
-
-    # Strategy C — bear market / day-2 confirm
-    ParamMeta("c_stop_loss_pct", "C", "execute",
-              "Stop-loss % below entry for Strategy C."),
-    ParamMeta("c_prev_10d_max", "C", "scan",
-              "Prior 10-day change % ceiling for Strategy C candidates."),
-    ParamMeta("c_atr_pct_min", "C", "scan",
-              "Minimum ATR% for Strategy C."),
-    ParamMeta("c_atr_pct_max", "C", "scan",
-              "Maximum ATR% for Strategy C."),
-    ParamMeta("c_max_hold_days", "C", "execute",
-              "Max hold period in days for Strategy C."),
-    ParamMeta("c_day2_confirm", "C", "day2_confirm",
-              "Require day-2 price > gap day close before promoting to ready."),
 ]
 
 
@@ -235,11 +197,6 @@ PHASE_LABELS: dict[str, dict[str, str]] = {
         "short": "execute",
         "long": "Execute",
         "description": "Used at entry time when placing orders.",
-    },
-    "day2_confirm": {
-        "short": "day-2",
-        "long": "Day-2 Confirm",
-        "description": "Used during the day-2 confirmation check for Strategy C.",
     },
 }
 

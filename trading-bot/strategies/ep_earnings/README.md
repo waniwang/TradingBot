@@ -4,21 +4,19 @@ EOD long swing on earnings gap-ups. Scans at 3 PM, enters near close at 3:50 PM.
 
 ## Flow
 
-1. **3:00 PM** — `scanner.py` finds earnings gappers, `strategy.py` evaluates A/B/C filters. A/B entries are persisted as `Watchlist(stage="ready")` with the full execution payload in `metadata_json`. Strategy C candidates are persisted as `Watchlist(stage="watching")` with `meta.day2_confirm=true`.
-2. **3:45 PM** — `job_day2_confirm` snapshots prices for yesterday's `watching` C rows. Confirmed (price > gap-day close) → flips to `stage="ready"` and writes `entry_price`/`stop_price`/`day1_return_pct` into `meta`. Rejected → `stage="expired"`.
-3. **3:50–3:59 PM** — `job_execute` queries `Watchlist.stage="ready"` for `setup_type="ep_earnings"` and places orders. Fires every minute (10 attempts) so a briefly-down bot or a transient Alpaca error still gets a trade in before close. **DB-driven + idempotent** — nothing held in memory between scan/confirm and execute, and replays are blocked by the open-Position guard and the <10-minute non-terminal Order guard, so process restarts and multi-fire retries are both safe. **Price refresh**: each attempt calls `core.execution.resolve_execution_price` to fetch a live mid and pick entry/stop — if the live mid is ≤ scan price, scan wins; otherwise mid is used up to `ep_execute_max_price_bump_pct` above scan, with a `ep_execute_max_spread_pct` ceiling on bid-ask spread (wider quote → skip, retry next minute). Stop is always recomputed from the actual entry so the -7% rule holds.
-4. **Ongoing** — -7% stop, max hold (50d for A/B, 20d for C), shared exit logic.
+1. **3:00 PM** — `scanner.py` finds earnings gappers, `strategy.py` evaluates Strategy B filters. Passing entries are persisted as `Watchlist(stage="ready")` with the full execution payload in `metadata_json`.
+2. **3:50–3:59 PM** — `job_execute` queries `Watchlist.stage="ready"` for `setup_type="ep_earnings"` and places orders. Fires every minute (10 attempts) so a briefly-down bot or a transient Alpaca error still gets a trade in before close. **DB-driven + idempotent** — nothing held in memory between scan and execute, and replays are blocked by the open-Position guard and the <10-minute non-terminal Order guard, so process restarts and multi-fire retries are both safe. **Price refresh**: each attempt calls `core.execution.resolve_execution_price` to fetch a live mid and pick entry/stop — if the live mid is ≤ scan price, scan wins; otherwise mid is used up to `ep_execute_max_price_bump_pct` above scan, with a `ep_execute_max_spread_pct` ceiling on bid-ask spread (wider quote → skip, retry next minute). Stop is always recomputed from the actual entry so the -7% rule holds.
+3. **Ongoing** — -7% stop, 50-day max hold, shared exit logic.
 
 ### Watchlist stage semantics
 
 | Stage | Meaning |
 |-------|---------|
-| `watching` | Strategy C candidate awaiting day-2 confirmation |
-| `ready` | Staged for the next 15:50 execution (A/B from today, or C confirmed from yesterday) |
+| `ready` | Staged for the next 15:50 execution |
 | `triggered` | Order placed (set by `mark_triggered` after `_execute_entry` succeeds) |
-| `expired` | Day-2 rejected, or EOD without trigger |
+| `expired` | EOD without trigger |
 
-The same Watchlist row carries `setup_type="ep_earnings"` whether the eventual signal is A, B, or C — the strategy variant lives in `meta.ep_strategy`. When `_execute_entry` flips the row to `triggered`, plugins pass `watchlist_setup_type="ep_earnings"` so the C-flavored signal `setup_type="ep_earnings_c"` doesn't break the alignment.
+The Watchlist row carries `setup_type="ep_earnings"`; the strategy variant lives in `meta.ep_strategy` (currently always "B" — A and C were dropped 2026-05-08).
 
 ## Scanner Filters (`scanner.py`)
 
@@ -35,42 +33,26 @@ Three-phase filter:
 | C (per-ticker) | Market cap | >= $800M |
 | C | Earnings | Must have earnings on gap day |
 
-## Strategy A (Tight) — 48% WR, PF 2.68 (2020–2026, no-P10D)
-
-| Filter | Value |
-|--------|-------|
-| CHG-OPEN% | > 0 (positive intraday) |
-| Close in range | >= 50% (top half) |
-| Downside from open | < 3% |
-| Stop | -7% |
-
-## Strategy B (Relaxed) — 49% WR, PF 3.20 (2020–2026, no-P10D)
+## Strategy B — 44.7% WR, PF 2.57, +4.95% avg (2020–2026 corrected)
 
 | Filter | Value |
 |--------|-------|
 | CHG-OPEN% | > 0 |
 | Close in range | >= 50% |
-| ATR% | between 2% and 5% |
+| ATR% (10D) | between 2% and 5% |
 | Stop | -7% |
-
-If both A and B pass, Strategy A is used — A is the tighter filter set and we
-never stake the same idea twice across position slots.
-
-## Strategy C (Day-2 Confirm) — 49% WR, PF 2.06 (2020–2026, no-P10D)
-
-No gap-day filter. Every scanner candidate becomes a day-2 watch; entry only fires on day 2 if price > gap-day close. The edge is in the day-2 confirmation itself, not the pre-gap trajectory.
-
-| Filter | Value |
-|--------|-------|
-| Day-2 confirm | 1D return > 0 (stock holds up next day) |
-| Stop | -7% |
-| Hold | 20 days (shorter than A/B's 50D) |
-
-**Entry timing:** Scanned on gap day (3:00 PM), but NOT entered until day 2 (3:50 PM) after confirming positive 1D return. Entry price = day 2 close.
+| Max hold | 50 calendar days |
 
 ## History
 
-**2026-04-21: Prev 10D change filter removed from A, B, C.** The Spikeet data column used to tune the P10D thresholds proved unreliable — for every 2026-04-20 candidate, its sign was inverted vs. yfinance. A full 2020–2026 backtest (960 earnings rows) showed PF barely changes without the filter while trade count jumps +38% (A), +15% (B), +55% (C). The filter was gating on noise, not an edge.
+**2026-05-08: Strategies A and C dropped.** A re-validation against corrected 2020–2026 Spikeet data showed:
+
+- **A-only trades** (passes A but not B) had PF 1.36, +1.40% avg over 68 trades — barely positive, and 4 of 7 years were losing years. The original "A is the tighter filter so prefer A" assumption was based on broken forward-return data; on clean data, A's distinctive `downside_from_open < 3%` filter selects worse trades than B's ATR range. Switching to B alone moves PF from 2.15 (production "A wins" effective) to 2.57.
+- **Strategy C** (day-2 confirmation, 491 trades over 6.4yr) had PF 1.85 — *worse* than buying every gap (PF 1.95). The "stock holds up day 2" filter has near-zero predictive edge while contributing 76 trades/year of capital pressure. Dropped despite 0/7 losing years because the per-trade quality is too marginal vs the volume cost.
+
+Open positions tagged `ep_earnings`, `ep_earnings_a`, or `ep_earnings_c` continue to be managed by `monitor/position_tracker.py` until they exit naturally (stop, partial, trailing MA, or 50d max hold).
+
+**2026-04-21: Prev 10D change filter removed.** The Spikeet data column used to tune the P10D thresholds was sign-inverted vs yfinance. The 2026-05-08 corrected backtest confirmed the filter doesn't add edge on clean data either (PF 2.57 with no filter vs 2.74 with P10D<0, but trade count drops 57% — net total return drops materially).
 
 ## Error handling
 
@@ -82,44 +64,34 @@ If *every* candidate in a scan fails with a data error, `job_scan` raises `Runti
 
 Uses spreadsheet-based backtest with pre-computed gap-day features and forward return checkpoints.
 
-**Data source:** `backtest/data/2020-2025 EP Selection EARNINGS.xlsx` — 907 earnings gap candidates (2020-2025).
+**Data source:** Spikeet earnings data (2020–2026 corrected dataset).
 
 **How to run:**
 
 ```bash
 cd trading-bot
-.venv/bin/python run_ep_backtest.py --type earnings              # both A and B
-.venv/bin/python run_ep_backtest.py --type earnings --strategy A  # single strategy
-.venv/bin/python run_ep_backtest.py --type earnings --year 2025   # single year
+.venv/bin/python run_ep_backtest.py --type earnings
+.venv/bin/python run_ep_backtest.py --type earnings --year 2025
 .venv/bin/python run_ep_backtest.py --type earnings --trades      # show trade log
 ```
 
 **Methodology:**
 - Loads Excel file with gap-day features (OHLCV, ATR, CHG-OPEN%, Prev 10D, etc.)
 - Computes derived features (atr_pct, close_in_range, downside_from_open)
-- Applies Strategy A/B filters as vectorized pandas masks
+- Applies Strategy B filter as vectorized pandas masks
 - Simulates exits using forward return checkpoints (1D, 10D, 20D, 50D): if any checkpoint breaches -7% stop, exits at stop; otherwise exits at 50D return
 - Known limitation: checkpoint stops miss intra-period dips (slightly optimistic)
 
-**Results (2020-2025, 907 candidates):**
+**Results (2020–2026 corrected, 1,004 candidates):**
 
-| Metric | Strategy A | Strategy B |
-|--------|-----------|-----------|
-| Trades | 188 | 262 |
-| Win Rate | 48% | 50% |
-| Avg Return | +5.34% | +8.19% |
-| Profit Factor | 2.64 | 3.54 |
-| Best Year | 2025 (65% WR) | 2020 (62% WR) |
-| Worst Year | 2021 (29% WR) | 2021 (30% WR) |
-
-**Results (2025 only, 267 candidates):**
-
-| Metric | Strategy A | Strategy B |
-|--------|-----------|-----------|
-| Trades | 48 | 82 |
-| Win Rate | 65% | 59% |
-| Avg Return | +8.17% | +11.07% |
-| Profit Factor | 4.59 | 5.10 |
+| Metric | Strategy B |
+|--------|-----------|
+| Trades | 340 |
+| Win Rate | 44.7% |
+| Avg Return | +4.95% |
+| Profit Factor | 2.57 |
+| Best Year | 2020 (66% WR, +14.2% avg) |
+| Worst Year | 2021 (38% WR, +1.7% avg) |
 
 ## Key Config (`config.yaml`)
 
@@ -129,10 +101,13 @@ min_price: 3.0
 min_market_cap: 800_000_000
 stop_loss_pct: 7.0
 max_hold_days: 50
+b_min_close_in_range: 50.0
+b_atr_pct_min: 2.0
+b_atr_pct_max: 5.0
 ```
 
 ## Dashboard Parameter Display
 
-The Strategies detail page (`/strategies/ep_earnings`) renders each parameter with its description, variation (A/B/C), and the phase/job where it's applied (scan vs execute vs day-2 confirm). The descriptions and phase tags live in [`trading-bot/api/param_meta.py`](../../api/param_meta.py). Update that file whenever you add a new `ep_earnings_*` key to `config.yaml`.
+The Strategies detail page (`/strategies/ep_earnings`) renders each parameter with its description, variation (A/B/C), and the phase/job where it's applied (scan vs execute). The descriptions and phase tags live in [`trading-bot/api/param_meta.py`](../../api/param_meta.py). Update that file whenever you add a new `ep_earnings_*` key to `config.yaml`.
 
-The Variation column on the Trades tab and the A/B/C badges on the pipeline job-detail modal are derived at read time by joining `Signal.setup_type + ticker + fired_at` back to `Watchlist.meta["ep_strategy"]` — see [`api/variation.py`](../../api/variation.py).
+The Variation column on the Trades tab is derived at read time from `Watchlist.meta["ep_strategy"]` — see [`api/variation.py`](../../api/variation.py). Legacy A/C positions still display their variant tag during the post-2026-05-08 transition window.

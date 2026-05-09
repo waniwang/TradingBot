@@ -20,11 +20,6 @@ def _scan_job(config, client, db_engine, notify):
     return PLUGIN.job_scan(config, client, db_engine, notify)
 
 
-def _day2_confirm_job(config, client, db_engine, notify):
-    """3:45 PM ET — check yesterday's Strategy C candidates for day-2 confirmation."""
-    return PLUGIN.job_day2_confirm(config, client, db_engine, notify)
-
-
 def _execute_job(config, client, db_engine, notify):
     """3:50 PM ET — execute staged EP earnings entries."""
     return PLUGIN.job_execute(config, client, db_engine, notify)
@@ -35,7 +30,8 @@ class EPEarningsPlugin:
     EP Earnings Swing — long setup on earnings-driven gap-ups.
 
     Scans at 3:00 PM ET for stocks that gapped up on earnings.
-    Evaluates Strategy A (tight) and Strategy B (relaxed) filters.
+    Evaluates Strategy B (the only remaining variant after the 2026-05-08
+    re-validation; A and C were dropped — see strategy.py docstring).
     Executes at 3:50 PM ET near market close.
     Uses shared exit logic + max hold period (50 days).
     """
@@ -49,11 +45,6 @@ class EPEarningsPlugin:
             job_id="ep_earnings_scan",
             cron={"hour": 15, "minute": 0, "day_of_week": "mon-fri"},
             handler=_scan_job,
-        ),
-        ScheduleEntry(
-            job_id="ep_earnings_day2_confirm",
-            cron={"hour": 15, "minute": 35, "day_of_week": "mon-fri"},
-            handler=_day2_confirm_job,
         ),
         ScheduleEntry(
             job_id="ep_earnings_execute",
@@ -88,7 +79,7 @@ class EPEarningsPlugin:
         from core.execution import is_trading_day
         from strategies.ep_earnings.scanner import scan_ep_earnings
         from strategies.ep_earnings.strategy import evaluate_ep_earnings_strategies
-        from scanner.watchlist_manager import persist_candidates, get_active_watchlist
+        from scanner.watchlist_manager import persist_candidates
 
         if not is_trading_day(client):
             logger.info("EP earnings scan skipped — not a trading day")
@@ -115,7 +106,7 @@ class EPEarningsPlugin:
             daily_bars = client.get_daily_bars_batch(tickers, days=300)
             logger.info("Fetched daily bars for %d/%d tickers", len(daily_bars), len(tickers))
 
-            # Phase 3: Evaluate Strategy A + B + C
+            # Phase 3: Evaluate Strategy B
             entries, rejections = evaluate_ep_earnings_strategies(candidates, daily_bars, config)
             data_errors = [r for r in rejections if r["is_data_error"]]
             logger.info(
@@ -123,28 +114,16 @@ class EPEarningsPlugin:
                 len(entries), len(candidates), len(data_errors),
             )
 
-            # Build a ticker→reason map so we can show the actual feature values
-            # (or data-error message) per filtered-out ticker in the Telegram summary.
             reject_by_ticker = {r["ticker"]: r for r in rejections}
 
-            # Separate immediate entries (A/B) from day-2 pending (C)
-            immediate = [e for e in entries if not e.get("day2_confirm")]
-            pending_c = [e for e in entries if e.get("day2_confirm")]
-
-            if immediate or pending_c:
+            if entries:
                 persist_candidates(candidates, "ep_earnings", "active", today, db_engine)
 
-            # Persist A/B entries to DB as stage="ready" — job_execute reads them at 3:50 PM
-            for entry in immediate:
+            for entry in entries:
                 self._persist_entry(entry, today, db_engine)
 
-            # Persist C candidates as "watching" (pending day-2 confirmation)
-            for entry in pending_c:
-                self._persist_pending_day2(entry, today, db_engine)
-
             # If every candidate failed with a data error, the batch-wide yfinance
-            # fetch is broken — fail loud so _track_job fires JOB FAILED. Returning
-            # "0 passed" here would silently hide a systemic bug.
+            # fetch is broken — fail loud so _track_job fires JOB FAILED.
             if data_errors and len(data_errors) == len(candidates):
                 msg = (
                     f"EP EARNINGS: ALL {len(candidates)} candidates failed due to "
@@ -157,23 +136,13 @@ class EPEarningsPlugin:
                     notify("\n".join(lines))
                 raise RuntimeError(msg)
 
-            if immediate or pending_c:
-                a_count = sum(1 for e in entries if e["ep_strategy"] == "A")
-                b_count = sum(1 for e in entries if e["ep_strategy"] == "B")
-                c_count = len(pending_c)
-
+            if entries:
                 if notify:
-                    lines = [f"EP EARNINGS: {len(entries)} strategy entries from {len(candidates)} candidates"]
-                    lines.append(f"  Strategy A: {a_count} | Strategy B: {b_count} | Strategy C (pending day-2): {c_count}")
-                    for e in immediate:
+                    lines = [f"EP EARNINGS: {len(entries)} Strategy B entries from {len(candidates)} candidates"]
+                    for e in entries:
                         lines.append(
-                            f"  {e['ticker']} ({e['ep_strategy']}): gap {e['gap_pct']:.1f}%, "
+                            f"  {e['ticker']} (B): gap {e['gap_pct']:.1f}%, "
                             f"entry ${e['entry_price']:.2f}, stop ${e['stop_price']:.2f}"
-                        )
-                    for e in pending_c:
-                        lines.append(
-                            f"  {e['ticker']} (C-pending): gap {e['gap_pct']:.1f}%, "
-                            f"gap close ${e['gap_day_close']:.2f} — awaiting day-2 confirm"
                         )
                     if data_errors:
                         lines.append(f"  WARN: {len(data_errors)} tickers had data errors:")
@@ -182,10 +151,10 @@ class EPEarningsPlugin:
                     notify("\n".join(lines))
 
                 entry_tickers = ", ".join(e["ticker"] for e in entries)
-                return f"{len(entries)} entries ({a_count}A+{b_count}B+{c_count}C-pending): {entry_tickers}"
+                return f"{len(entries)} entries (B): {entry_tickers}"
             else:
                 if notify:
-                    lines = [f"EP EARNINGS: {len(candidates)} candidates, 0 passed strategy filters"]
+                    lines = [f"EP EARNINGS: {len(candidates)} candidates, 0 passed Strategy B"]
                     for c in candidates:
                         ticker = c["ticker"]
                         rej = reject_by_ticker.get(ticker)
@@ -208,13 +177,8 @@ class EPEarningsPlugin:
     def job_execute(self, config, client, db_engine, notify):
         """3:37 PM ET — execute entries persisted as stage='ready' in the watchlist.
 
-        DB-driven and crash-safe: A/B from today's scan and any C confirmed at 3:35 PM
-        are all flagged stage='ready' with the execution payload in metadata_json.
-
-        Multi-position: A and B variants for the same ticker each get their own
-        Position (setup_type ep_earnings_a / ep_earnings_b / ep_earnings_c).
-        Idempotency is keyed on (ticker, setup_type) so a retry only skips the
-        specific variant that already filled, not both.
+        DB-driven and crash-safe: Strategy B from today's scan is flagged
+        stage='ready' with the execution payload in metadata_json.
 
         Watchlist source: by default reads from ``db_engine`` (the local DB).
         If ``config["watchlist_source_db_url"]`` is set, reads from that
@@ -249,23 +213,20 @@ class EPEarningsPlugin:
             from core.trading_calendar import is_valid_scan_date
             with get_session(db_engine) as session:
                 # Pre-filter SQL by a loose 4-day window for performance, then
-                # apply the per-variant scan_date check in Python (A/B require
-                # scan_date == today; C requires scan_date == previous
-                # trading day). Without this, a stale "ready" row leftover
-                # from a prior session leaks into the next day's execute.
-                # See `core/trading_calendar.py` for variant-day rationale.
+                # apply the per-variant scan_date check in Python (B requires
+                # scan_date == today). Without this, a stale "ready" row
+                # leftover from a prior session leaks into the next day's
+                # execute. See `core/trading_calendar.py` for details.
                 #
                 # Stage filter must include BOTH "ready" and "triggered". The
                 # plugin flips a row to "triggered" via mark_triggered() the
                 # moment an OTO order is placed; if that order then cancels
                 # because the limit didn't print, the row stays at "triggered"
                 # and the rest of the 15:37–15:59 retry window must still
-                # re-evaluate it. Filtering on "ready" alone silently dropped
-                # FLEX/SSRM/HL on 2026-05-07 — the stage flip permanently
-                # excluded them after one cancelled attempt. The replay guard
-                # below (recent_order in non-terminal status) is the actual
-                # double-submit defense; "cancelled" is terminal so a new
-                # attempt is correctly allowed.
+                # re-evaluate it. The replay guard below (recent_order in
+                # non-terminal status) is the actual double-submit defense;
+                # "cancelled" is terminal so a new attempt is correctly
+                # allowed.
                 rows = session.query(Watchlist).filter(
                     Watchlist.setup_type == "ep_earnings",
                     Watchlist.stage.in_(["ready", "triggered"]),
@@ -297,14 +258,15 @@ class EPEarningsPlugin:
 
         for entry in entries:
             ep_strategy = entry["ep_strategy"]
-            # Each variant gets a distinct setup_type so A and B on the same ticker
-            # produce separate Position rows with independent stop/exit tracking.
+            # Each variant gets a distinct setup_type. Today only B is produced,
+            # but the per-variant suffix matches the legacy schema so existing
+            # Position/Watchlist rows keep their tags.
             setup_type = f"ep_earnings_{ep_strategy.lower()}"
             ticker = entry["ticker"]
 
             # Idempotency guards scoped to this specific variant:
             #   1. An open Position with this setup_type exists → already entered, skip.
-            #   2. A recent non-terminal Order via Signal(setup_type) → prior run already
+            #   2. A recent non-terminal Order on this ticker → prior run already
             #      submitted. Skip to avoid double-entry in the replay window.
             with get_session(db_engine) as session:
                 existing = session.query(Position).filter_by(
@@ -395,10 +357,8 @@ class EPEarningsPlugin:
             # cost_basis > buying_power as HTTP 403 / code 40310000 — those
             # surface as JOB FAILED on Telegram and the retry loop pounds
             # the broker once per minute until BP frees up (or the window
-            # closes). 2026-05-07: NBIX hit 4 such failures vs ~$2.5K BP
-            # after the cap-disable drove the account to Reg-T margin.
-            # Record a RiskSkip + skip cleanly instead — surfaces on the
-            # missed-trades CSV as block_reason="insufficient_bp".
+            # closes). Record a RiskSkip + skip cleanly instead — surfaces
+            # on the missed-trades CSV as block_reason="insufficient_bp".
             cost_basis = shares * use_entry
             try:
                 buying_power = client.get_buying_power()
@@ -469,162 +429,6 @@ class EPEarningsPlugin:
             notify(f"EP EARNINGS EXECUTE: {executed}/{len(entries)} entered")
 
         return f"{executed}/{len(entries)} entered: {', '.join(entry_labels)}"
-
-    def job_day2_confirm(self, config, client, db_engine, notify):
-        """3:45 PM ET — check yesterday's Strategy C candidates for day-2 confirmation."""
-        from core.execution import is_trading_day
-        from db.models import Watchlist, get_session
-
-        if not is_trading_day(client):
-            return "Skipped — not a trading day"
-
-        logger.info("=== EP EARNINGS DAY-2 CONFIRM CHECK ===")
-
-        today = datetime.now(ET).date()
-
-        # Find pending day-2 candidates from previous trading days (stage=watching, setup_type=ep_earnings)
-        confirmed = []
-        failures: list[tuple[str, str]] = []  # (ticker, reason) — must never be silent
-        with get_session(db_engine) as session:
-            pending = session.query(Watchlist).filter(
-                Watchlist.setup_type == "ep_earnings",
-                Watchlist.stage == "watching",
-                Watchlist.scan_date < today,
-            ).all()
-
-            if not pending:
-                logger.info("EP earnings day-2 confirm: no pending candidates")
-                return "No pending candidates"
-
-            logger.info("EP earnings day-2 confirm: %d pending candidates", len(pending))
-            attempted = 0
-
-            for wl in pending:
-                meta = wl.meta or {}
-                if not meta.get("day2_confirm"):
-                    continue
-
-                ticker = wl.ticker
-                gap_day_close = meta.get("gap_day_close", 0)
-                attempted += 1
-
-                # Fetch current price (proxy for day 2 close at 3:45 PM).
-                # fetch_current_price retries 3x with 2s backoff to ride out
-                # transient Alpaca snapshot hiccups (2026-04-23 incident).
-                from core.execution import fetch_current_price
-                try:
-                    current_price = fetch_current_price(client, ticker)
-                    if current_price is None:
-                        logger.error("EP earnings day-2: no price data for %s (after retries)", ticker)
-                        wl.stage = "expired"
-                        # [bot-failure] tag lets the dashboard bucket snapshot-error
-                        # rows as "Cancelled" instead of "Expired" (legitimate rejection).
-                        wl.notes = f"{wl.notes or ''} [bot-failure]".strip()
-                        failures.append((ticker, "no price data"))
-                        continue
-                except Exception as e:
-                    logger.error("EP earnings day-2: failed to get price for %s: %s", ticker, e)
-                    wl.stage = "expired"
-                    wl.notes = f"{wl.notes or ''} [bot-failure]".strip()
-                    failures.append((ticker, f"snapshot error: {e}"))
-                    continue
-
-                # Day-2 confirmation: current price > gap day close (positive 1D return)
-                if current_price > gap_day_close:
-                    stop_pct = meta.get("stop_loss_pct", 7.0)
-                    stop_price = round(current_price * (1 - stop_pct / 100), 2)
-                    day1_return_pct = round((current_price - gap_day_close) / gap_day_close * 100, 2)
-
-                    # Promote to "ready" — job_execute at 3:50 PM picks this up from DB.
-                    # Update meta with the execution payload so execute can rebuild the entry
-                    # without depending on any in-memory state.
-                    meta.update({
-                        "ep_strategy": "C",
-                        "entry_price": current_price,
-                        "stop_price": stop_price,
-                        "stop_loss_pct": stop_pct,
-                        "max_hold_days": meta.get("max_hold_days", 20),
-                        "current_price": current_price,
-                        "today_volume": 0,
-                        "day1_return_pct": day1_return_pct,
-                    })
-                    wl.meta = meta
-                    wl.stage = "ready"
-                    confirmed.append({"ticker": ticker, **meta})
-                    logger.info(
-                        "%s: Day-2 CONFIRMED — price $%.2f > gap close $%.2f (+%.1f%%) — promoted to ready",
-                        ticker, current_price, gap_day_close, day1_return_pct,
-                    )
-                else:
-                    wl.stage = "expired"
-                    logger.info(
-                        "%s: Day-2 REJECTED — price $%.2f <= gap close $%.2f (%.1f%%)",
-                        ticker, current_price, gap_day_close,
-                        (current_price - gap_day_close) / gap_day_close * 100,
-                    )
-
-            session.commit()
-
-        if confirmed and notify:
-            lines = [f"EP EARNINGS DAY-2 CONFIRM: {len(confirmed)} confirmed"]
-            for e in confirmed:
-                lines.append(
-                    f"  {e['ticker']}: entry ${e['entry_price']:.2f}, "
-                    f"stop ${e['stop_price']:.2f}, 1D return +{e['day1_return_pct']:.1f}%"
-                )
-            notify("\n".join(lines))
-
-        if failures:
-            msg_lines = [f"EP EARNINGS DAY-2 CONFIRM: {len(failures)}/{attempted} price-data failures"]
-            msg_lines.extend(f"  {t}: {reason}" for t, reason in failures)
-            msg = "\n".join(msg_lines)
-            if notify:
-                notify(msg)
-            # Per-ticker failures are already marked expired+[bot-failure] in DB and
-            # notified. A partial outage (some tickers OK, some not) is informational,
-            # not a job failure — return normally. But a *total* outage (every attempt
-            # failed) is systemic — almost always an Alpaca/auth/network problem the
-            # operator needs to know about RIGHT NOW, not bury in a per-job notify.
-            # Raise so _track_job fires JOB FAILED with traceback to Telegram.
-            if attempted > 0 and len(failures) == attempted:
-                raise RuntimeError(msg)
-
-        return f"{len(confirmed)} confirmed from {len(pending)} pending ({len(failures)} failed)"
-
-    def _persist_pending_day2(self, entry: dict, scan_date, db_engine):
-        """Persist a Strategy C candidate as pending day-2 confirmation."""
-        from db.models import Watchlist, get_session
-
-        meta = {
-            "ep_strategy": "C",
-            "day2_confirm": True,
-            "gap_day_close": entry["gap_day_close"],
-            "gap_pct": entry["gap_pct"],
-            "stop_loss_pct": entry["stop_loss_pct"],
-            "max_hold_days": entry["max_hold_days"],
-            "chg_open_pct": entry["chg_open_pct"],
-            "close_in_range": entry["close_in_range"],
-            "downside_from_open": entry["downside_from_open"],
-            "prev_10d_change_pct": entry["prev_10d_change_pct"],
-            "atr_pct": entry["atr_pct"],
-            "open_price": entry["open_price"],
-            "prev_close": entry["prev_close"],
-            "prev_high": entry.get("prev_high", 0),
-            "market_cap": entry.get("market_cap", 0),
-            "rvol": entry.get("rvol", 0),
-        }
-
-        with get_session(db_engine) as session:
-            wl = Watchlist(
-                ticker=entry["ticker"],
-                setup_type="ep_earnings",
-                stage="watching",
-                scan_date=scan_date,
-                metadata_json=_json.dumps(meta),
-                notes="EP Earnings Strategy C — pending day-2 confirm",
-            )
-            session.add(wl)
-            session.commit()
 
     def _persist_entry(self, entry: dict, scan_date, db_engine):
         """Persist an EP earnings strategy entry to the watchlist with metadata."""

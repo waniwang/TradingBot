@@ -1,14 +1,12 @@
 """
 EP Earnings spreadsheet backtest.
 
-Applies Strategy A/B filters to historical EP earnings gap candidates
-and simulates trade outcomes using forward return checkpoints.
-
-Data source: 2020-2025 EP Selection EARNINGS spreadsheet (907 candidates).
+Applies Strategy B filters to historical EP earnings gap candidates and
+simulates trade outcomes using forward return checkpoints. Strategy A and C
+were dropped 2026-05-08 — see strategies/ep_earnings/strategy.py.
 
 Usage:
     python run_ep_backtest.py --type earnings
-    python run_ep_backtest.py --type earnings --strategy A
     python run_ep_backtest.py --type earnings --year 2025
 """
 
@@ -39,15 +37,16 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def apply_filters(df: pd.DataFrame, variant: str, config: dict | None = None) -> pd.DataFrame:
+def apply_filters(df: pd.DataFrame, variant: str = "B", config: dict | None = None) -> pd.DataFrame:
     """
-    Apply EP earnings strategy filters (vectorized).
+    Apply EP earnings Strategy B filters (vectorized).
 
-    Matches the logic in strategy.py evaluate_strategy_a/b.
+    Matches the logic in strategy.py evaluate_strategy_b. The `variant`
+    argument is retained for API compatibility but only "B" is supported.
 
     Args:
         df: DataFrame from load_ep_spreadsheet().
-        variant: "A" or "B".
+        variant: must be "B" (only remaining variant).
         config: Strategy config dict. Loaded from config.yaml if None.
 
     Returns:
@@ -56,48 +55,29 @@ def apply_filters(df: pd.DataFrame, variant: str, config: dict | None = None) ->
     if config is None:
         config = _load_config()
 
-    if variant.upper() == "A":
-        # Strategy A (Tight): matches strategy.py lines 120-155
-        min_cir = float(config.get("a_min_close_in_range", 50.0))
-        max_downside = float(config.get("a_max_downside_from_open", 3.0))
-        prev_10d_min = float(config.get("a_prev_10d_min", -30.0))
-        prev_10d_max = float(config.get("a_prev_10d_max", -10.0))
+    if variant.upper() != "B":
+        raise ValueError(f"Only variant 'B' supported (Strategy A and C were dropped 2026-05-08); got {variant}")
 
-        mask = (
-            (df["chg_open_pct"] > 0) &
-            (df["close_in_range"] >= min_cir) &
-            (df["downside_from_open"] < max_downside) &
-            (df["prev_10d_change_pct"] >= prev_10d_min) &
-            (df["prev_10d_change_pct"] <= prev_10d_max)
-        )
+    min_cir = float(config.get("b_min_close_in_range", 50.0))
+    atr_min = float(config.get("b_atr_pct_min", 2.0))
+    atr_max = float(config.get("b_atr_pct_max", 5.0))
 
-    elif variant.upper() == "B":
-        # Strategy B (Relaxed): matches strategy.py lines 158-196
-        min_cir = float(config.get("b_min_close_in_range", 50.0))
-        atr_min = float(config.get("b_atr_pct_min", 2.0))
-        atr_max = float(config.get("b_atr_pct_max", 5.0))
-        prev_10d_max = float(config.get("b_prev_10d_max", -10.0))
-
-        mask = (
-            (df["chg_open_pct"] > 0) &
-            (df["close_in_range"] >= min_cir) &
-            (df["atr_pct"] >= atr_min) &
-            (df["atr_pct"] <= atr_max) &
-            (df["prev_10d_change_pct"] <= prev_10d_max)
-        )
-
-    else:
-        raise ValueError(f"Unknown variant: {variant}. Use 'A' or 'B'.")
+    mask = (
+        (df["chg_open_pct"] > 0) &
+        (df["close_in_range"] >= min_cir) &
+        (df["atr_pct"] >= atr_min) &
+        (df["atr_pct"] <= atr_max)
+    )
 
     filtered = df[mask].copy()
-    logger.info("EP Earnings Strategy %s: %d / %d candidates pass filters",
-                variant.upper(), len(filtered), len(df))
+    logger.info("EP Earnings Strategy B: %d / %d candidates pass filters",
+                len(filtered), len(df))
     return filtered
 
 
 def run_backtest(
     data_path: str | Path | None = None,
-    strategy: str = "all",
+    strategy: str = "B",
     year: int | None = None,
 ) -> dict:
     """
@@ -105,7 +85,7 @@ def run_backtest(
 
     Args:
         data_path: Path to Excel file. Uses default if None.
-        strategy: "A", "B", or "all".
+        strategy: must be "B" (only remaining variant).
         year: Filter to a single year. None = all years.
 
     Returns:
@@ -114,7 +94,6 @@ def run_backtest(
     path = Path(data_path) if data_path else DEFAULT_DATA
     config = _load_config()
     stop_pct = float(config.get("stop_loss_pct", 7.0))
-    hold_days = int(config.get("max_hold_days", 50))
     hold_period = "50D"
 
     df = load_ep_spreadsheet(path)
@@ -123,19 +102,17 @@ def run_backtest(
         df = df[df["date"].dt.year == year].copy()
         logger.info("Filtered to year %d: %d rows", year, len(df))
 
-    variants = ["A", "B"] if strategy.lower() == "all" else [strategy.upper()]
-    results = {}
+    v = "B"
+    filtered = apply_filters(df, v, config)
+    trades = simulate_trades(
+        filtered, stop_pct=stop_pct, hold_period=hold_period,
+        setup_type=f"ep_earnings_{v.lower()}",
+    )
+    stats = compute_ep_stats(trades, filtered)
+    yearly = year_by_year_breakdown(trades)
 
-    for v in variants:
-        filtered = apply_filters(df, v, config)
-        trades = simulate_trades(
-            filtered, stop_pct=stop_pct, hold_period=hold_period,
-            setup_type=f"ep_earnings_{v.lower()}",
-        )
-        stats = compute_ep_stats(trades, filtered)
-        yearly = year_by_year_breakdown(trades)
-
-        results[v] = {
+    return {
+        v: {
             "trades": trades,
             "stats": stats,
             "yearly": yearly,
@@ -147,5 +124,4 @@ def run_backtest(
                 "total_candidates": len(df),
             },
         }
-
-    return results
+    }

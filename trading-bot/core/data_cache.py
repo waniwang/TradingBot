@@ -26,8 +26,9 @@ cache_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Intraday price cache — updated on every on_bar tick from the stream.
-# Used by fetch_current_price so day2_confirm never needs a REST snapshot call.
-# Stores (price, date) so yesterday's prices don't bleed into today.
+# Used by fetch_current_price so callers can get a last-known price without
+# hitting the REST snapshot endpoint. Stores (price, date) so yesterday's
+# prices don't bleed into today.
 # ---------------------------------------------------------------------------
 
 _intraday_price_cache: dict[str, tuple[float, date]] = {}

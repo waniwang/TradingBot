@@ -63,8 +63,7 @@ PIPELINE_SCHEDULE = [
         "phase": "afternoon",
         "description": (
             "Scans earnings-driven gap-ups (>8% gap, prev close >$3, mcap >$800M, open above "
-            "prev high + 200-day SMA, RVOL >1). Saves approved A/B candidates for 3:50 PM entry "
-            "and parks Strategy C candidates for day-2 confirmation."
+            "prev high + 200-day SMA, RVOL >1). Saves approved Strategy B candidates for 3:50 PM entry."
         ),
         "display_day_offset": 0,
     },
@@ -76,33 +75,7 @@ PIPELINE_SCHEDULE = [
         "phase": "afternoon",
         "description": (
             "Same filter stack as the earnings scan but for non-earnings catalysts (news-driven "
-            "gaps). Saves approved A/B candidates for 3:50 PM entry and parks C for day-2 confirm."
-        ),
-        "display_day_offset": 0,
-    },
-    {
-        "job_id": "ep_earnings_day2_confirm",
-        "label": "EP Earnings Day-2 Confirm",
-        "time": "15:35",
-        "category": "scan",
-        "phase": "afternoon",
-        "description": (
-            "Checks yesterday's Strategy C earnings candidates against today's price. Promotes "
-            "to ready (for the 3:37 execute) if price > gap-day close; expires the row otherwise. "
-            "Price is read from the intraday stream cache — no REST snapshot call needed."
-        ),
-        "display_day_offset": 0,
-    },
-    {
-        "job_id": "ep_news_day2_confirm",
-        "label": "EP News Day-2 Confirm",
-        "time": "15:35",
-        "category": "scan",
-        "phase": "afternoon",
-        "description": (
-            "Checks yesterday's Strategy C news candidates against today's price. Promotes to "
-            "ready (for the 3:37 execute) if price > gap-day close; expires the row otherwise. "
-            "Price is read from the intraday stream cache — no REST snapshot call needed."
+            "gaps). Saves approved A/B candidates for 3:50 PM entry."
         ),
         "display_day_offset": 0,
     },
@@ -114,7 +87,7 @@ PIPELINE_SCHEDULE = [
         "category": "trade",
         "phase": "afternoon",
         "description": (
-            "Places limit orders for every approved EP earnings candidate (A/B/C). Fires once "
+            "Places limit orders for every approved EP earnings candidate (Strategy B). Fires once "
             "per minute from 3:37 to 3:59 — each run is idempotent (skips tickers already "
             "traded today), so retries cover transient broker/network errors."
         ),
@@ -128,7 +101,7 @@ PIPELINE_SCHEDULE = [
         "category": "trade",
         "phase": "afternoon",
         "description": (
-            "Places limit orders for every approved EP news candidate (A/B/C). Fires once per "
+            "Places limit orders for every approved EP news candidate (A/B). Fires once per "
             "minute from 3:37 to 3:59 — each run is idempotent, so retries cover transient "
             "broker/network errors."
         ),
@@ -141,9 +114,9 @@ PIPELINE_SCHEDULE = [
         "category": "system",
         "phase": "close",
         "description": (
-            "Applies max-hold-period exits (50 days for A/B, 20 for C) and the 10-day-MA "
-            "trailing-close exit for positions past partial. Records daily P&L, expires stale "
-            "watchlist rows, resets the daily-loss halt, and sends the Telegram summary."
+            "Applies max-hold-period exits (50 days) and the 10-day-MA trailing-close exit "
+            "for positions past partial. Records daily P&L, expires stale watchlist rows, "
+            "resets the daily-loss halt, and sends the Telegram summary."
         ),
         "display_day_offset": 0,
     },
@@ -181,8 +154,6 @@ JOB_OWNERS: dict[str, frozenset[str] | None] = {
     "ep_news_scan": frozenset({"ep_news"}),
     "ep_earnings_execute": frozenset({"ep_earnings"}),
     "ep_news_execute": frozenset({"ep_news"}),
-    "ep_earnings_day2_confirm": frozenset({"ep_earnings"}),
-    "ep_news_day2_confirm": frozenset({"ep_news"}),
     "eod_tasks": None,
     "reconcile_positions": None,
     "heartbeat": None,
@@ -213,8 +184,7 @@ STRATEGY_META = {
 }
 
 # Extra job_ids that were historically registered by plugins but not in PIPELINE_SCHEDULE.
-# day2_confirm jobs have since moved into PIPELINE_SCHEDULE, so this map is now empty —
-# kept to preserve the API surface for callers that still consult it.
+# Currently empty — kept to preserve the API surface for callers that still consult it.
 STRATEGY_EXTRA_JOBS: dict[str, list[str]] = {}
 
 

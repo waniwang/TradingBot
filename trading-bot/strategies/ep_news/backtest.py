@@ -57,13 +57,12 @@ def apply_filters(df: pd.DataFrame, variant: str, config: dict | None = None) ->
         config = _load_config()
 
     if variant.upper() == "A":
-        # Strategy A (NEWS-Tight): matches strategy.py lines 99-158
-        # Note: chg_open_min uses strict > (not >=), matching strategy.py line 110
+        # Strategy A (NEWS-Tight) — matches strategy.py evaluate_strategy_a.
+        # Prev 10D filter removed 2026-04-21.
         chg_min = float(config.get("a_chg_open_min", 2.0))
         chg_max = float(config.get("a_chg_open_max", 10.0))
         min_cir = float(config.get("a_min_close_in_range", 50.0))
         max_downside = float(config.get("a_max_downside_from_open", 3.0))
-        prev_10d_max = float(config.get("a_prev_10d_max", -20.0))
         atr_min = float(config.get("a_atr_pct_min", 3.0))
         atr_max = float(config.get("a_atr_pct_max", 7.0))
         max_vol_m = float(config.get("a_max_volume_m", 3.0))
@@ -73,20 +72,19 @@ def apply_filters(df: pd.DataFrame, variant: str, config: dict | None = None) ->
             (df["chg_open_pct"] <= chg_max) &
             (df["close_in_range"] >= min_cir) &
             (df["downside_from_open"] < max_downside) &
-            (df["prev_10d_change_pct"] <= prev_10d_max) &
             (df["atr_pct"] >= atr_min) &
             (df["atr_pct"] <= atr_max) &
             (df["volume"] / 1e6 < max_vol_m)
         )
 
     elif variant.upper() == "B":
-        # Strategy B (NEWS-Relaxed): matches strategy.py lines 161-224
+        # Strategy B (NEWS-Relaxed) — matches strategy.py evaluate_strategy_b.
+        # Prev 10D filter removed 2026-04-21.
         chg_min = float(config.get("b_chg_open_min", 2.0))
         chg_max = float(config.get("b_chg_open_max", 10.0))
         cir_min = float(config.get("b_min_close_in_range", 30.0))
         cir_max = float(config.get("b_max_close_in_range", 80.0))
         max_downside = float(config.get("b_max_downside_from_open", 6.0))
-        prev_10d_max = float(config.get("b_prev_10d_max", -10.0))
         atr_min = float(config.get("b_atr_pct_min", 3.0))
         atr_max = float(config.get("b_atr_pct_max", 7.0))
         max_vol_m = float(config.get("b_max_volume_m", 5.0))
@@ -97,7 +95,6 @@ def apply_filters(df: pd.DataFrame, variant: str, config: dict | None = None) ->
             (df["close_in_range"] >= cir_min) &
             (df["close_in_range"] <= cir_max) &
             (df["downside_from_open"] < max_downside) &
-            (df["prev_10d_change_pct"] <= prev_10d_max) &
             (df["atr_pct"] >= atr_min) &
             (df["atr_pct"] <= atr_max) &
             (df["volume"] / 1e6 < max_vol_m)
@@ -142,11 +139,11 @@ def run_backtest(
     results = {}
 
     for v in variants:
-        # Strategy A and B have different stop losses
+        # Both A and B use -7% stop as of 2026-05-08 (B was -10% before).
         if v == "A":
             stop_pct = float(config.get("a_stop_loss_pct", 7.0))
         else:
-            stop_pct = float(config.get("b_stop_loss_pct", 10.0))
+            stop_pct = float(config.get("b_stop_loss_pct", 7.0))
 
         filtered = apply_filters(df, v, config)
         trades = simulate_trades(

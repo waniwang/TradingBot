@@ -413,13 +413,10 @@ def main():
     _scheduler_ref = scheduler
 
     # Register cron jobs declared by the EP plugins themselves.
-    # The IB bot is a passive executor — it does NOT run scan or day-2-confirm
-    # jobs. Those run on the Alpaca bot, which writes ready Watchlist rows
-    # that the IB bot reads via config["watchlist_source_db_url"].
-    ib_skip_jobs = (
-        "ep_earnings_scan", "ep_earnings_day2_confirm",
-        "ep_news_scan", "ep_news_day2_confirm",
-    )
+    # The IB bot is a passive executor — it does NOT run scan jobs. Those run
+    # on the Alpaca bot, which writes ready Watchlist rows that the IB bot
+    # reads via config["watchlist_source_db_url"].
+    ib_skip_jobs = ("ep_earnings_scan", "ep_news_scan")
     if not config.get("watchlist_source_db_url"):
         logger.warning(
             "watchlist_source_db_url not set — IB bot will read from its own "

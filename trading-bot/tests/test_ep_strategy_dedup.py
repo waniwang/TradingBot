@@ -1,19 +1,20 @@
 """
 A single ticker must not fire both Strategy A and Strategy B entries on the same
-gap day. A is the tighter filter set in both EP variants, so when both pass we
-keep A and drop B. This prevents the same idea from consuming two position slots
-and doubling the risk budget.
+gap day. A is the tighter filter set, so when both pass we keep A and drop B.
+This prevents the same idea from consuming two position slots and doubling the
+risk budget.
 
-See strategies/ep_news/strategy.py::evaluate_ep_news_strategies and the EP earnings
-twin for the enforcement point.
+Only EP News still has A/B dedup — EP Earnings A was dropped 2026-05-08, leaving
+only B for that setup.
+
+See strategies/ep_news/strategy.py::evaluate_ep_news_strategies for the
+enforcement point.
 """
 
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
-from strategies.ep_earnings.strategy import evaluate_ep_earnings_strategies
 from strategies.ep_news.strategy import evaluate_ep_news_strategies
 
 
@@ -70,22 +71,6 @@ def _news_config() -> dict:
     }
 
 
-def _earnings_candidate(**overrides) -> dict:
-    base = _news_candidate()
-    base.pop("today_volume", None)  # earnings doesn't filter on volume
-    base.update(overrides)
-    return base
-
-
-def _earnings_config() -> dict:
-    return {
-        "signals": {
-            "ep_earnings_b_atr_pct_min": 0.0,
-            "ep_earnings_b_atr_pct_max": 100.0,
-        },
-    }
-
-
 class TestEPNewsDedup:
     def test_passes_both_a_and_b_yields_only_a(self):
         candidate = _news_candidate()
@@ -97,15 +82,13 @@ class TestEPNewsDedup:
         assert strategies == ["A"], (
             f"Expected only Strategy A when both A and B pass, got {strategies}"
         )
-        assert entries[0]["stop_loss_pct"] == 7.0  # A's tighter stop, not B's -10%
+        assert entries[0]["stop_loss_pct"] == 7.0  # A's stop
 
     def test_fails_a_but_passes_b_yields_only_b(self):
         # Drive downside_from_open to ~4% so A's <3% gate fails, while keeping
         # close_in_range in B's [30, 80] window. With today_low=9.6 and
         # current_price=10.32: downside ~4%, close_in_range ~60%, chg_open ~3.2%.
-        # B has no downside gate of its own (only A does in EP-News), so only B
-        # survives. The original prev_10d-based discriminator was removed
-        # 2026-04-21 — see strategies/ep_news/strategy.py::evaluate_strategy_a.
+        # B has no downside gate of its own (only A does), so only B survives.
         candidate = _news_candidate(today_low=9.6, current_price=10.32)
         daily_bars = _daily_bars_with_prev_10d("XYZ", prev_10d_change_pct=-12.0)
 
@@ -113,32 +96,5 @@ class TestEPNewsDedup:
 
         strategies = [e["ep_strategy"] for e in entries if e["ep_strategy"] in ("A", "B")]
         assert strategies == ["B"]
-        assert entries[0]["stop_loss_pct"] == 10.0  # B's stop
-
-
-class TestEPEarningsDedup:
-    def test_passes_both_a_and_b_yields_only_a(self):
-        # prev_10d = -15% is inside A's [-30, -10] and satisfies B's <= -10.
-        candidate = _earnings_candidate()
-        daily_bars = _daily_bars_with_prev_10d("XYZ", prev_10d_change_pct=-15.0)
-
-        entries, _ = evaluate_ep_earnings_strategies([candidate], daily_bars, _earnings_config())
-
-        strategies = [e["ep_strategy"] for e in entries if e["ep_strategy"] in ("A", "B")]
-        assert strategies == ["A"], (
-            f"Expected only Strategy A when both A and B pass, got {strategies}"
-        )
-
-    def test_fails_a_but_passes_b_yields_only_b(self):
-        # Drive downside_from_open to ~4%: fails A's <3% gate, while B doesn't
-        # check downside at all and only requires CHG-OPEN > 0 + close_in_range
-        # >= 50 + ATR% in [2, 5] (the test config widens ATR so it always
-        # passes). The original prev_10d-based discriminator was removed
-        # 2026-04-21 — see strategies/ep_earnings/strategy.py::evaluate_strategy_a.
-        candidate = _earnings_candidate(today_low=9.6)
-        daily_bars = _daily_bars_with_prev_10d("XYZ", prev_10d_change_pct=-40.0)
-
-        entries, _ = evaluate_ep_earnings_strategies([candidate], daily_bars, _earnings_config())
-
-        strategies = [e["ep_strategy"] for e in entries if e["ep_strategy"] in ("A", "B")]
-        assert strategies == ["B"]
+        # Both A and B use a -7% stop as of 2026-05-08 (was -10% for B before).
+        assert entries[0]["stop_loss_pct"] == 7.0

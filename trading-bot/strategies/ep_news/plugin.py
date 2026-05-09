@@ -20,11 +20,6 @@ def _scan_job(config, client, db_engine, notify):
     return PLUGIN.job_scan(config, client, db_engine, notify)
 
 
-def _day2_confirm_job(config, client, db_engine, notify):
-    """3:45 PM ET — check yesterday's Strategy C candidates for day-2 confirmation."""
-    return PLUGIN.job_day2_confirm(config, client, db_engine, notify)
-
-
 def _execute_job(config, client, db_engine, notify):
     """3:50 PM ET — execute staged EP news entries."""
     return PLUGIN.job_execute(config, client, db_engine, notify)
@@ -36,7 +31,8 @@ class EPNewsPlugin:
 
     Scans at 3:00 PM ET for stocks that gapped up on news catalysts.
     Excludes earnings-driven gaps (handled by ep_earnings).
-    Strategy A uses -7% stop, Strategy B uses -10% stop.
+    Both A and B use a -7% stop (B was -10% pre-2026-05-08; tightening
+    materially improved B's profit factor — see strategy.py).
     Executes at 3:50 PM ET near market close.
     Uses shared exit logic + max hold period (50 days).
     """
@@ -50,11 +46,6 @@ class EPNewsPlugin:
             job_id="ep_news_scan",
             cron={"hour": 15, "minute": 5, "day_of_week": "mon-fri"},
             handler=_scan_job,
-        ),
-        ScheduleEntry(
-            job_id="ep_news_day2_confirm",
-            cron={"hour": 15, "minute": 35, "day_of_week": "mon-fri"},
-            handler=_day2_confirm_job,
         ),
         ScheduleEntry(
             job_id="ep_news_execute",
@@ -116,7 +107,7 @@ class EPNewsPlugin:
             daily_bars = client.get_daily_bars_batch(tickers, days=300)
             logger.info("Fetched daily bars for %d/%d tickers", len(daily_bars), len(tickers))
 
-            # Phase 3: Evaluate Strategy A + B + C
+            # Phase 3: Evaluate Strategy A and B
             entries, rejections = evaluate_ep_news_strategies(candidates, daily_bars, config)
             data_errors = [r for r in rejections if r["is_data_error"]]
             logger.info(
@@ -124,29 +115,16 @@ class EPNewsPlugin:
                 len(entries), len(candidates), len(data_errors),
             )
 
-            # Build a ticker→reason map so we can show the actual feature values
-            # (or data-error message) per filtered-out ticker in the Telegram summary.
             reject_by_ticker = {r["ticker"]: r for r in rejections}
 
-            # Separate immediate entries (A/B) from day-2 pending (C)
-            immediate = [e for e in entries if not e.get("day2_confirm")]
-            pending_c = [e for e in entries if e.get("day2_confirm")]
-
-            if immediate or pending_c:
+            if entries:
                 persist_candidates(candidates, "ep_news", "active", today, db_engine)
 
-            # Persist A/B entries to DB as stage="ready" — job_execute reads them at 3:50 PM
-            for entry in immediate:
+            for entry in entries:
                 self._persist_entry(entry, today, db_engine)
 
-            # Persist C candidates as "watching" (pending day-2 confirmation)
-            for entry in pending_c:
-                self._persist_pending_day2(entry, today, db_engine)
-
             # If every candidate failed with a data error, the batch-wide yfinance
-            # fetch is broken — fail loud so _track_job fires JOB FAILED. Returning
-            # "0 passed" here would silently hide a systemic bug (the pattern that
-            # caused the 2026-04-20 missed entries).
+            # fetch is broken — fail loud so _track_job fires JOB FAILED.
             if data_errors and len(data_errors) == len(candidates):
                 msg = (
                     f"EP NEWS: ALL {len(candidates)} candidates failed due to "
@@ -159,23 +137,17 @@ class EPNewsPlugin:
                     notify("\n".join(lines))
                 raise RuntimeError(msg)
 
-            if immediate or pending_c:
+            if entries:
                 a_count = sum(1 for e in entries if e["ep_strategy"] == "A")
                 b_count = sum(1 for e in entries if e["ep_strategy"] == "B")
-                c_count = len(pending_c)
 
                 if notify:
                     lines = [f"EP NEWS: {len(entries)} strategy entries from {len(candidates)} candidates"]
-                    lines.append(f"  Strategy A: {a_count} | Strategy B: {b_count} | Strategy C (pending day-2): {c_count}")
-                    for e in immediate:
+                    lines.append(f"  Strategy A: {a_count} | Strategy B: {b_count}")
+                    for e in entries:
                         lines.append(
                             f"  {e['ticker']} ({e['ep_strategy']}): gap {e['gap_pct']:.1f}%, "
                             f"entry ${e['entry_price']:.2f}, stop ${e['stop_price']:.2f}"
-                        )
-                    for e in pending_c:
-                        lines.append(
-                            f"  {e['ticker']} (C-pending): gap {e['gap_pct']:.1f}%, "
-                            f"gap close ${e['gap_day_close']:.2f} — awaiting day-2 confirm"
                         )
                     if data_errors:
                         lines.append(f"  WARN: {len(data_errors)} tickers had data errors:")
@@ -184,7 +156,7 @@ class EPNewsPlugin:
                     notify("\n".join(lines))
 
                 entry_tickers = ", ".join(e["ticker"] for e in entries)
-                return f"{len(entries)} entries ({a_count}A+{b_count}B+{c_count}C-pending): {entry_tickers}"
+                return f"{len(entries)} entries ({a_count}A+{b_count}B): {entry_tickers}"
             else:
                 if notify:
                     lines = [f"EP NEWS: {len(candidates)} candidates, 0 passed strategy filters"]
@@ -210,13 +182,13 @@ class EPNewsPlugin:
     def job_execute(self, config, client, db_engine, notify):
         """3:37 PM ET — execute entries persisted as stage='ready' in the watchlist.
 
-        DB-driven and crash-safe: A/B from today's scan and any C confirmed at 3:35 PM
-        are all flagged stage='ready' with the execution payload in metadata_json.
+        DB-driven and crash-safe: A/B from today's scan are flagged stage='ready'
+        with the execution payload in metadata_json.
 
         Multi-position: A and B variants for the same ticker each get their own
-        Position (setup_type ep_news_a / ep_news_b / ep_news_c).
-        Idempotency is keyed on (ticker, setup_type) so a retry only skips the
-        specific variant that already filled, not both.
+        Position (setup_type ep_news_a / ep_news_b). Idempotency is keyed on
+        (ticker, setup_type) so a retry only skips the specific variant that
+        already filled, not both.
 
         Watchlist source: by default reads from ``db_engine`` (the local DB).
         If ``config["watchlist_source_db_url"]`` is set, reads from that
@@ -252,16 +224,13 @@ class EPNewsPlugin:
             with get_session(db_engine) as session:
                 # Pre-filter SQL by a loose 4-day window for performance, then
                 # apply the per-variant scan_date check in Python (A/B require
-                # scan_date == today; C requires scan_date == previous
-                # trading day). Without this, a stale "ready" row leftover
-                # from a prior session leaks into the next day's execute —
-                # the 2026-05-01 FSS leak (4/29 C row firing on 5/1).
+                # scan_date == today). Without this, a stale "ready" row
+                # leftover from a prior session leaks into the next day's
+                # execute. See `core/trading_calendar.py` for details.
                 #
                 # Stage filter must include BOTH "ready" and "triggered". See
                 # ep_earnings/plugin.py for the full rationale — same bug, same
-                # fix. Without "triggered" in the filter, a row whose first
-                # order cancels (limit didn't print) gets dropped for the rest
-                # of the 15:37–15:59 retry window.
+                # fix.
                 rows = session.query(Watchlist).filter(
                     Watchlist.setup_type == "ep_news",
                     Watchlist.stage.in_(["ready", "triggered"]),
@@ -382,8 +351,7 @@ class EPNewsPlugin:
                 continue
 
             # Pre-flight buying-power check — see ep_earnings/plugin.py for
-            # the rationale. 2026-05-07: WRBY (B) hit insufficient_bp twice
-            # in the retry loop. Same fix.
+            # the rationale.
             cost_basis = shares * use_entry
             try:
                 buying_power = client.get_buying_power()
@@ -451,156 +419,6 @@ class EPNewsPlugin:
             notify(f"EP NEWS EXECUTE: {executed}/{len(entries)} entered")
 
         return f"{executed}/{len(entries)} entered: {', '.join(entry_labels)}"
-
-    def job_day2_confirm(self, config, client, db_engine, notify):
-        """3:45 PM ET — check yesterday's Strategy C candidates for day-2 confirmation."""
-        from core.execution import is_trading_day
-        from db.models import Watchlist, get_session
-
-        if not is_trading_day(client):
-            return "Skipped — not a trading day"
-
-        logger.info("=== EP NEWS DAY-2 CONFIRM CHECK ===")
-
-        today = datetime.now(ET).date()
-
-        confirmed = []
-        failures: list[tuple[str, str]] = []  # (ticker, reason) — must never be silent
-        with get_session(db_engine) as session:
-            pending = session.query(Watchlist).filter(
-                Watchlist.setup_type == "ep_news",
-                Watchlist.stage == "watching",
-                Watchlist.scan_date < today,
-            ).all()
-
-            if not pending:
-                logger.info("EP news day-2 confirm: no pending candidates")
-                return "No pending candidates"
-
-            logger.info("EP news day-2 confirm: %d pending candidates", len(pending))
-            attempted = 0
-
-            for wl in pending:
-                meta = wl.meta or {}
-                if not meta.get("day2_confirm"):
-                    continue
-
-                ticker = wl.ticker
-                gap_day_close = meta.get("gap_day_close", 0)
-                attempted += 1
-
-                # fetch_current_price retries 3x with 2s backoff to ride out
-                # transient Alpaca snapshot hiccups (2026-04-23 incident).
-                from core.execution import fetch_current_price
-                try:
-                    current_price = fetch_current_price(client, ticker)
-                    if current_price is None:
-                        logger.error("EP news day-2: no price data for %s (after retries)", ticker)
-                        wl.stage = "expired"
-                        # [bot-failure] tag lets the dashboard bucket snapshot-error
-                        # rows as "Cancelled" instead of "Expired" (legitimate rejection).
-                        wl.notes = f"{wl.notes or ''} [bot-failure]".strip()
-                        failures.append((ticker, "no price data"))
-                        continue
-                except Exception as e:
-                    logger.error("EP news day-2: failed to get price for %s: %s", ticker, e)
-                    wl.stage = "expired"
-                    wl.notes = f"{wl.notes or ''} [bot-failure]".strip()
-                    failures.append((ticker, f"snapshot error: {e}"))
-                    continue
-
-                if current_price > gap_day_close:
-                    stop_pct = meta.get("stop_loss_pct", 7.0)
-                    stop_price = round(current_price * (1 - stop_pct / 100), 2)
-                    day1_return_pct = round((current_price - gap_day_close) / gap_day_close * 100, 2)
-
-                    # Promote to "ready" — job_execute at 3:50 PM picks this up from DB.
-                    # Update meta with the execution payload so execute can rebuild the entry
-                    # without depending on any in-memory state.
-                    meta.update({
-                        "ep_strategy": "C",
-                        "entry_price": current_price,
-                        "stop_price": stop_price,
-                        "stop_loss_pct": stop_pct,
-                        "max_hold_days": meta.get("max_hold_days", 20),
-                        "current_price": current_price,
-                        "today_volume": 0,
-                        "day1_return_pct": day1_return_pct,
-                    })
-                    wl.meta = meta
-                    wl.stage = "ready"
-                    confirmed.append({"ticker": ticker, **meta})
-                    logger.info(
-                        "%s: Day-2 CONFIRMED — price $%.2f > gap close $%.2f (+%.1f%%) — promoted to ready",
-                        ticker, current_price, gap_day_close, day1_return_pct,
-                    )
-                else:
-                    wl.stage = "expired"
-                    logger.info(
-                        "%s: Day-2 REJECTED — price $%.2f <= gap close $%.2f (%.1f%%)",
-                        ticker, current_price, gap_day_close,
-                        (current_price - gap_day_close) / gap_day_close * 100,
-                    )
-
-            session.commit()
-
-        if confirmed and notify:
-            lines = [f"EP NEWS DAY-2 CONFIRM: {len(confirmed)} confirmed"]
-            for e in confirmed:
-                lines.append(
-                    f"  {e['ticker']}: entry ${e['entry_price']:.2f}, "
-                    f"stop ${e['stop_price']:.2f}, 1D return +{e['day1_return_pct']:.1f}%"
-                )
-            notify("\n".join(lines))
-
-        if failures:
-            msg_lines = [f"EP NEWS DAY-2 CONFIRM: {len(failures)}/{attempted} price-data failures"]
-            msg_lines.extend(f"  {t}: {reason}" for t, reason in failures)
-            msg = "\n".join(msg_lines)
-            if notify:
-                notify(msg)
-            # See strategies/ep_earnings/plugin.py for the rationale on the
-            # partial-vs-total split. Total outage → raise so _track_job fires
-            # JOB FAILED via Telegram.
-            if attempted > 0 and len(failures) == attempted:
-                raise RuntimeError(msg)
-
-        return f"{len(confirmed)} confirmed from {len(pending)} pending ({len(failures)} failed)"
-
-    def _persist_pending_day2(self, entry: dict, scan_date, db_engine):
-        """Persist a Strategy C candidate as pending day-2 confirmation."""
-        from db.models import Watchlist, get_session
-
-        meta = {
-            "ep_strategy": "C",
-            "day2_confirm": True,
-            "gap_day_close": entry["gap_day_close"],
-            "gap_pct": entry["gap_pct"],
-            "stop_loss_pct": entry["stop_loss_pct"],
-            "max_hold_days": entry["max_hold_days"],
-            "chg_open_pct": entry["chg_open_pct"],
-            "close_in_range": entry["close_in_range"],
-            "downside_from_open": entry["downside_from_open"],
-            "prev_10d_change_pct": entry["prev_10d_change_pct"],
-            "atr_pct": entry["atr_pct"],
-            "open_price": entry["open_price"],
-            "prev_close": entry["prev_close"],
-            "prev_high": entry.get("prev_high", 0),
-            "market_cap": entry.get("market_cap", 0),
-            "rvol": entry.get("rvol", 0),
-        }
-
-        with get_session(db_engine) as session:
-            wl = Watchlist(
-                ticker=entry["ticker"],
-                setup_type="ep_news",
-                stage="watching",
-                scan_date=scan_date,
-                metadata_json=_json.dumps(meta),
-                notes="EP News Strategy C — pending day-2 confirm",
-            )
-            session.add(wl)
-            session.commit()
 
     def _persist_entry(self, entry: dict, scan_date, db_engine):
         """Persist an EP news strategy entry to the watchlist with metadata."""

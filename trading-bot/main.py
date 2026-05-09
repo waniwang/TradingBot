@@ -320,8 +320,8 @@ def job_subscribe_watchlist(
             ticker = bar["ticker"]
             current_price = bar["close"]
 
-            # Keep intraday price cache warm — used by day2_confirm at 3:35 PM
-            # to avoid a cold REST snapshot call on the congested Alpaca endpoint.
+            # Keep intraday price cache warm for any consumer that wants a
+            # last-known price without a REST snapshot call.
             data_cache.update_intraday_price(ticker, current_price)
 
             # Fetch ALL of today's 1m candles (up to 390 for a full day)
