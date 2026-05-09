@@ -1,0 +1,325 @@
+name: One-shot — Monday 9:35 AM ET cleanup (close pending Alpaca + verify both bots)
+
+# Auto-fires Monday 9:35 AM ET (13:35 UTC during EDT) — 5 min after open so
+# Alpaca's pending_cancel stops have propagated to cancelled. Also runs on
+# manual workflow_dispatch.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "35 13 * * 1"   # Mon 13:35 UTC = 9:35 ET (EDT)
+
+jobs:
+  monday_cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close pending Alpaca positions, recreate DVA-A stop, verify IB
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            .venv/bin/python <<'PY'
+            """
+            Monday 9:35 AM ET cleanup — three independent steps:
+
+            1. ALPACA: close the 10 dropped-variant positions left over from
+               weekend (their stop cancels were stuck in pending_cancel until
+               market open). Uses TradingClient.close_position which is
+               atomic with any remaining open orders.
+
+            2. ALPACA: recreate DVA-A's stop ($178.24, 29 shares). The Saturday
+               retry script unintentionally cancelled both DVA stops while
+               trying to free DVA-c's shares. DVA-c will be closed in step 1;
+               DVA-A is a keeper position that needs its stop back ASAP.
+
+            3. IB: verify the 8 Saturday-closed IB positions actually filled
+               at IBKR (Saturday script returned OK + DB marked closed, but
+               orders queued at IB Gateway until market open). Fail loud if
+               any IB position still shows shares at the broker.
+            """
+            import os, sys, time
+            from datetime import datetime
+            from pathlib import Path
+
+            ROOT = Path("/opt/trading-bot/trading-bot")
+            sys.path.insert(0, str(ROOT))
+
+            from sqlalchemy.orm import sessionmaker
+            from db.models import Position, init_db
+            from alpaca.trading.client import TradingClient
+            from alpaca.trading.requests import (
+                ClosePositionRequest, StopOrderRequest, GetOrdersRequest,
+            )
+            from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
+            from alpaca.data.historical import StockHistoricalDataClient
+            from alpaca.data.requests import StockLatestTradeRequest
+
+            tc = TradingClient(
+                api_key=os.environ["ALPACA_API_KEY"],
+                secret_key=os.environ["ALPACA_SECRET_KEY"],
+                paper=True,
+            )
+            data_client = StockHistoricalDataClient(
+                api_key=os.environ["ALPACA_API_KEY"],
+                secret_key=os.environ["ALPACA_SECRET_KEY"],
+            )
+
+            REMAINING_ALPACA = [
+                ("DVA",  "ep_earnings_c"),
+                ("PRG",  "ep_news_c"),
+                ("PI",   "ep_earnings_c"),
+                ("BRKR", "ep_earnings_c"),
+                ("FSS",  "ep_news_c"),
+                ("ROK",  "ep_earnings_c"),
+                ("FLYW", "ep_earnings_c"),
+                ("ULCC", "ep_earnings_c"),
+                ("LTM",  "ep_earnings_c"),
+                ("ICL",  "ep_news_c"),
+            ]
+
+            ALPACA_DB = "sqlite:////opt/trading-bot/trading-bot/trading_bot.db"
+            IB_DB     = "sqlite:////opt/trading-bot/trading-bot/trading_bot_ib.db"
+
+            from sqlalchemy import create_engine
+            alpaca_eng = init_db(ALPACA_DB)
+            ib_eng = create_engine(IB_DB)
+            S_alpaca = sessionmaker(bind=alpaca_eng)
+            S_ib = sessionmaker(bind=ib_eng)
+
+            print("=" * 70)
+            print("STEP 1: close pending Alpaca dropped-variant positions")
+            print("=" * 70)
+            with S_alpaca() as session:
+                for ticker, setup_type in REMAINING_ALPACA:
+                    pos = session.query(Position).filter_by(
+                        ticker=ticker, setup_type=setup_type, is_open=True
+                    ).first()
+                    if pos is None:
+                        print(f"SKIP {ticker} ({setup_type}): no open position")
+                        continue
+                    qty = pos.shares - pos.partial_exit_shares
+
+                    try:
+                        order = tc.close_position(
+                            ticker, ClosePositionRequest(qty=str(qty))
+                        )
+                        print(f"OK   {ticker} ({setup_type}): close order {str(order.id)[:8]} for {qty}sh")
+
+                        # Update DB: use latest trade as exit price (broker fill will
+                        # differ slightly; this matches the bot's stop_hit/max_hold
+                        # accounting pattern).
+                        try:
+                            req = StockLatestTradeRequest(symbol_or_symbols=[ticker])
+                            trades = data_client.get_stock_latest_trade(req)
+                            current_price = float(trades[ticker].price) if ticker in trades else pos.entry_price
+                        except Exception:
+                            current_price = pos.entry_price
+
+                        if pos.side == "long":
+                            pnl = qty * (current_price - pos.entry_price)
+                        else:
+                            pnl = qty * (pos.entry_price - current_price)
+
+                        pos.exit_price = current_price
+                        pos.exit_reason = "manual"
+                        pos.realized_pnl = pnl
+                        pos.is_open = False
+                        pos.closed_at = datetime.utcnow()
+                        session.commit()
+                        print(f"     → DB updated: pnl=${pnl:+,.2f} @ ${current_price:.2f}")
+                    except Exception as e:
+                        print(f"FAIL {ticker} ({setup_type}): {e}")
+
+            print()
+            print("=" * 70)
+            print("STEP 2: recreate DVA-A stop ($178.24, 29 shares)")
+            print("=" * 70)
+            with S_alpaca() as session:
+                dva_a = session.query(Position).filter_by(
+                    ticker="DVA", setup_type="ep_earnings_a", is_open=True
+                ).first()
+                if dva_a is None:
+                    print("SKIP: DVA-A position not found (closed or never existed?)")
+                else:
+                    # Check if a stop already exists for DVA at the broker
+                    open_orders = tc.get_orders(GetOrdersRequest(
+                        status=QueryOrderStatus.OPEN, symbols=["DVA"]
+                    ))
+                    has_active_stop = any(
+                        str(o.order_type) == "OrderType.STOP"
+                        and str(o.status) not in ("OrderStatus.PENDING_CANCEL", "OrderStatus.CANCELED", "OrderStatus.CANCELLED")
+                        for o in open_orders
+                    )
+                    if has_active_stop:
+                        print("SKIP: DVA already has an active stop at broker")
+                    else:
+                        # Recreate stop for DVA-A's remaining shares
+                        remaining_shares = dva_a.shares - dva_a.partial_exit_shares
+                        stop_price = round(dva_a.entry_price * 0.93, 2)  # -7%
+
+                        try:
+                            req = StopOrderRequest(
+                                symbol="DVA",
+                                qty=remaining_shares,
+                                side=OrderSide.SELL,
+                                stop_price=stop_price,
+                                time_in_force=TimeInForce.GTC,
+                            )
+                            order = tc.submit_order(req)
+                            print(f"OK   DVA-A: new stop @ ${stop_price:.2f} for {remaining_shares}sh, "
+                                  f"order_id={str(order.id)[:8]}")
+                            # Update Position with new stop_order_id
+                            dva_a.stop_order_id = str(order.id)
+                            dva_a.stop_price = stop_price
+                            session.commit()
+                            print(f"     → DB updated: stop_order_id + stop_price recorded")
+                        except Exception as e:
+                            print(f"FAIL DVA-A: stop placement failed: {e}")
+
+            print()
+            print("=" * 70)
+            print("STEP 3: IB — detect Saturday closes that didn't actually fill, re-close")
+            print("=" * 70)
+            print("Saturday's IB script reported OK with order IDs 4,6,8,... — those")
+            print("look like IB Gateway local sequence counters, not actual IBKR")
+            print("orders. With markets closed Saturday, the orders may not have")
+            print("transmitted. Compare broker positions to DB (expected-closed)")
+            print("and re-close anything that's still at the broker.")
+            print()
+
+            ib_client = None
+            try:
+                from executor.ib_client import IBClient
+                import yaml
+                with open("config.yaml") as f:
+                    cfg = yaml.safe_load(f) or {}
+                ib_cfg = {
+                    "ibkr": {
+                        "host": cfg.get("ibkr", {}).get("host", "127.0.0.1"),
+                        "port": cfg.get("ibkr", {}).get("port", 4002),
+                        "client_id": 99,
+                    },
+                }
+                ib_client = IBClient(ib_cfg)
+                ib_client.connect()
+                print("[IB] connected to gateway with client_id=99")
+            except Exception as e:
+                print(f"[IB] connect failed: {e}")
+                ib_client = None
+
+            if ib_client is not None:
+                EXPECTED_CLOSED_IB = [
+                    ("PWR",  "ep_earnings_c"),
+                    ("MYRG", "ep_earnings_c"),
+                    ("WCC",  "ep_earnings_c"),
+                    ("TTMI", "ep_earnings_c"),
+                    ("PI",   "ep_earnings_c"),
+                    ("PRG",  "ep_news_c"),
+                    ("NVT",  "ep_news_c"),
+                    ("MTSI", "ep_news_c"),
+                ]
+
+                # Get IB broker positions (source of truth)
+                try:
+                    broker_positions = ib_client.get_positions()
+                    broker_by_ticker = {
+                        p["ticker"]: int(p.get("shares", 0)) for p in broker_positions
+                    }
+                except Exception as e:
+                    print(f"[IB] get_positions failed: {e}")
+                    broker_by_ticker = {}
+
+                with S_ib() as session:
+                    for ticker, setup_type in EXPECTED_CLOSED_IB:
+                        # Sum shares across ALL still-open IB positions for this ticker
+                        # (e.g. PWR has both A and C on IB; A is keeper, C closed Saturday).
+                        open_for_ticker = (
+                            session.query(Position)
+                            .filter_by(ticker=ticker, is_open=True)
+                            .all()
+                        )
+                        db_open_shares = sum(
+                            p.shares - p.partial_exit_shares for p in open_for_ticker
+                        )
+                        broker_shares = broker_by_ticker.get(ticker, 0)
+                        diff = broker_shares - db_open_shares
+
+                        # The Position row we marked closed on Saturday
+                        sat_closed = (
+                            session.query(Position)
+                            .filter_by(
+                                ticker=ticker, setup_type=setup_type, is_open=False
+                            )
+                            .order_by(Position.id.desc())
+                            .first()
+                        )
+
+                        if diff == 0:
+                            print(f"OK   {ticker} ({setup_type}): broker {broker_shares}sh = db_open {db_open_shares}sh — Saturday close FILLED")
+                        elif diff > 0:
+                            # Broker has more shares than DB shows open — Saturday close didn't fill
+                            need_to_close = diff
+                            print(f"⚠   {ticker} ({setup_type}): broker {broker_shares}sh > db_open {db_open_shares}sh "
+                                  f"— need to close {need_to_close}sh (Saturday close didn't fill)")
+
+                            # Cancel the variant's stop order if still tracked
+                            stop_status = "no-stop-id"
+                            if sat_closed and sat_closed.stop_order_id:
+                                try:
+                                    ib_client.cancel_order(sat_closed.stop_order_id)
+                                    stop_status = "stop-cancelled"
+                                    time.sleep(1.0)
+                                except Exception as e:
+                                    stop_status = f"cancel-err: {e}"
+
+                            # Re-submit market close
+                            try:
+                                order_id = ib_client.close_position(
+                                    ticker, need_to_close, "long"
+                                )
+                                print(f"     → resubmitted close: {need_to_close}sh, order={order_id}, {stop_status}")
+                            except Exception as e:
+                                print(f"     → FAIL re-close: {e}")
+                        else:
+                            # Broker has FEWER shares than DB open — DB has phantom rows
+                            # (could happen if user manually closed at broker; unusual)
+                            print(f"⚠   {ticker} ({setup_type}): broker {broker_shares}sh < db_open {db_open_shares}sh — DB ahead of broker")
+
+                try:
+                    ib_client.disconnect()
+                except Exception:
+                    pass
+
+            print()
+            print("=" * 70)
+            print("STEP 4: final Alpaca state — list all open positions + any without stops")
+            print("=" * 70)
+            with S_alpaca() as session:
+                open_positions = session.query(Position).filter_by(is_open=True).all()
+                # Get all open Alpaca orders for stop matching
+                all_orders = tc.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
+                tickers_with_stops = {
+                    o.symbol for o in all_orders
+                    if str(o.order_type) == "OrderType.STOP"
+                }
+                print(f"  Open positions: {len(open_positions)}")
+                missing_stops = []
+                for p in open_positions:
+                    has_stop = p.ticker in tickers_with_stops
+                    if not has_stop:
+                        missing_stops.append((p.ticker, p.setup_type, p.shares))
+                if missing_stops:
+                    print(f"  ⚠ Positions without active stop at broker:")
+                    for t, s, sh in missing_stops:
+                        print(f"    - {t} ({s}): {sh}sh — needs stop placement!")
+                else:
+                    print("  ✓ All open positions have active stops at broker")
+
+            print()
+            print("DONE.")
+            PY
