@@ -98,12 +98,13 @@ def main() -> int:
     candidates = _filter_today_ep(payload)
     today_iso = datetime.now().strftime("%Y-%m-%d")
     logger.info(
-        "Found %d EP candidate(s) for %s (ready+watching)",
+        "Found %d ready EP candidate(s) for %s",
         len(candidates),
         today_iso,
     )
 
     if not candidates:
+        logger.info("Posting empty-state Discord message")
         notify_discord(format_candidate_summary([]))
         return 0
 
