@@ -1,0 +1,129 @@
+name: One-shot — clean phantom IB DB rows + sell ARRY/EZPW/DGII excess
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close phantom rows + submit excess-share SELLs
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          command_timeout: 2m
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            timeout 90 .venv/bin/python <<'PY'
+            """
+            STEP A (DB-only, no broker): mark phantom IB Position rows closed
+              for AMD, FTAI, KFRC, TXN-A, URI-A. These positions exist in DB
+              but never made it to IBKR. Set is_open=False,
+              realized_pnl=0.0, exit_reason="phantom_no_broker_position",
+              exit_price=entry_price.
+
+            STEP B (broker action): pre-check + sell exact excess for the
+              three 2x-at-broker tickers:
+                ARRY: SELL 549 (broker 1098 → 549 matches DB)
+                EZPW: SELL 140 (broker 280  → 140 matches DB)
+                DGII: SELL 72  (broker 143  → 71  matches DB)
+
+            No post-verify in this script — IB position queries can hang
+            mid-script. Verify in a separate trigger.
+            """
+            import os, sys, time
+            from datetime import datetime
+            from pathlib import Path
+            ROOT = Path("/opt/trading-bot/trading-bot")
+            sys.path.insert(0, str(ROOT))
+
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from db.models import Position
+            from executor.ib_client import IBClient
+            import yaml
+            with open("config.yaml") as f:
+                cfg = yaml.safe_load(f) or {}
+
+            IB_DB = "sqlite:////opt/trading-bot/trading-bot/trading_bot_ib.db"
+            eng = create_engine(IB_DB)
+            S = sessionmaker(bind=eng)
+
+            # ─── STEP A: phantom DB rows ───
+            print("=" * 60)
+            print("STEP A: close phantom IB DB rows (DB only, no broker)")
+            print("=" * 60)
+            PHANTOMS = ["AMD", "FTAI", "KFRC", "TXN", "URI"]
+            with S() as session:
+                for ticker in PHANTOMS:
+                    rows = session.query(Position).filter_by(
+                        ticker=ticker, is_open=True
+                    ).all()
+                    if not rows:
+                        print(f"  SKIP {ticker}: no open rows in IB DB")
+                        continue
+                    for pos in rows:
+                        print(f"  OK   {ticker} ({pos.setup_type}): "
+                              f"closing {pos.shares}sh, entry ${pos.entry_price:.2f}")
+                        pos.exit_price = pos.entry_price       # no real exit; zero out
+                        pos.exit_reason = "phantom_no_broker_position"
+                        pos.realized_pnl = 0.0
+                        pos.is_open = False
+                        pos.closed_at = datetime.utcnow()
+                session.commit()
+            print("  DB updates committed")
+
+            # ─── STEP B: sell excess at broker ───
+            print()
+            print("=" * 60)
+            print("STEP B: sell ARRY/EZPW/DGII excess to match DB")
+            print("=" * 60)
+
+            ib = IBClient({"ibkr": {
+                "host": cfg.get("ibkr", {}).get("host", "127.0.0.1"),
+                "port": cfg.get("ibkr", {}).get("port", 4002),
+                "client_id": 94,
+            }})
+            ib.connect()
+            print("[IB] connected (client_id=94)")
+
+            # Pre-check current broker positions
+            broker_pos = ib._ib.positions()
+            broker_qty = {p.contract.symbol: float(p.position) for p in broker_pos}
+
+            # (ticker, target_excess_to_sell, expected_broker_minimum)
+            EXCESS_SALES = [
+                ("ARRY", 549, 1098),
+                ("EZPW", 140, 280),
+                ("DGII", 72,  143),
+            ]
+            for ticker, sell_qty, expected_broker in EXCESS_SALES:
+                actual = broker_qty.get(ticker, 0)
+                if actual <= 0:
+                    print(f"  SKIP {ticker}: broker has {actual:.0f}sh — not long, "
+                          f"skipping (avoid creating short like TTMI/WCC)")
+                    continue
+                if actual < sell_qty:
+                    print(f"  SKIP {ticker}: broker has only {actual:.0f}sh, "
+                          f"can't safely sell {sell_qty}")
+                    continue
+                if actual < expected_broker:
+                    print(f"  ⚠   {ticker}: broker has {actual:.0f}sh "
+                          f"(expected {expected_broker}sh); proceeding with SELL {sell_qty}")
+
+                try:
+                    # close_position(side="long") → action=SELL
+                    order_id = ib.close_position(ticker, sell_qty, "long")
+                    print(f"  OK   {ticker}: SELL {sell_qty}sh submitted, order={order_id} "
+                          f"(broker {actual:.0f} → ~{actual - sell_qty:.0f})")
+                except Exception as e:
+                    print(f"  FAIL {ticker}: {e}")
+
+            ib.disconnect()
+            print("\nDONE.")
+            PY
