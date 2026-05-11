@@ -486,10 +486,80 @@ class IBClient:
         self._run(_cancel(), timeout=10)
         logger.info("IB cancelled order %s", order_id)
 
+    def _broker_position_qty(self, ticker: str) -> float:
+        """Return the broker's current net position for a ticker.
+
+        Positive = long, negative = short, 0 = flat (or ticker not held).
+
+        Raises if not connected — callers MUST be able to trust this number
+        before placing a directional order. Silent fallback to 0 here would
+        let close_position() submit a SELL against a nonexistent long and
+        create an accidental naked short (2026-05-11 incident — see
+        memory/incident_2026_05_11_ib_phantom_positions_and_shorts.md).
+        """
+        if not IB_AVAILABLE or not self._connected:
+            raise RuntimeError(
+                f"_broker_position_qty({ticker}): IB not connected"
+            )
+        positions = self._ib.positions()
+        for p in positions:
+            if p.contract.symbol == ticker:
+                return float(p.position or 0)
+        return 0.0  # ticker not in positions list = flat
+
     def close_position(self, ticker: str, shares: int, side: str) -> str:
-        """Market order to close a position. `side` is the existing position side."""
+        """Market order to close a position. `side` is the existing position side.
+
+        Defensive pre-check: queries the broker's current position before
+        submitting. Refuses to act if the broker doesn't hold what we think
+        we're closing — this prevents the 2026-05-11 incident where SELL
+        orders fired against zero-share positions created accidental shorts.
+        Mirrors what Alpaca's `/v2/positions` DELETE endpoint already does
+        server-side (HTTP 403 / code 40310000 on insufficient qty).
+
+        - side="long" submits SELL. Refuses if broker is flat or short
+          (would create or extend a short). Reduces qty to broker's actual
+          long if broker has fewer shares than requested.
+        - side="short" submits BUY-to-cover. Refuses if broker is flat or
+          long (would create or extend a long). Reduces qty to broker's
+          actual short size if smaller than requested.
+        """
         if not IB_AVAILABLE:
             return f"STUB-CLOSE-{ticker}-{int(time.time())}"
+
+        broker_qty = self._broker_position_qty(ticker)
+
+        if side == "long":
+            if broker_qty <= 0:
+                raise RuntimeError(
+                    f"close_position({ticker}, {shares}, 'long') refused: "
+                    f"broker shows {broker_qty:.0f}sh (not long). Submitting "
+                    f"SELL would create or extend a naked short. DB-broker "
+                    f"drift — reconcile and investigate before retrying."
+                )
+            if broker_qty < shares:
+                logger.warning(
+                    "close_position(%s, %d, 'long'): broker only has %.0fsh "
+                    "long; reducing SELL to match", ticker, shares, broker_qty,
+                )
+                shares = int(broker_qty)
+        elif side == "short":
+            if broker_qty >= 0:
+                raise RuntimeError(
+                    f"close_position({ticker}, {shares}, 'short') refused: "
+                    f"broker shows {broker_qty:.0f}sh (not short). Submitting "
+                    f"BUY would create or extend a long. DB-broker drift — "
+                    f"reconcile and investigate before retrying."
+                )
+            short_size = abs(broker_qty)
+            if short_size < shares:
+                logger.warning(
+                    "close_position(%s, %d, 'short'): broker only has %.0fsh "
+                    "short; reducing BUY to match", ticker, shares, short_size,
+                )
+                shares = int(short_size)
+        else:
+            raise ValueError(f"close_position: unknown side {side!r}")
 
         action = "SELL" if side == "long" else "BUY"
 

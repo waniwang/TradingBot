@@ -274,3 +274,114 @@ class TestGetRealtimeQuote:
         client._connected = False
         with pytest.raises(RuntimeError, match="while disconnected"):
             client.get_realtime_quote("AAPL")
+
+
+# ---------------------------------------------------------------------------
+# close_position broker-state pre-check
+# ---------------------------------------------------------------------------
+
+
+class TestClosePositionBrokerPrecheck:
+    """Defensive check added 2026-05-11 after IB shorts incident: refuse to
+    submit a SELL against a nonexistent long, or BUY against nonexistent
+    short. See memory/incident_2026_05_11_ib_phantom_positions_and_shorts.md.
+    """
+
+    def _build_client(self, broker_positions: list[tuple[str, float]]) -> IBClient:
+        """Stub IBClient with positions() returning the given (symbol, qty) list."""
+        client = _make_client(connected=True)
+        # ib.positions() returns objects with .contract.symbol and .position
+        fake_positions = [
+            SimpleNamespace(
+                contract=SimpleNamespace(symbol=sym), position=qty
+            )
+            for sym, qty in broker_positions
+        ]
+        client._ib.positions = MagicMock(return_value=fake_positions)
+
+        # _run for close_position calls _submit() coroutine — short-circuit
+        # with a fake Trade object that has .order.orderId so close_position
+        # returns a string. The test cares about pre-check behavior, not the
+        # async submit.
+        fake_trade = SimpleNamespace(order=SimpleNamespace(orderId=42))
+
+        def _fake_run(coro, timeout=15):
+            try:
+                coro.close()
+            except Exception:
+                pass
+            return fake_trade
+
+        client._run = _fake_run
+        client._ib.placeOrder = MagicMock(return_value=fake_trade)
+        return client
+
+    # ----- happy paths -----
+    def test_sell_long_exact_qty_submits(self):
+        client = self._build_client([("AMD", 40)])
+        order_id = client.close_position("AMD", 40, "long")
+        assert order_id == "42"
+
+    def test_sell_long_oversize_reduces_to_broker_qty(self, caplog):
+        """If broker has only 30 shares but we ask to close 40, the SELL
+        should reduce to 30 (and log a warning), not refuse outright."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        client = self._build_client([("AMD", 30)])
+        client.close_position("AMD", 40, "long")
+        # The MarketOrder is constructed with the reduced qty — verify via
+        # the placeOrder call args.
+        # MarketOrder is the 2nd positional arg in our submit, but the
+        # mocked _run bypasses the coroutine. Instead, check the log.
+        assert any("reducing SELL to match" in r.message for r in caplog.records), \
+            f"Expected reduction warning; got {[r.message for r in caplog.records]}"
+
+    def test_buy_cover_exact_qty_submits(self):
+        client = self._build_client([("TTMI", -91)])
+        order_id = client.close_position("TTMI", 91, "short")
+        assert order_id == "42"
+
+    def test_buy_cover_oversize_reduces(self, caplog):
+        import logging
+        caplog.set_level(logging.WARNING)
+        client = self._build_client([("TTMI", -50)])
+        client.close_position("TTMI", 91, "short")
+        assert any("reducing BUY to match" in r.message for r in caplog.records)
+
+    # ----- refusal paths (the 2026-05-11 incident) -----
+    def test_sell_long_when_broker_flat_refuses(self):
+        """The exact pattern that caused the TTMI short — DB thought we had
+        91sh long, broker had 0. SELL would create a naked short."""
+        client = self._build_client([])  # broker flat
+        with pytest.raises(RuntimeError, match="not long"):
+            client.close_position("TTMI", 91, "long")
+
+    def test_sell_long_when_broker_already_short_refuses(self):
+        """Already short — SELL would extend the short."""
+        client = self._build_client([("TTMI", -91)])
+        with pytest.raises(RuntimeError, match="not long"):
+            client.close_position("TTMI", 91, "long")
+
+    def test_buy_cover_when_broker_flat_refuses(self):
+        client = self._build_client([])
+        with pytest.raises(RuntimeError, match="not short"):
+            client.close_position("AMD", 40, "short")
+
+    def test_buy_cover_when_broker_long_refuses(self):
+        """Already long — BUY would extend the long, not cover anything."""
+        client = self._build_client([("AMD", 40)])
+        with pytest.raises(RuntimeError, match="not short"):
+            client.close_position("AMD", 40, "short")
+
+    def test_unknown_side_raises(self):
+        client = self._build_client([("AMD", 40)])
+        with pytest.raises(ValueError, match="unknown side"):
+            client.close_position("AMD", 40, "weird")
+
+    def test_disconnected_raises(self):
+        """Per project convention — trade-path errors propagate, never
+        return silently."""
+        client = self._build_client([("AMD", 40)])
+        client._connected = False
+        with pytest.raises(RuntimeError, match="not connected"):
+            client.close_position("AMD", 40, "long")
