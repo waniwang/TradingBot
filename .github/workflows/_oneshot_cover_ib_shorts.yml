@@ -1,0 +1,124 @@
+name: One-shot — cover IB TTMI + WCC shorts (BUY to close)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cover_shorts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify shorts, submit cover BUYs, verify flat
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          command_timeout: 3m
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            timeout 120 .venv/bin/python <<'PY'
+            """Cover TTMI -182sh and WCC -82sh shorts at IB.
+
+            Pre-checks:
+              - Verify each ticker is currently SHORT (negative position) at expected qty
+              - Abort if position doesn't match (e.g., already covered, or actually long)
+
+            Action:
+              - IBClient.close_position(ticker, qty, "short") → submits BUY
+
+            Post-checks:
+              - Wait briefly, then verify each is now 0sh at broker
+            """
+            import os, sys, time
+            from pathlib import Path
+            ROOT = Path("/opt/trading-bot/trading-bot")
+            sys.path.insert(0, str(ROOT))
+            from executor.ib_client import IBClient
+            import yaml
+            with open("config.yaml") as f:
+                cfg = yaml.safe_load(f) or {}
+            ib = IBClient({"ibkr": {
+                "host": cfg.get("ibkr", {}).get("host", "127.0.0.1"),
+                "port": cfg.get("ibkr", {}).get("port", 4002),
+                "client_id": 96,
+            }})
+            ib.connect()
+            print("[IB] connected (client_id=96)\n")
+
+            inner = ib._ib
+
+            COVERS = [
+                # (ticker, expected_short_qty)
+                ("TTMI", 182),
+                ("WCC", 82),
+            ]
+
+            # PRE-CHECK: confirm we have the expected short positions
+            print("=" * 60)
+            print("PRE-CHECK: confirm shorts exist at expected size")
+            print("=" * 60)
+            broker_pos = inner.positions()
+            by_sym = {p.contract.symbol: float(p.position) for p in broker_pos}
+            ok_to_cover = []
+            for ticker, expected_qty in COVERS:
+                actual = by_sym.get(ticker, 0)
+                if actual == -expected_qty:
+                    print(f"  ✓ {ticker}: short {abs(actual):.0f}sh confirmed")
+                    ok_to_cover.append((ticker, expected_qty))
+                elif actual == 0:
+                    print(f"  SKIP {ticker}: broker shows 0sh — already flat")
+                elif actual > 0:
+                    print(f"  ⚠  {ticker}: actually LONG {actual:.0f}sh — NOT covering "
+                          f"(would close a long instead). Manual review needed.")
+                else:
+                    print(f"  ⚠  {ticker}: short {abs(actual):.0f}sh "
+                          f"(expected {expected_qty}sh) — size mismatch, NOT covering")
+
+            if not ok_to_cover:
+                print("\nNothing safe to cover. Exiting.")
+                ib.disconnect()
+                sys.exit(0)
+
+            # ACTION: submit BUY orders to cover
+            print("\n" + "=" * 60)
+            print("ACTION: submit cover BUY orders")
+            print("=" * 60)
+            for ticker, qty in ok_to_cover:
+                try:
+                    # IBClient.close_position(ticker, qty, "short") → action=BUY
+                    order_id = ib.close_position(ticker, qty, "short")
+                    print(f"  OK   {ticker}: cover BUY {qty}sh submitted, order={order_id}")
+                except Exception as e:
+                    print(f"  FAIL {ticker}: {e}")
+
+            # POST-CHECK: wait then verify
+            print("\n" + "=" * 60)
+            print("POST-CHECK: waiting 8s then re-verifying positions")
+            print("=" * 60)
+            time.sleep(8)
+
+            # Force refresh
+            try:
+                inner.reqPositions()
+                time.sleep(2)
+            except Exception:
+                pass
+
+            broker_pos = inner.positions()
+            by_sym = {p.contract.symbol: float(p.position) for p in broker_pos}
+            for ticker, expected_qty in COVERS:
+                actual = by_sym.get(ticker, 0)
+                if actual == 0:
+                    print(f"  ✓ {ticker}: now 0sh — short covered cleanly")
+                elif abs(actual) < expected_qty:
+                    print(f"  ~ {ticker}: partial fill — now {actual:.0f}sh "
+                          f"(was -{expected_qty}). May still be filling.")
+                else:
+                    print(f"  ⚠ {ticker}: still {actual:.0f}sh — order pending?")
+
+            ib.disconnect()
+            print("\nDONE.")
+            PY
