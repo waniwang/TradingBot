@@ -1,0 +1,147 @@
+name: One-shot — verify closures + investigate missing Alpaca stops
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: IB broker check + Alpaca stop diagnostic
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            .venv/bin/python <<'PY'
+            """
+            Verify-only (no mutations):
+            1. IB: list broker positions via IBClient.get_open_positions()
+                  + compare to DB. Flag any DB-closed but broker-still-has-shares.
+            2. Alpaca: for each open Position, look up its stop_order_id status
+                  and any other open orders on that ticker. Explain why
+                  Monday cleanup reported 5 keepers as "no stop".
+            """
+            import os, sys
+            from pathlib import Path
+            ROOT = Path("/opt/trading-bot/trading-bot")
+            sys.path.insert(0, str(ROOT))
+
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from db.models import Position, init_db
+            from alpaca.trading.client import TradingClient
+            from alpaca.trading.requests import GetOrdersRequest
+            from alpaca.trading.enums import QueryOrderStatus
+
+            tc = TradingClient(
+                api_key=os.environ["ALPACA_API_KEY"],
+                secret_key=os.environ["ALPACA_SECRET_KEY"],
+                paper=True,
+            )
+
+            ALPACA_DB = "sqlite:////opt/trading-bot/trading-bot/trading_bot.db"
+            IB_DB     = "sqlite:////opt/trading-bot/trading-bot/trading_bot_ib.db"
+            alpaca_eng = init_db(ALPACA_DB)
+            ib_eng = create_engine(IB_DB)
+            S_alpaca = sessionmaker(bind=alpaca_eng)
+            S_ib = sessionmaker(bind=ib_eng)
+
+            print("=" * 70)
+            print("ALPACA: positions + stop status per Position row")
+            print("=" * 70)
+
+            # Get all open orders, group by symbol
+            all_open = tc.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
+            orders_by_symbol = {}
+            for o in all_open:
+                orders_by_symbol.setdefault(o.symbol, []).append(o)
+
+            with S_alpaca() as session:
+                positions = session.query(Position).filter_by(is_open=True).all()
+                print(f"  {len(positions)} open positions in Alpaca DB\n")
+                for p in positions:
+                    sym_orders = orders_by_symbol.get(p.ticker, [])
+                    stop_orders = [o for o in sym_orders if str(o.order_type) == "OrderType.STOP"]
+                    line = f"  {p.ticker:6s} {p.setup_type:18s} {p.shares:>5d}sh"
+                    if p.stop_order_id:
+                        # Look up the specific stop_order_id we have on file
+                        try:
+                            o = tc.get_order_by_id(p.stop_order_id)
+                            status = str(o.status).replace("OrderStatus.", "")
+                            line += f"  stop_order_id={p.stop_order_id[:8]} status={status}"
+                            if str(o.status) not in ("OrderStatus.NEW", "OrderStatus.ACCEPTED",
+                                                      "OrderStatus.HELD"):
+                                line += "  ⚠ STOP NOT ACTIVE"
+                        except Exception as e:
+                            line += f"  stop_order_id={p.stop_order_id[:8]} get-err: {e}"
+                    else:
+                        line += "  NO stop_order_id on Position row"
+                    line += f"  ({len(stop_orders)} stops on ticker at broker)"
+                    print(line)
+
+            print()
+            print("=" * 70)
+            print("IB: broker positions vs DB-open per ticker")
+            print("=" * 70)
+            try:
+                from executor.ib_client import IBClient
+                import yaml
+                with open("config.yaml") as f:
+                    cfg = yaml.safe_load(f) or {}
+                ib_cfg = {"ibkr": {
+                    "host": cfg.get("ibkr", {}).get("host", "127.0.0.1"),
+                    "port": cfg.get("ibkr", {}).get("port", 4002),
+                    "client_id": 99,
+                }}
+                ib = IBClient(ib_cfg)
+                ib.connect()
+                print("[IB] connected with client_id=99\n")
+
+                broker_pos = ib.get_open_positions()  # correct method name
+                broker_by_ticker = {}
+                for bp in broker_pos:
+                    t = bp.get("ticker") or bp.get("symbol")
+                    qty = int(bp.get("shares") or bp.get("qty") or 0)
+                    broker_by_ticker[t] = qty
+                print(f"  Broker has {len(broker_pos)} positions across "
+                      f"{sum(broker_by_ticker.values())} total shares")
+
+                # Compare with DB
+                EXPECTED_CLOSED_IB = [
+                    "PWR", "MYRG", "WCC", "TTMI", "PI", "PRG", "NVT", "MTSI",
+                ]
+                with S_ib() as session:
+                    db_open = session.query(Position).filter_by(is_open=True).all()
+                    db_by_ticker = {}
+                    for p in db_open:
+                        db_by_ticker[p.ticker] = db_by_ticker.get(p.ticker, 0) + (p.shares - p.partial_exit_shares)
+
+                all_tickers = set(broker_by_ticker.keys()) | set(db_by_ticker.keys())
+                print(f"\n  {'Ticker':<8s}{'Broker':>8s}{'DB Open':>10s}{'Status':<40s}")
+                for t in sorted(all_tickers):
+                    bs = broker_by_ticker.get(t, 0)
+                    ds = db_by_ticker.get(t, 0)
+                    if bs == ds:
+                        status = "✓ in sync"
+                    elif bs > ds:
+                        diff = bs - ds
+                        if t in EXPECTED_CLOSED_IB:
+                            status = f"⚠ broker has {diff} extra — Saturday close DID NOT fill, need re-close"
+                        else:
+                            status = f"⚠ broker ahead of DB by {diff}sh"
+                    else:
+                        status = f"⚠ DB ahead of broker by {ds - bs}sh"
+                    print(f"  {t:<8s}{bs:>8d}{ds:>10d}  {status}")
+
+                ib.disconnect()
+            except Exception as e:
+                print(f"[IB] failed: {e}")
+
+            print("\nDONE.")
+            PY
