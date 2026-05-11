@@ -15,5 +15,24 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SERVER_SSH_KEY }}
+          # Inject runtime secrets (Discord/Finnhub) into the server-side .env
+          # before deploy. server-deploy.sh restarts the bot service, which
+          # then loads the updated env. Keeps secrets out of git; rotation is
+          # a `gh secret set` away.
+          envs: DISCORD_WEBHOOK_URL,FINNHUB_API_KEY
           script: |
+            ENV_FILE=/opt/trading-bot/trading-bot/.env
+            touch "$ENV_FILE"
+            _upsert_env() {
+              local key="$1" val="$2"
+              if [ -z "$val" ]; then return 0; fi
+              grep -v "^${key}=" "$ENV_FILE" > "${ENV_FILE}.tmp" || true
+              echo "${key}=${val}" >> "${ENV_FILE}.tmp"
+              mv "${ENV_FILE}.tmp" "$ENV_FILE"
+            }
+            _upsert_env DISCORD_WEBHOOK_URL "$DISCORD_WEBHOOK_URL"
+            _upsert_env FINNHUB_API_KEY "$FINNHUB_API_KEY"
             /opt/trading-bot/trading-bot/scripts/server-deploy.sh
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
