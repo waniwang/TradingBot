@@ -332,6 +332,17 @@ class IBClient:
         return self._account_value("BuyingPower")
 
     def get_open_positions(self) -> list[dict]:
+        """Return all non-zero broker positions.
+
+        `qty` is SIGNED (positive=long, negative=short) — matches what
+        AlpacaClient.get_open_positions returns. Earlier versions called
+        abs(qty), which silently hid short positions from callers that did
+        qty math (`broker_by_ticker[t] = int(bp.get("qty"))`); this was the
+        bug that obscured the 2026-05-11 TTMI/WCC -182/-82 shorts in our
+        diagnostics. See memory/incident_2026_05_11_*.md.
+
+        `side` is kept for callers that prefer the string ("long"/"short").
+        """
         if not IB_AVAILABLE or not self._connected:
             return []
         try:
@@ -345,11 +356,10 @@ class IBClient:
             qty = float(p.position or 0)
             if qty == 0:
                 continue
-            side = "long" if qty > 0 else "short"
             out.append({
                 "symbol": p.contract.symbol,
-                "qty": abs(qty),
-                "side": side,
+                "qty": qty,                           # SIGNED — preserves shorts
+                "side": "long" if qty > 0 else "short",
                 "avg_entry_price": float(p.avgCost or 0),
                 # IB positions() doesn't include current price / unrealized pl —
                 # leave as 0; the API route pulls fresh prices via get_latest_bar().

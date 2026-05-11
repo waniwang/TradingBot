@@ -293,13 +293,20 @@ def job_eod_tasks_ib(config, client, tracker, db_engine, notify):
     return f"P&L: {sign}${daily.total_pnl:.2f}, {daily.num_trades} trades"
 
 
+# Per-session dedup of drift alerts so the 5-min loop doesn't spam Telegram.
+# Reset on process restart.
+_drift_alerted_ib: set[tuple[str, str]] = set()
+
+
 def job_reconcile_positions_ib(client, db_engine, notify):
     """
-    Every 5 min during market hours — detects when broker stop orders fill
-    without our knowledge. Same logic as main.py's job_reconcile_positions
-    (duplicated rather than imported to avoid pulling main.py's globals).
+    Every 5 min during market hours — detects:
+      1. broker stop fills the bot missed (same logic as main.py)
+      2. DB-vs-broker share-count drift (added 2026-05-11 after the
+         phantom-positions incident)
     """
     from db.models import Position
+    from core.reconcile import detect_discrepancies, format_telegram_alert
 
     if not client.is_market_open():
         return
@@ -349,6 +356,31 @@ def job_reconcile_positions_ib(client, db_engine, notify):
                 session.commit()
                 notify(f"RECONCILE ALERT: Stop for {pos.ticker} is {status}.\n"
                        f"Position may be UNPROTECTED. Check manually.")
+
+        # DB-vs-broker share-count drift check (added 2026-05-11). Mirrors
+        # main.py's Alpaca version. See core/reconcile.py.
+        open_after = session.query(Position).filter_by(is_open=True).all()
+        try:
+            broker_positions = client.get_open_positions()
+        except Exception as e:
+            logger.warning("IB reconcile drift check skipped — broker fetch failed: %s", e)
+            return
+
+        discrepancies = detect_discrepancies(open_after, broker_positions)
+        if not discrepancies:
+            return
+
+        for d in discrepancies:
+            logger.warning("RECONCILE DRIFT (IB): %s", d.summary())
+
+        new_alerts = [
+            d for d in discrepancies if (d.ticker, d.kind) not in _drift_alerted_ib
+        ]
+        if new_alerts:
+            msg = format_telegram_alert(new_alerts, "IB")
+            notify(msg)
+            for d in new_alerts:
+                _drift_alerted_ib.add((d.ticker, d.kind))
 
 
 def _reconcile_on_startup(client, db_engine, notify):

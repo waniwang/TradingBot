@@ -970,14 +970,24 @@ def _write_status():
 # Startup safety checks
 # ---------------------------------------------------------------------------
 
+# Tickers we've already Telegram-alerted on in this session for each discrepancy
+# kind, so the 5-min reconcile loop doesn't spam. Reset on process restart.
+_drift_alerted: set[tuple[str, str]] = set()
+
+
 def job_reconcile_positions(client, db_engine, notify):
     """
     Periodic reconciliation (every 5 min during market hours).
 
-    Detects when GTC stop orders fill at the broker without our knowledge.
-    The DB doesn't learn about broker stop fills unless we poll for them.
+    Two checks:
+      1. Stop-order fills the bot missed (broker filled a GTC stop while
+         the bot wasn't watching) — close the DB row to match.
+      2. DB-vs-broker share-count drift — phantom DB rows, broker excess,
+         or broker shorts where we expected longs. See
+         core/reconcile.py and the 2026-05-11 incident memory.
     """
     from db.models import Position
+    from core.reconcile import detect_discrepancies, format_telegram_alert
 
     if not client.is_market_open():
         return
@@ -1042,6 +1052,36 @@ def job_reconcile_positions(client, db_engine, notify):
                     f"RECONCILE ALERT: Stop for {pos.ticker} is {status} at broker.\n"
                     f"Position may be UNPROTECTED. Check manually."
                 )
+
+        # DB-vs-broker share-count drift check (added 2026-05-11 after the
+        # phantom-positions incident). Re-fetch the open positions list in
+        # case any rows above were just closed.
+        open_after = session.query(Position).filter_by(is_open=True).all()
+        try:
+            broker_positions = client.get_open_positions()
+        except Exception as e:
+            logger.warning("Reconcile drift check skipped — broker fetch failed: %s", e)
+            return
+
+        discrepancies = detect_discrepancies(open_after, broker_positions)
+        if not discrepancies:
+            return
+
+        # Always log every cycle
+        for d in discrepancies:
+            logger.warning("RECONCILE DRIFT: %s", d.summary())
+
+        # Telegram-alert only on first detection per (ticker, kind) per
+        # process lifetime. Operator sees the drift loudly once; the log
+        # captures the persistent state for forensic review.
+        new_alerts = [
+            d for d in discrepancies if (d.ticker, d.kind) not in _drift_alerted
+        ]
+        if new_alerts:
+            msg = format_telegram_alert(new_alerts, "Alpaca")
+            notify(msg)
+            for d in new_alerts:
+                _drift_alerted.add((d.ticker, d.kind))
 
 
 def _reconcile_on_startup(client, db_engine, notify):

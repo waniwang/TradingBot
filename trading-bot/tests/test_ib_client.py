@@ -385,3 +385,57 @@ class TestClosePositionBrokerPrecheck:
         client._connected = False
         with pytest.raises(RuntimeError, match="not connected"):
             client.close_position("AMD", 40, "long")
+
+
+# ---------------------------------------------------------------------------
+# get_open_positions sign preservation (fixed 2026-05-11)
+# ---------------------------------------------------------------------------
+
+
+class TestGetOpenPositionsSignedQty:
+    """Earlier versions returned abs(qty), hiding short positions from
+    callers that did int(p['qty']) arithmetic. Now qty is signed to match
+    AlpacaClient.get_open_positions and prevent the kind of misread that
+    obscured the 2026-05-11 TTMI/WCC -182/-82 shorts in our diagnostics.
+    """
+
+    def _build(self, positions: list[tuple[str, float]]) -> IBClient:
+        client = _make_client(connected=True)
+        fake = [
+            SimpleNamespace(
+                contract=SimpleNamespace(symbol=sym),
+                position=qty,
+                avgCost=100.0,
+            )
+            for sym, qty in positions
+        ]
+        client._ib.positions = MagicMock(return_value=fake)
+        return client
+
+    def test_long_position_qty_is_positive(self):
+        client = self._build([("AMD", 40)])
+        out = client.get_open_positions()
+        assert len(out) == 1
+        assert out[0]["qty"] == 40
+        assert out[0]["side"] == "long"
+
+    def test_short_position_qty_is_negative(self):
+        """The bug: was returning abs(qty)=182, masking the short."""
+        client = self._build([("TTMI", -182)])
+        out = client.get_open_positions()
+        assert len(out) == 1
+        assert out[0]["qty"] == -182        # signed!
+        assert out[0]["side"] == "short"
+
+    def test_zero_positions_excluded(self):
+        """Flat positions don't show up at all."""
+        client = self._build([("AMD", 40), ("WCC", 0)])
+        out = client.get_open_positions()
+        assert {p["symbol"] for p in out} == {"AMD"}
+
+    def test_mixed_long_and_short(self):
+        client = self._build([("AMD", 40), ("TTMI", -91)])
+        out = client.get_open_positions()
+        by_sym = {p["symbol"]: p for p in out}
+        assert by_sym["AMD"]["qty"] == 40
+        assert by_sym["TTMI"]["qty"] == -91

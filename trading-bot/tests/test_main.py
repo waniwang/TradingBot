@@ -375,6 +375,13 @@ class TestReconcilePositions:
         engine = init_db("sqlite:///:memory:")
         client = MagicMock()
         client.is_market_open.return_value = True
+        # Default: broker reports the AAPL keeper position fully in sync with
+        # DB. Tests that exercise the drift-detection path override this.
+        client.get_open_positions.return_value = [
+            {"symbol": "AAPL", "qty": 100, "side": "long",
+             "avg_entry_price": 100.0, "current_price": 100.0,
+             "unrealized_pl": 0.0, "market_value": 10000.0}
+        ]
         notify = MagicMock()
         return engine, client, notify
 
