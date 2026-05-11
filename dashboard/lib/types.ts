@@ -19,10 +19,10 @@ export interface Portfolio {
   daily_realized: number;
   daily_unrealized: number;
   unrealized_pnl_pct: number;
-  unrealized_avg_r: number;
+  unrealized_total_r: number;
   ytd_realized: number;
   ytd_realized_pct: number;
-  ytd_avg_r: number;
+  ytd_total_r: number;
   open_positions: number;
   // null when the position cap is disabled (max_positions=0 in config)
   max_positions: number | null;
@@ -388,8 +388,8 @@ export interface PerformanceSummary {
   avg_loss_dollars: number;
   /** Total unrealized P&L across currently-open positions, marked at current price. */
   unrealized_pnl: number;
-  /** Average R across currently-open positions (using current price as if-exit). */
-  unrealized_avg_r: number;
+  /** Sum of R across currently-open positions (using current price as if-exit). */
+  unrealized_total_r: number;
   /** Per-strategy breakdown. Key includes A/B/C suffix for EP variants
    *  (e.g. "EP Earnings A", "EP News B"). */
   strategy_breakdown: Record<
@@ -411,10 +411,10 @@ export interface StrategyStats {
   total_closed: number;
   win_rate: number;
   total_pnl: number;
-  realized_avg_r: number;
+  realized_total_r: number;
   realized_pnl_pct: number;
   unrealized_pnl: number;
-  unrealized_avg_r: number;
+  unrealized_total_r: number;
   unrealized_pnl_pct: number;
 }
 

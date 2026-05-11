@@ -37,7 +37,7 @@ export function PortfolioCards({ data }: { data: Portfolio | null }) {
         </CardHeader>
         <CardContent>
           <div className={`text-lg font-bold tabular-nums ${unrealizedColor}`}>
-            {formatR(data.unrealized_avg_r)}
+            {formatR(data.unrealized_total_r)}
           </div>
           <p className={`mt-0.5 text-[11px] tabular-nums ${unrealizedColor}`}>
             {formatCurrency(data.daily_unrealized, true)} ·{" "}
@@ -56,7 +56,7 @@ export function PortfolioCards({ data }: { data: Portfolio | null }) {
         </CardHeader>
         <CardContent>
           <div className={`text-lg font-bold tabular-nums ${ytdColor}`}>
-            {formatR(data.ytd_avg_r)}
+            {formatR(data.ytd_total_r)}
           </div>
           <p className={`mt-0.5 text-[11px] tabular-nums ${ytdColor}`}>
             {formatCurrency(data.ytd_realized, true)} ·{" "}

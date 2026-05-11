@@ -76,7 +76,7 @@ export function StrategyCard({ strategy }: { strategy: StrategyInfo }) {
                   stats.total_pnl >= 0 ? "text-profit" : "text-loss"
                 }`}
               >
-                {formatR(stats.realized_avg_r)}
+                {formatR(stats.realized_total_r)}
               </p>
               <p
                 className={`text-[10px] tabular-nums ${
@@ -93,7 +93,7 @@ export function StrategyCard({ strategy }: { strategy: StrategyInfo }) {
                   stats.unrealized_pnl >= 0 ? "text-profit" : "text-loss"
                 }`}
               >
-                {formatR(stats.unrealized_avg_r)}
+                {formatR(stats.unrealized_total_r)}
               </p>
               <p
                 className={`text-[10px] tabular-nums ${

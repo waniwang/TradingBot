@@ -93,7 +93,8 @@ def get_strategies():
                 if p.realized_pnl is not None
                 and (r := _position_r(p, p.realized_pnl)) is not None
             ]
-            realized_avg_r = round(sum(realized_rs) / len(realized_rs), 2) if realized_rs else 0.0
+            # Cumulative R (sum), matching how the $ figures are presented.
+            realized_total_r = round(sum(realized_rs), 2) if realized_rs else 0.0
             realized_pnl_pct = (total_pnl / portfolio_value * 100) if portfolio_value else 0.0
 
             # Unrealized stats (open positions, marked at current price)
@@ -113,7 +114,7 @@ def get_strategies():
                     r = _position_r(p, pnl)
                     if r is not None:
                         unrealized_rs.append(r)
-            unrealized_avg_r = round(sum(unrealized_rs) / len(unrealized_rs), 2) if unrealized_rs else 0.0
+            unrealized_total_r = round(sum(unrealized_rs), 2) if unrealized_rs else 0.0
             unrealized_pnl_pct = (unrealized_pnl / portfolio_value * 100) if portfolio_value else 0.0
             open_count = len(open_positions)
 
@@ -135,10 +136,10 @@ def get_strategies():
                     "total_closed": total_closed,
                     "win_rate": win_rate,
                     "total_pnl": round(total_pnl, 2),
-                    "realized_avg_r": realized_avg_r,
+                    "realized_total_r": realized_total_r,
                     "realized_pnl_pct": round(realized_pnl_pct, 2),
                     "unrealized_pnl": round(unrealized_pnl, 2),
-                    "unrealized_avg_r": unrealized_avg_r,
+                    "unrealized_total_r": unrealized_total_r,
                     "unrealized_pnl_pct": round(unrealized_pnl_pct, 2),
                 },
                 "last_run": last_run,

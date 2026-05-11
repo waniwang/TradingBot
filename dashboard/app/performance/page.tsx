@@ -91,7 +91,7 @@ function StatsCards({ summary }: { summary: PerformanceSummary }) {
     },
     {
       title: "Unrealized",
-      value: formatR(summary.unrealized_avg_r),
+      value: formatR(summary.unrealized_total_r),
       sub: formatDollars(summary.unrealized_pnl, true),
       color: summary.unrealized_pnl >= 0 ? "text-profit" : "text-loss",
     },

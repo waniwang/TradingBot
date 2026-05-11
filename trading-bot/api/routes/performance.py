@@ -103,7 +103,7 @@ _EMPTY_SUMMARY = {
     "avg_loss_r": 0.0,
     "avg_loss_dollars": 0.0,
     "unrealized_pnl": 0.0,
-    "unrealized_avg_r": 0.0,
+    "unrealized_total_r": 0.0,
     "strategy_breakdown": {},
 }
 
@@ -246,7 +246,8 @@ def get_performance_summary(days: int = 90):
             risk_per_share = abs(p.entry_price - p.initial_stop_price)
             if risk_per_share > 0 and p.shares > 0:
                 unrealized_rs.append(pnl / (risk_per_share * p.shares))
-    unrealized_avg_r = sum(unrealized_rs) / len(unrealized_rs) if unrealized_rs else 0.0
+    # Cumulative R across open positions, matching how total_r is summed.
+    unrealized_total_r = sum(unrealized_rs)
 
     return {
         "total_return_pct": round(total_return_pct, 2),
@@ -265,6 +266,6 @@ def get_performance_summary(days: int = 90):
         "avg_loss_r": round(avg_loss_r, 2),
         "avg_loss_dollars": round(avg_loss_dollars, 2),
         "unrealized_pnl": round(unrealized_pnl, 2),
-        "unrealized_avg_r": round(unrealized_avg_r, 2),
+        "unrealized_total_r": round(unrealized_total_r, 2),
         "strategy_breakdown": strategy_breakdown,
     }
