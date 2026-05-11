@@ -80,6 +80,20 @@ PIPELINE_SCHEDULE = [
         "display_day_offset": 0,
     },
     {
+        "job_id": "discord_candidate_summary",
+        "label": "Discord Candidate Summary",
+        "time": "15:10",
+        "category": "system",
+        "phase": "afternoon",
+        "description": (
+            "Reads today's EP earnings + EP news candidates from the watchlist, fetches a "
+            "catalyst headline per ticker (yfinance → Finnhub fallback), and posts a single "
+            "consolidated summary to Discord. Read-only on the trading DB and decoupled from "
+            "the 3:00/3:05 PM scan jobs — a Discord/news outage cannot affect trade execution."
+        ),
+        "display_day_offset": 0,
+    },
+    {
         "job_id": "ep_earnings_execute",
         "label": "EP Earnings Execute",
         "time": "15:37",
@@ -154,6 +168,7 @@ JOB_OWNERS: dict[str, frozenset[str] | None] = {
     "ep_news_scan": frozenset({"ep_news"}),
     "ep_earnings_execute": frozenset({"ep_earnings"}),
     "ep_news_execute": frozenset({"ep_news"}),
+    "discord_candidate_summary": frozenset({"ep_earnings", "ep_news"}),
     "eod_tasks": None,
     "reconcile_positions": None,
     "heartbeat": None,

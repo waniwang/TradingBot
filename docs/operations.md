@@ -165,6 +165,13 @@ The bot runs scheduled jobs (all times Eastern):
 - Check logs for "Telegram send failed" warnings
 - Test with @BotFather: send `/start` to your bot
 
+**Discord candidate summary (3:10 PM ET) not arriving:**
+- Verify `DISCORD_WEBHOOK_URL` env var is set (or `discord.webhook_url` in `config.yaml`)
+- Empty/unset = no-op (logs "[Discord stub]" instead of posting). Create a webhook in Discord under Server Settings → Integrations → Webhooks → New Webhook → Copy URL
+- Catalyst headlines come from yfinance first, then Finnhub fallback. Set `FINNHUB_API_KEY` env var (or `news.finnhub_api_key` in config) to enable the fallback. Sign up free at https://finnhub.io
+- Check logs for "Discord webhook returned ..." or "yfinance/Finnhub news error" warnings
+- Job runs read-only on the trading DB and is fully isolated from the trade path: a Discord/yfinance/Finnhub failure cannot affect 3:50 PM EP execution. Telegram still gets a "JOB FAILED: Discord Candidate Summary" alert if the job itself errors out
+
 **Unprotected position alert on startup:**
 - The bot detected an open position with no broker stop order
 - This can happen if the bot crashed between placing an entry and placing the stop

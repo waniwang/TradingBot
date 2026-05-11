@@ -81,6 +81,10 @@ def load_config(path: str = "config.yaml") -> dict:
         cfg["telegram"]["bot_token"] = os.environ["TELEGRAM_BOT_TOKEN"]
     if os.environ.get("TELEGRAM_CHAT_ID"):
         cfg["telegram"]["chat_id"] = os.environ["TELEGRAM_CHAT_ID"]
+    if os.environ.get("DISCORD_WEBHOOK_URL"):
+        cfg.setdefault("discord", {})["webhook_url"] = os.environ["DISCORD_WEBHOOK_URL"]
+    if os.environ.get("FINNHUB_API_KEY"):
+        cfg.setdefault("news", {})["finnhub_api_key"] = os.environ["FINNHUB_API_KEY"]
 
     # Merge per-strategy config.yaml files into cfg["strategies"]
     strategies_dir = Path(__file__).parent / "strategies"
@@ -700,6 +704,91 @@ def job_eod_tasks(
     return f"P&L: {sign}${daily.total_pnl:.2f}, {daily.num_trades} trades"
 
 
+def job_discord_candidate_summary(
+    config: dict,
+    client: AlpacaClient,
+    db_engine,
+    notify_discord,
+):
+    """3:10 PM ET — read today's EP candidates and post a summary to Discord.
+
+    Decoupled from the 3:00/3:05 PM scan jobs by design. Read-only on the
+    trading DB. Per CLAUDE.md isolation guarantees: zero broker API calls,
+    hard 5s per-source HTTP timeout (yfinance/Finnhub/Discord), 60s
+    job-level wall-clock cap. A Discord/news/webhook failure cannot delay
+    or break trade execution.
+
+    On failure, _track_job alerts via Telegram with label
+    'Discord Candidate Summary' so the operator can immediately see it
+    is a notification job, not a trade-path job.
+    """
+    if not is_trading_day(client):
+        logger.info("Discord candidate summary skipped — not a trading day")
+        return "Skipped — not a trading day"
+
+    today = datetime.now(ET).date()
+    # Include the last 5 calendar days so yesterday's still-watching C
+    # candidates show up alongside today's new ready/watching rows. C
+    # candidates from yesterday's scan have scan_date=yesterday and don't
+    # flip until 3:35 PM today (after this 3:10 PM job). The 5-day floor
+    # guards against any accidentally-stale rows lingering past day-2
+    # confirm (see incident_2026_04_30_stale_watchlist_rows).
+    scan_date_floor = today - timedelta(days=5)
+
+    from db.models import Watchlist
+    with get_session(db_engine) as session:
+        rows = (
+            session.query(Watchlist)
+            .filter(
+                Watchlist.scan_date >= scan_date_floor,
+                Watchlist.stage.in_(["ready", "watching"]),
+                Watchlist.setup_type.in_(["ep_earnings", "ep_news"]),
+            )
+            .all()
+        )
+        candidates = [
+            {
+                "ticker": r.ticker,
+                "setup_type": r.setup_type,
+                "stage": r.stage,
+                "meta": r.meta,
+            }
+            for r in rows
+        ]
+
+    from core.discord import format_candidate_summary
+
+    if not candidates:
+        notify_discord(format_candidate_summary([]))
+        return "0 candidates"
+
+    finnhub_key = (
+        (config.get("news") or {}).get("finnhub_api_key")
+        or os.environ.get("FINNHUB_API_KEY", "")
+    )
+
+    from core.news import fetch_headline
+
+    JOB_TIMEOUT_SEC = 60.0
+    started = time.monotonic()
+    enriched: list[dict] = []
+    for c in candidates:
+        if time.monotonic() - started > JOB_TIMEOUT_SEC:
+            logger.warning(
+                "discord_candidate_summary: 60s wall-clock cap hit at %s; "
+                "remaining tickers will get no headline",
+                c["ticker"],
+            )
+            c["headline"] = None
+        else:
+            c["headline"] = fetch_headline(c["ticker"], finnhub_key=finnhub_key)
+        enriched.append(c)
+
+    msg = format_candidate_summary(enriched)
+    notify_discord(msg)
+    return f"{len(enriched)} candidates posted to Discord"
+
+
 def job_nightly_watchlist_scan(config: dict, client: AlpacaClient, db_engine, notify, force: bool = False):
     """5:00 PM ET — run heavy breakout watchlist scan and persist to DB."""
     if not force and not is_trading_day(client):
@@ -790,6 +879,7 @@ JOB_LABELS = {
     "ep_earnings_execute": "EP Earnings Execute",
     "ep_news_scan": "EP News Scan",
     "ep_news_execute": "EP News Execute",
+    "discord_candidate_summary": "Discord Candidate Summary",
 }
 
 
@@ -1211,6 +1301,13 @@ def main():
     # Notifier (constructed first so AlpacaClient can use it for stream alerts)
     notify = make_notifier(config)
 
+    # Discord notifier — used only by the 3:10 PM candidate-summary job. A
+    # missing webhook URL returns a no-op stub (safe for local dev). See
+    # core/discord.py for the isolation guarantees.
+    from core.discord import make_discord_notifier
+    discord_webhook_url = (config.get("discord") or {}).get("webhook_url", "")
+    notify_discord = make_discord_notifier(discord_webhook_url)
+
     # Broker
     client = AlpacaClient(config, notify)
     client.connect()
@@ -1299,6 +1396,26 @@ def main():
         id="eod_tasks",
         replace_existing=True,
     )
+
+    # Discord candidate summary at 3:10 PM ET — read-only notification job.
+    # Decoupled from the 3:00/3:05 PM scan jobs so a Discord/news outage
+    # cannot affect trade execution. See core/discord.py + core/news.py.
+    # Only register if at least one EP strategy is enabled (otherwise the
+    # job has nothing to summarize). Keep this owner set in sync with
+    # api/constants.py::JOB_OWNERS["discord_candidate_summary"].
+    ep_owners = {"ep_earnings", "ep_news"}
+    if set(plugins.keys()) & ep_owners:
+        scheduler.add_job(
+            _tracked,
+            CronTrigger(hour=15, minute=10, day_of_week="mon-fri", timezone=ET),
+            args=[
+                "discord_candidate_summary",
+                job_discord_candidate_summary,
+                config, client, db_engine, notify_discord,
+            ],
+            id="discord_candidate_summary",
+            replace_existing=True,
+        )
 
     # Reconcile broker positions every 5 min during market hours only
     scheduler.add_job(

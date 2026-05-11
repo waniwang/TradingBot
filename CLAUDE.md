@@ -60,7 +60,7 @@ Strategy Scanners (premarket)     Strategy Signals (market open)    Monitor (int
 
 **Data sources:** Alpaca snapshots for gap scanning (IEX daily-snapshot coverage is ~99.7% — the "~2%" figure applies only to realtime intraday trade streams), yfinance for fundamentals (market cap, quoteType, earnings calendar), Alpaca 1m candles for intraday signals. Full Alpaca capability + quirks cheat sheet: [docs/alpaca-api.md](docs/alpaca-api.md).
 
-**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 9:25 AM finalize watchlist → 9:30 AM–4:00 PM intraday monitor (long-running window driven by the Alpaca 1-min bar stream registered at 9:25) → 3:00 PM EP earnings scan + strategy eval → 3:05 PM EP news scan + strategy eval → 3:50–3:59 PM EP earnings/news execute (retries every minute, idempotent) → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
+**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 9:25 AM finalize watchlist → 9:30 AM–4:00 PM intraday monitor (long-running window driven by the Alpaca 1-min bar stream registered at 9:25) → 3:00 PM EP earnings scan + strategy eval → 3:05 PM EP news scan + strategy eval → 3:10 PM Discord candidate summary (read-only, decoupled from scans — see `core/discord.py`) → 3:50–3:59 PM EP earnings/news execute (retries every minute, idempotent) → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
 
 Pipeline job metadata (descriptions, categories, `time`/`end_time` window, phase) lives exclusively in `api/constants.py::PIPELINE_SCHEDULE`. Edit entries there to change what the dashboard Pipeline page displays. `end_time` is set on jobs that run as a window (intraday monitor, execute retry loops); omit it for point-in-time jobs.
 
@@ -98,6 +98,8 @@ On every push to `main`, `.github/workflows/deploy.yml` SSHs into the Linode ser
 | `core/scheduler.py` | `register_strategy_jobs()` — registers each plugin's scheduled jobs; supports `skip_jobs=` to opt out of named job_ids (used by `main_ib.py` to skip scan jobs) |
 | `executor/watchlist_source.py` | `read_ready_entries()` — IB passive executor reads ready/triggered Watchlist rows from the Alpaca DB across processes (no scanning in IB bot) |
 | `core/alerts.py` | `notify_job_failure()` — shared Telegram "JOB FAILED" sender with escalation on notify failure; invoked by both job wrappers |
+| `core/discord.py` | `make_discord_notifier()`, `format_candidate_summary()` — Discord webhook transport + 3:10 PM candidate-summary formatter (no A/B/C tags, with catalyst headline). Hard 5s POST timeout. No-op when `discord.webhook_url` is unset |
+| `core/news.py` | `fetch_headline()` — yfinance → Finnhub fallback for catalyst headlines. Hard 5s per-source timeout, partial-failure-in-batch (returns `None` rather than raising). Used only by `job_discord_candidate_summary` |
 | `core/data_cache.py` | Shared data cache for cross-strategy data reuse |
 | `scanner/watchlist_manager.py` | `persist_candidates()`, `get_active_watchlist()`, `run_nightly_scan()`, `expire_stale_active()` — DB-backed watchlist lifecycle |
 | `signals/base.py` | `compute_orh()`, `compute_orb_low()`, `compute_vwap()`, `compute_sma()`, `compute_atr_from_list()`, `SignalResult` |

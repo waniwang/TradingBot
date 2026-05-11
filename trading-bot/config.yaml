@@ -117,6 +117,18 @@ telegram:
   bot_token: YOUR_TELEGRAM_BOT_TOKEN
   chat_id: YOUR_TELEGRAM_CHAT_ID   # single ID or comma-separated list (e.g. "111,222") to fan out
 
+discord:
+  # Webhook URL for the daily 3:10 PM ET EP candidate summary. Empty = no-op
+  # (safe default). Create one in Discord: Server Settings → Integrations →
+  # Webhooks → New Webhook → Copy URL. Override via DISCORD_WEBHOOK_URL env.
+  webhook_url: ""
+
+news:
+  # Finnhub free-tier API key (60 req/min). Used as the fallback news source
+  # when yfinance returns no headline for a ticker. Empty = yfinance only.
+  # Sign up at https://finnhub.io. Override via FINNHUB_API_KEY env.
+  finnhub_api_key: ""
+
 universe:
   min_price: 5.0
   min_avg_volume: 100000
