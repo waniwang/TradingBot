@@ -1,0 +1,66 @@
+name: One-shot — simple TTMI/WCC verify + AMD/FTAI quick look
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Simple check via existing IBClient.get_open_positions only
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          command_timeout: 2m
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            timeout 60 .venv/bin/python <<'PY'
+            """Minimal check: get_open_positions only (we know it works).
+            Just enumerate broker tickers + counts and check our targets."""
+            import os, sys
+            from pathlib import Path
+            ROOT = Path("/opt/trading-bot/trading-bot")
+            sys.path.insert(0, str(ROOT))
+            from executor.ib_client import IBClient
+            import yaml
+            with open("config.yaml") as f:
+                cfg = yaml.safe_load(f) or {}
+            ib = IBClient({"ibkr": {
+                "host": cfg.get("ibkr", {}).get("host", "127.0.0.1"),
+                "port": cfg.get("ibkr", {}).get("port", 4002),
+                "client_id": 99,
+            }})
+            ib.connect()
+            print("[IB] connected")
+
+            broker = ib.get_open_positions()
+            by_sym = {p.get("symbol") or p.get("ticker"): p for p in broker}
+            print(f"Broker positions: {len(broker)} tickers\n")
+
+            print("== TTMI/WCC closure check ==")
+            for t in ["TTMI", "WCC"]:
+                if t in by_sym:
+                    print(f"  {t}: ⚠ still {by_sym[t].get('qty', '?')}sh at broker")
+                else:
+                    print(f"  {t}: ✓ closed (not in broker positions)")
+
+            print("\n== AMD/FTAI/KFRC/TXN/URI check ==")
+            for t in ["AMD", "FTAI", "KFRC", "TXN", "URI"]:
+                if t in by_sym:
+                    print(f"  {t}: ✓ found at broker, qty={by_sym[t].get('qty')}, "
+                          f"avg=${by_sym[t].get('avg_entry_price', 0):.2f}")
+                else:
+                    print(f"  {t}: ⚠ NOT in broker positions")
+
+            print("\n== Full broker position list ==")
+            for sym, p in sorted(by_sym.items()):
+                print(f"  {sym:<8s} {int(p.get('qty', 0)):>5d}sh @ ${p.get('avg_entry_price', 0):.2f}")
+
+            ib.disconnect()
+            print("DONE.")
+            PY
