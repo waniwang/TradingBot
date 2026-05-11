@@ -33,7 +33,7 @@ jobs:
             ib = IBClient({"ibkr": {
                 "host": cfg.get("ibkr", {}).get("host", "127.0.0.1"),
                 "port": cfg.get("ibkr", {}).get("port", 4002),
-                "client_id": 95,
+                "client_id": 93,
             }})
             ib.connect()
             print("[IB] connected")
