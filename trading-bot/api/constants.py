@@ -163,11 +163,11 @@ JOB_OWNERS: dict[str, frozenset[str] | None] = {
 STRATEGY_META = {
     "ep_earnings": {
         "display_name": "EP Earnings Swing",
-        "description": "Long swing setup on earnings-driven gap-ups. Evaluates Strategy A (tight), B (relaxed), and C (day-2 confirmation).",
+        "description": "Long swing setup on earnings-driven gap-ups. Strategy B (relaxed ATR-bounded entries) — A and C variants dropped 2026-05-08 after corrected-data re-validation.",
     },
     "ep_news": {
         "display_name": "EP News Swing",
-        "description": "Long swing setup on news-driven gap-ups (non-earnings). Uses the same A/B/C framework with news catalysts.",
+        "description": "Long swing setup on news-driven gap-ups (non-earnings). Strategy A (tight) and B (relaxed) — C variant dropped 2026-05-08.",
     },
     "breakout": {
         "display_name": "Breakout",
