@@ -1,0 +1,146 @@
+name: One-shot — IB read-only forensics (trades + executions)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  forensics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read-only IB audit
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          command_timeout: 3m
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            timeout 120 .venv/bin/python <<'PY'
+            """Read-only forensics — never places orders.
+
+            For each target ticker, show:
+            - Current broker position
+            - All trades in this session (ib_async Trade objects)
+            - All fills/executions (with date, side, qty, price)
+            - All open orders
+
+            Targets: TTMI/WCC (suspected dupes), AMD/FTAI/KFRC/TXN/URI
+            (suspected phantom DB rows).
+            """
+            import os, sys
+            from pathlib import Path
+            from datetime import datetime
+            ROOT = Path("/opt/trading-bot/trading-bot")
+            sys.path.insert(0, str(ROOT))
+            from executor.ib_client import IBClient
+            import yaml
+            with open("config.yaml") as f:
+                cfg = yaml.safe_load(f) or {}
+            ib = IBClient({"ibkr": {
+                "host": cfg.get("ibkr", {}).get("host", "127.0.0.1"),
+                "port": cfg.get("ibkr", {}).get("port", 4002),
+                "client_id": 97,
+            }})
+            ib.connect()
+            print("[IB] connected (client_id=97)\n")
+
+            inner = ib._ib
+
+            TARGETS = ["TTMI", "WCC", "AMD", "FTAI", "KFRC", "TXN", "URI",
+                       "ARRY", "EZPW", "DGII"]
+
+            # 1) Current positions
+            print("=" * 70)
+            print("1) Current broker positions for targets")
+            print("=" * 70)
+            broker_pos = inner.positions()
+            by_sym = {p.contract.symbol: p for p in broker_pos
+                      if (p.position or 0) != 0}
+            for t in TARGETS:
+                if t in by_sym:
+                    p = by_sym[t]
+                    print(f"  {t}: {int(p.position)}sh @ avg ${p.avgCost:.2f} "
+                          f"(account={p.account})")
+                else:
+                    print(f"  {t}: not at broker")
+
+            # 2) All open orders for targets (so user knows what's queued)
+            print("\n" + "=" * 70)
+            print("2) Open orders at broker for targets")
+            print("=" * 70)
+            open_trades = inner.openTrades()
+            target_open = [t for t in open_trades if t.contract.symbol in TARGETS]
+            if not target_open:
+                print("  (none)")
+            for t in target_open:
+                o = t.order
+                st = t.orderStatus
+                print(f"  {t.contract.symbol:6s} orderId={o.orderId} "
+                      f"action={o.action} type={o.orderType} qty={o.totalQuantity} "
+                      f"aux={o.auxPrice} status={st.status} "
+                      f"filled={st.filled} remaining={st.remaining}")
+
+            # 3) All trades (closed + open) tracked this session
+            print("\n" + "=" * 70)
+            print("3) All trades known to ib_async this session (filtered to targets)")
+            print("=" * 70)
+            all_trades = inner.trades()
+            target_trades = [t for t in all_trades if t.contract.symbol in TARGETS]
+            for t in target_trades:
+                o = t.order
+                st = t.orderStatus
+                fills = t.fills
+                fill_info = ""
+                if fills:
+                    f0 = fills[0]
+                    fill_info = (f" filled {f0.execution.shares}@${f0.execution.price:.2f} "
+                                 f"at {f0.time.strftime('%Y-%m-%d %H:%M:%S') if f0.time else '?'}")
+                print(f"  {t.contract.symbol:6s} orderId={o.orderId} {o.action:4s} "
+                      f"{o.orderType:6s} qty={o.totalQuantity:>4} "
+                      f"status={st.status:18s}{fill_info}")
+
+            # 4) Fills (more detailed than trades — show every execution)
+            print("\n" + "=" * 70)
+            print("4) Recent fills (executions) for targets")
+            print("=" * 70)
+            try:
+                fills = inner.fills()
+                target_fills = [f for f in fills
+                                if f.contract.symbol in TARGETS]
+                if not target_fills:
+                    print("  (no fills in current session)")
+                for f in target_fills:
+                    ex = f.execution
+                    when = ex.time.strftime('%Y-%m-%d %H:%M:%S') if ex.time else '?'
+                    print(f"  {f.contract.symbol:6s} {when} "
+                          f"{ex.side:4s} qty={ex.shares} @ ${ex.price:.2f} "
+                          f"orderId={ex.orderId} execId={ex.execId[:12]}...")
+            except Exception as e:
+                print(f"  fills() failed: {e}")
+
+            # 5) Account context
+            print("\n" + "=" * 70)
+            print("5) Account context")
+            print("=" * 70)
+            try:
+                accounts = inner.managedAccounts()
+                print(f"  managedAccounts: {accounts}")
+            except Exception as e:
+                print(f"  managedAccounts failed: {e}")
+
+            try:
+                av = inner.accountValues()
+                for tag in ("NetLiquidation", "GrossPositionValue", "BuyingPower"):
+                    for v in av:
+                        if v.tag == tag and v.currency in ("USD", ""):
+                            print(f"  {tag:<22s} acct={v.account} = {v.value}")
+            except Exception as e:
+                print(f"  accountValues failed: {e}")
+
+            ib.disconnect()
+            print("\nDONE.")
+            PY
