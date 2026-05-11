@@ -30,6 +30,21 @@ PIPELINE_SCHEDULE = [
         "display_day_offset": 0,
     },
     {
+        "job_id": "premarket_ep_preview",
+        "label": "Pre-Market EP Preview",
+        "time": "08:30",
+        "category": "system",
+        "phase": "premarket",
+        "description": (
+            "Pre-market gap scan (>=5%, mcap >=$800M, prev close >=$3) using Alpaca "
+            "latest-trade snapshots. Classifies each top gapper as earnings vs news via "
+            "yfinance, fetches a catalyst headline, and posts a single Discord summary "
+            "(top 10). Informational only — read-only on the trading DB, decoupled from "
+            "the 3:00/3:05 PM scan jobs that drive actual execution."
+        ),
+        "display_day_offset": 0,
+    },
+    {
         "job_id": "subscribe_watchlist",
         "label": "Subscribe Watchlist",
         "time": "09:25",
@@ -169,6 +184,7 @@ JOB_OWNERS: dict[str, frozenset[str] | None] = {
     "ep_earnings_execute": frozenset({"ep_earnings"}),
     "ep_news_execute": frozenset({"ep_news"}),
     "discord_candidate_summary": frozenset({"ep_earnings", "ep_news"}),
+    "premarket_ep_preview": frozenset({"ep_earnings", "ep_news"}),
     "eod_tasks": None,
     "reconcile_positions": None,
     "heartbeat": None,

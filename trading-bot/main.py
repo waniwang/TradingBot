@@ -789,6 +789,79 @@ def job_discord_candidate_summary(
     return f"{len(enriched)} candidates posted to Discord"
 
 
+def job_premarket_ep_preview(
+    config: dict,
+    client: AlpacaClient,
+    db_engine,
+    notify_discord,
+):
+    """8:30 AM ET — pre-market preview of top gappers for Discord.
+
+    Informational only. Sibling to `job_discord_candidate_summary`
+    (3:10 PM) with identical isolation guarantees: own APScheduler
+    thread, hard HTTP timeouts (via core/news.py + core/discord.py),
+    60s job-level wall-clock cap, **zero writes to Watchlist or any
+    trade-related table**, no broker API except read-only Alpaca
+    snapshots. The 3:00/3:05 PM scan jobs and 3:50 PM executor are
+    mathematically unaffected — they only read Watchlist rows that
+    this job never persists.
+
+    Pre-market data source: Alpaca `latest_trade.price` (works
+    pre-market, unlike `daily_bar.open` which is None before 9:30).
+    Gap formula: (latest_trade - prev_close) / prev_close.
+    """
+    if not is_trading_day(client):
+        logger.info("Pre-market EP preview skipped — not a trading day")
+        return "Skipped — not a trading day"
+
+    from core.premarket_preview import (
+        enrich_candidates,
+        format_premarket_preview,
+        scan_premarket_gappers,
+    )
+    from core.news import fetch_headline
+
+    raw = scan_premarket_gappers(
+        client,
+        min_gap_pct=5.0,
+        min_prev_close=3.0,
+        pre_filter_top_n=30,
+    )
+    logger.info("Pre-market preview: %d raw gappers (gap >= 5%%)", len(raw))
+
+    candidates = enrich_candidates(
+        raw, min_mcap=800_000_000, target_count=10,
+    )
+    logger.info(
+        "Pre-market preview: %d after mcap >= $800M + earnings classification",
+        len(candidates),
+    )
+
+    finnhub_key = (
+        (config.get("news") or {}).get("finnhub_api_key")
+        or os.environ.get("FINNHUB_API_KEY", "")
+    )
+
+    JOB_TIMEOUT_SEC = 60.0
+    started = time.monotonic()
+    for c in candidates:
+        if time.monotonic() - started > JOB_TIMEOUT_SEC:
+            logger.warning(
+                "premarket_ep_preview: 60s wall-clock cap hit at %s; "
+                "remaining tickers will get no headline",
+                c["ticker"],
+            )
+            c["headline"] = None
+        else:
+            c["headline"] = fetch_headline(
+                c["ticker"], finnhub_key=finnhub_key,
+            )
+
+    msg = format_premarket_preview(candidates)
+    notify_discord(msg)
+    return f"{len(candidates)} candidates posted to Discord"
+
+
 def job_nightly_watchlist_scan(config: dict, client: AlpacaClient, db_engine, notify, force: bool = False):
     """5:00 PM ET — run heavy breakout watchlist scan and persist to DB."""
     if not force and not is_trading_day(client):
@@ -880,6 +953,7 @@ JOB_LABELS = {
     "ep_news_scan": "EP News Scan",
     "ep_news_execute": "EP News Execute",
     "discord_candidate_summary": "Discord Candidate Summary",
+    "premarket_ep_preview": "Pre-Market EP Preview",
 }
 
 
@@ -1397,14 +1471,26 @@ def main():
         replace_existing=True,
     )
 
-    # Discord candidate summary at 3:10 PM ET — read-only notification job.
-    # Decoupled from the 3:00/3:05 PM scan jobs so a Discord/news outage
-    # cannot affect trade execution. See core/discord.py + core/news.py.
-    # Only register if at least one EP strategy is enabled (otherwise the
-    # job has nothing to summarize). Keep this owner set in sync with
-    # api/constants.py::JOB_OWNERS["discord_candidate_summary"].
+    # Discord notification jobs at 8:30 AM (pre-market preview) and 3:10 PM
+    # (candidate summary). Both read-only, decoupled from trade-path jobs.
+    # See core/discord.py, core/news.py, core/premarket_preview.py.
+    # Only register if at least one EP strategy is enabled (otherwise these
+    # jobs have nothing to summarize). Keep this owner set in sync with
+    # api/constants.py::JOB_OWNERS (discord_candidate_summary,
+    # premarket_ep_preview).
     ep_owners = {"ep_earnings", "ep_news"}
     if set(plugins.keys()) & ep_owners:
+        scheduler.add_job(
+            _tracked,
+            CronTrigger(hour=8, minute=30, day_of_week="mon-fri", timezone=ET),
+            args=[
+                "premarket_ep_preview",
+                job_premarket_ep_preview,
+                config, client, db_engine, notify_discord,
+            ],
+            id="premarket_ep_preview",
+            replace_existing=True,
+        )
         scheduler.add_job(
             _tracked,
             CronTrigger(hour=15, minute=10, day_of_week="mon-fri", timezone=ET),
