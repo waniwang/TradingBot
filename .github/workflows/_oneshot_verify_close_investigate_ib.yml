@@ -1,0 +1,163 @@
+name: One-shot — verify TTMI/WCC closed + investigate IB missing positions
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify_investigate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm TTMI/WCC + deep IB account investigation
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            set -a && source .env && set +a
+            .venv/bin/python <<'PY'
+            """
+            Two checks:
+
+            A) Verify TTMI and WCC closes filled (broker now shows 0sh).
+               Also report what stop orders remain on those tickers.
+
+            B) Deep IB diagnostic to explain AMD/FTAI/KFRC/TXN/URI showing
+               broker=0 even though DB says open. Try multiple ib_async
+               methods: positions(), portfolio(), accountValues(). Try
+               different account_id selectors if IB has multiple accounts
+               on the same login. Dump raw Position objects to see what
+               fields exist.
+            """
+            import os, sys
+            from pathlib import Path
+            ROOT = Path("/opt/trading-bot/trading-bot")
+            sys.path.insert(0, str(ROOT))
+
+            from executor.ib_client import IBClient
+            import yaml
+            with open("config.yaml") as f:
+                cfg = yaml.safe_load(f) or {}
+
+            ib_cfg = {"ibkr": {
+                "host": cfg.get("ibkr", {}).get("host", "127.0.0.1"),
+                "port": cfg.get("ibkr", {}).get("port", 4002),
+                "client_id": 99,
+            }}
+            ib = IBClient(ib_cfg)
+            ib.connect()
+            print("[IB] connected with client_id=99\n")
+
+            # Access the underlying ib_async object for richer queries
+            inner = ib._ib
+
+            # ─── A: verify TTMI / WCC ───
+            print("=" * 70)
+            print("A) TTMI/WCC close confirmation")
+            print("=" * 70)
+            broker_pos = inner.positions()
+            for target in ["TTMI", "WCC"]:
+                found = [p for p in broker_pos
+                         if p.contract.symbol == target and (p.position or 0) != 0]
+                if not found:
+                    print(f"  {target}: ✓ no shares at broker (close filled)")
+                else:
+                    for p in found:
+                        print(f"  {target}: ⚠ still has {p.position}sh at broker")
+
+            # Also report any pending orders on those tickers (stops to cancel)
+            print("\n  Open orders on TTMI/WCC at IB:")
+            open_trades = inner.openTrades()
+            for t in open_trades:
+                sym = t.contract.symbol
+                if sym in ("TTMI", "WCC"):
+                    o = t.order
+                    print(f"    {sym}: orderId={o.orderId} type={o.orderType} "
+                          f"action={o.action} qty={o.totalQuantity} "
+                          f"aux={o.auxPrice} status={t.orderStatus.status}")
+
+            # ─── B: deep IB diagnostic for "missing" tickers ───
+            print()
+            print("=" * 70)
+            print("B) Investigate AMD/FTAI/KFRC/TXN/URI broker=0 finding")
+            print("=" * 70)
+
+            # 1. Show ALL connected accounts
+            print("\n  Connected accounts:")
+            try:
+                accounts = inner.managedAccounts()
+                print(f"    {accounts}")
+            except Exception as e:
+                print(f"    managedAccounts failed: {e}")
+
+            # 2. Show raw positions() vs portfolio()
+            print("\n  Method comparison: positions() vs portfolio()")
+            pos_list = inner.positions()
+            try:
+                port_list = inner.portfolio()
+            except Exception as e:
+                port_list = []
+                print(f"  portfolio() failed: {e}")
+
+            pos_syms = {p.contract.symbol for p in pos_list if (p.position or 0) != 0}
+            port_syms = {p.contract.symbol for p in port_list if (p.position or 0) != 0}
+            print(f"    positions() returned {len(pos_syms)} non-zero symbols")
+            print(f"    portfolio() returned {len(port_syms)} non-zero symbols")
+            only_in_port = port_syms - pos_syms
+            only_in_pos = pos_syms - port_syms
+            if only_in_port:
+                print(f"    Only in portfolio(): {sorted(only_in_port)}")
+            if only_in_pos:
+                print(f"    Only in positions(): {sorted(only_in_pos)}")
+
+            # 3. For each "missing" ticker, look it up explicitly
+            print("\n  Per-ticker lookup (positions() and portfolio()):")
+            MISSING = ["AMD", "FTAI", "KFRC", "TXN", "URI"]
+            for sym in MISSING:
+                from_pos = [p for p in pos_list
+                            if p.contract.symbol == sym and (p.position or 0) != 0]
+                from_port = [p for p in port_list
+                             if p.contract.symbol == sym and (p.position or 0) != 0]
+                print(f"    {sym}: positions()={len(from_pos)}, portfolio()={len(from_port)}")
+                for p in from_pos + from_port:
+                    print(f"       acct={p.account if hasattr(p, 'account') else '?'} "
+                          f"qty={p.position} avgCost={p.avgCost}")
+
+            # 4. Account values for context
+            print("\n  Account values (selected):")
+            try:
+                av = inner.accountValues()
+                interesting_tags = (
+                    "NetLiquidation", "TotalCashValue", "BuyingPower",
+                    "GrossPositionValue", "EquityWithLoanValue",
+                )
+                for tag in interesting_tags:
+                    matches = [v for v in av if v.tag == tag and v.currency in ("USD", "")]
+                    for m in matches:
+                        print(f"    {m.tag:<25s} acct={m.account} value={m.value}")
+            except Exception as e:
+                print(f"    accountValues failed: {e}")
+
+            # 5. As a sanity check, also try to find ANY mention of AMD via reqPositions
+            #    (ib_async caches positions on connect, so re-requesting helps confirm)
+            print("\n  Forced refresh: ib_async.reqPositions() then re-list")
+            try:
+                inner.reqPositions()
+                import time
+                time.sleep(2.0)
+                refreshed = inner.positions()
+                refreshed_amd = [p for p in refreshed
+                                 if p.contract.symbol == "AMD" and (p.position or 0) != 0]
+                refreshed_ftai = [p for p in refreshed
+                                  if p.contract.symbol == "FTAI" and (p.position or 0) != 0]
+                print(f"    after reqPositions: AMD count={len(refreshed_amd)}, "
+                      f"FTAI count={len(refreshed_ftai)}")
+            except Exception as e:
+                print(f"    reqPositions failed: {e}")
+
+            ib.disconnect()
+            print("\nDONE.")
+            PY
