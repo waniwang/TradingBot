@@ -582,7 +582,13 @@ def _validate_signal(ticker: str, sig) -> bool:
 
 # SETUP_LABELS and the strategy-breakdown helper now live in core/eod.py so
 # the IB bot can reuse them and produce the same EOD summary shape.
-from core.eod import SETUP_LABELS as _SETUP_LABELS, compute_eod_strategy_breakdown as _eod_strategy_breakdown  # noqa: F401, E402
+from core.eod import (  # noqa: F401, E402
+    SETUP_LABELS as _SETUP_LABELS,
+    compute_eod_strategy_breakdown as _eod_strategy_breakdown,
+    compute_eod_r_totals as _eod_r_totals,
+    fmt_r_signed as _fmt_r,
+    fmt_dollar_signed as _fmt_dollar,
+)
 
 
 # Map Alpaca's order status vocabulary to our DB enum's allowed values.
@@ -677,12 +683,19 @@ def job_eod_tasks(
         daily.trade_date, db_engine
     )
 
-    sign = "+" if daily.total_pnl >= 0 else ""
+    # R-multiple totals (risk-normalized P&L). Same convention as the
+    # dashboard's performance/portfolio routes: R = pnl / (|entry-stop| * shares).
+    realized_r, unrealized_r = _eod_r_totals(
+        daily.trade_date, db_engine, current_prices=current_prices,
+    )
+    total_r = realized_r + unrealized_r
+
     summary = (
         f"EOD SUMMARY\n"
         f"Date: {daily.trade_date}\n"
-        f"P&L: {sign}${daily.total_pnl:.2f}\n"
-        f"Realized: ${daily.realized_pnl:.2f}\n"
+        f"P&L: {_fmt_r(total_r)} ({_fmt_dollar(daily.total_pnl)})\n"
+        f"Realized: {_fmt_r(realized_r)} ({_fmt_dollar(daily.realized_pnl)})\n"
+        f"Unrealized: {_fmt_r(unrealized_r)} ({_fmt_dollar(daily.unrealized_pnl)})\n"
         f"Portfolio: ${portfolio_value:,.0f}\n"
         f"Strategies: {strategy_line}\n"
         f"Trades Opened: {opened_n}\n"
@@ -701,7 +714,7 @@ def job_eod_tasks(
         tracker.set_weekly_halt(False)
         logger.info("Weekly halt reset (end of week)")
     _set_phase("idle")
-    return f"P&L: {sign}${daily.total_pnl:.2f}, {daily.num_trades} trades"
+    return f"P&L: {_fmt_r(total_r)} ({_fmt_dollar(daily.total_pnl)}), {daily.num_trades} trades"
 
 
 def job_discord_candidate_summary(

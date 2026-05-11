@@ -12,7 +12,13 @@ import pytest
 import pytz
 
 from db.models import Base, Order, Position, Watchlist, get_engine, get_session
-from core.eod import SETUP_LABELS, compute_eod_strategy_breakdown
+from core.eod import (
+    SETUP_LABELS,
+    compute_eod_strategy_breakdown,
+    compute_eod_r_totals,
+    fmt_r_signed,
+    fmt_dollar_signed,
+)
 
 ET = pytz.timezone("America/New_York")
 
@@ -130,6 +136,117 @@ class TestComputeEodStrategyBreakdown:
                        ep_strategy="A")
         line, opened, closed, failed = compute_eod_strategy_breakdown(target, engine)
         assert opened == 1, f"expected only today's BBB to count, got opened={opened}"
+
+
+def _seed_closed_position(engine, ticker, opened_at_et, closed_at_et,
+                          entry_price, initial_stop_price, shares, realized_pnl):
+    """Closed Position with explicit realized_pnl + risk fields for R tests."""
+    opened_utc = _et_to_utc_naive(ET.localize(opened_at_et))
+    closed_utc = _et_to_utc_naive(ET.localize(closed_at_et))
+    with get_session(engine) as session:
+        p = Position(
+            ticker=ticker,
+            setup_type="ep_earnings_b",
+            side="long",
+            shares=shares,
+            entry_price=entry_price,
+            stop_price=initial_stop_price,
+            initial_stop_price=initial_stop_price,
+            opened_at=opened_utc,
+            closed_at=closed_utc,
+            is_open=False,
+            realized_pnl=realized_pnl,
+            exit_reason="stop_hit" if realized_pnl < 0 else "trailing_ma_close",
+        )
+        session.add(p)
+        session.commit()
+
+
+def _seed_open_position(engine, ticker, opened_at_et,
+                       entry_price, initial_stop_price, shares):
+    opened_utc = _et_to_utc_naive(ET.localize(opened_at_et))
+    with get_session(engine) as session:
+        p = Position(
+            ticker=ticker,
+            setup_type="ep_earnings_b",
+            side="long",
+            shares=shares,
+            entry_price=entry_price,
+            stop_price=initial_stop_price,
+            initial_stop_price=initial_stop_price,
+            opened_at=opened_utc,
+            is_open=True,
+        )
+        session.add(p)
+        session.commit()
+
+
+class TestComputeEodRTotals:
+    def test_no_positions_returns_zero(self, engine):
+        realized_r, unrealized_r = compute_eod_r_totals(date(2026, 5, 11), engine)
+        assert realized_r == 0.0
+        assert unrealized_r == 0.0
+
+    def test_realized_r_uses_initial_risk(self, engine):
+        # entry=100, stop=93 → risk/share=7; shares=100 → total risk=$700.
+        # realized=+$700 should give R=+1.0; realized=-$350 should give R=-0.5.
+        target = date(2026, 5, 11)
+        opened = datetime.combine(target, datetime.min.time()).replace(hour=15, minute=37)
+        closed = datetime.combine(target, datetime.min.time()).replace(hour=15, minute=55)
+        _seed_closed_position(engine, "AAA", opened, closed, 100.0, 93.0, 100, 700.0)
+        _seed_closed_position(engine, "BBB", opened, closed, 100.0, 93.0, 100, -350.0)
+
+        realized_r, unrealized_r = compute_eod_r_totals(target, engine)
+        assert realized_r == pytest.approx(0.5)  # +1.0R + -0.5R
+        assert unrealized_r == 0.0
+
+    def test_unrealized_r_uses_current_price(self, engine):
+        # Open position: entry=100, stop=93, shares=100; current price=110 →
+        # unrealized=$1000; R = 1000/700 ≈ 1.4286.
+        target = date(2026, 5, 11)
+        opened = datetime.combine(target, datetime.min.time()).replace(hour=15, minute=37)
+        _seed_open_position(engine, "AAA", opened, 100.0, 93.0, 100)
+
+        realized_r, unrealized_r = compute_eod_r_totals(
+            target, engine, current_prices={"AAA": 110.0},
+        )
+        assert realized_r == 0.0
+        assert unrealized_r == pytest.approx(1000.0 / 700.0, rel=1e-4)
+
+    def test_missing_current_price_skips_position(self, engine):
+        target = date(2026, 5, 11)
+        opened = datetime.combine(target, datetime.min.time()).replace(hour=15, minute=37)
+        _seed_open_position(engine, "AAA", opened, 100.0, 93.0, 100)
+        _seed_open_position(engine, "BBB", opened, 50.0, 47.0, 200)
+
+        # Only AAA has a price → only AAA contributes.
+        _, unrealized_r = compute_eod_r_totals(
+            target, engine, current_prices={"AAA": 110.0},
+        )
+        assert unrealized_r == pytest.approx(1000.0 / 700.0, rel=1e-4)
+
+    def test_zero_risk_position_skipped(self, engine):
+        # entry == initial_stop → undefined R → skip silently rather than
+        # crash the EOD job on a degenerate row.
+        target = date(2026, 5, 11)
+        opened = datetime.combine(target, datetime.min.time()).replace(hour=15, minute=37)
+        closed = datetime.combine(target, datetime.min.time()).replace(hour=15, minute=55)
+        _seed_closed_position(engine, "ZRO", opened, closed, 100.0, 100.0, 100, 50.0)
+
+        realized_r, _ = compute_eod_r_totals(target, engine)
+        assert realized_r == 0.0
+
+
+class TestFormatHelpers:
+    def test_fmt_r_signed_explicit_plus_on_positive(self):
+        assert fmt_r_signed(2.5) == "+2.50R"
+        assert fmt_r_signed(0.0) == "+0.00R"
+        assert fmt_r_signed(-1.3) == "-1.30R"
+
+    def test_fmt_dollar_signed_keeps_sign_before_dollar(self):
+        assert fmt_dollar_signed(1234.56) == "+$1,234.56"
+        assert fmt_dollar_signed(-420.0) == "-$420.00"
+        assert fmt_dollar_signed(0.0) == "+$0.00"
 
 
 class TestSetupLabels:

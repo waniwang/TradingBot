@@ -265,17 +265,26 @@ def job_eod_tasks_ib(config, client, tracker, db_engine, notify):
     # Match the Alpaca-side EOD summary shape exactly (commit consolidating
     # both formats); the only differentiator between bots in Telegram is the
     # 🦙 / 🐢 prefix that make_notifier prepends.
-    from core.eod import compute_eod_strategy_breakdown
+    from core.eod import (
+        compute_eod_strategy_breakdown,
+        compute_eod_r_totals,
+        fmt_r_signed,
+        fmt_dollar_signed,
+    )
     strategy_line, opened_n, closed_n, failed_n = compute_eod_strategy_breakdown(
         daily.trade_date, db_engine,
     )
+    realized_r, unrealized_r = compute_eod_r_totals(
+        daily.trade_date, db_engine, current_prices=current_prices,
+    )
+    total_r = realized_r + unrealized_r
 
-    sign = "+" if daily.total_pnl >= 0 else ""
     summary = (
         f"EOD SUMMARY\n"
         f"Date: {daily.trade_date}\n"
-        f"P&L: {sign}${daily.total_pnl:.2f}\n"
-        f"Realized: ${daily.realized_pnl:.2f}\n"
+        f"P&L: {fmt_r_signed(total_r)} ({fmt_dollar_signed(daily.total_pnl)})\n"
+        f"Realized: {fmt_r_signed(realized_r)} ({fmt_dollar_signed(daily.realized_pnl)})\n"
+        f"Unrealized: {fmt_r_signed(unrealized_r)} ({fmt_dollar_signed(daily.unrealized_pnl)})\n"
         f"Portfolio: ${portfolio_value:,.0f}\n"
         f"Strategies: {strategy_line}\n"
         f"Trades Opened: {opened_n}\n"
@@ -290,7 +299,7 @@ def job_eod_tasks_ib(config, client, tracker, db_engine, notify):
     if datetime.now(ZoneInfo("America/New_York")).weekday() == 4:
         tracker.set_weekly_halt(False)
     _set_phase("idle")
-    return f"P&L: {sign}${daily.total_pnl:.2f}, {daily.num_trades} trades"
+    return f"P&L: {fmt_r_signed(total_r)} ({fmt_dollar_signed(daily.total_pnl)}), {daily.num_trades} trades"
 
 
 # Per-session dedup of drift alerts so the 5-min loop doesn't spam Telegram.
