@@ -53,28 +53,30 @@ def _fetch_watchlist() -> dict:
 
 
 def _filter_today_ep(payload: dict) -> list[dict]:
-    """Return ready + watching EP earnings/news rows.
+    """Return today's stage=ready EP earnings/news rows only.
 
-    Includes yesterday's watching rows because those are C-pending
-    candidates awaiting today's 3:35 PM day-2 confirm (so they're
-    forward-looking from today's perspective). The dashboard API only
-    surfaces non-expired rows, so no scan_date floor needed here.
+    Post-strategy-cleanup (commit 511a6e1, 2026-05-08): the "watching"
+    bucket is vestigial (C variants and day-2-confirm jobs removed). Any
+    watching rows are orphans from pre-cleanup scans. Filtering to
+    stage="ready" + scan_date=today is the only correct lens.
     """
+    today_iso = datetime.now().strftime("%Y-%m-%d")
     out: list[dict] = []
-    for stage in ("ready", "watching"):
-        for row in payload.get(stage, []):
-            if row.get("setup_raw") not in ("ep_earnings", "ep_news"):
-                continue
-            out.append(
-                {
-                    "ticker": row["ticker"],
-                    "setup_type": row["setup_raw"],
-                    "stage": stage,
-                    "meta": {
-                        "gap_pct": row.get("gap_pct"),
-                    },
-                }
-            )
+    for row in payload.get("ready", []):
+        if row.get("setup_raw") not in ("ep_earnings", "ep_news"):
+            continue
+        if row.get("scan_date") != today_iso:
+            continue
+        out.append(
+            {
+                "ticker": row["ticker"],
+                "setup_type": row["setup_raw"],
+                "stage": "ready",
+                "meta": {
+                    "gap_pct": row.get("gap_pct"),
+                },
+            }
+        )
     return out
 
 

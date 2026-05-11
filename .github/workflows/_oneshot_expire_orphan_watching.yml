@@ -1,0 +1,80 @@
+name: One-shot — expire orphan stage=watching EP rows (post-cleanup)
+
+# Post-strategy-cleanup (511a6e1, 2026-05-08) the EP earnings/news C variants
+# and day-2-confirm jobs were removed. Any pre-existing stage="watching" rows
+# in the Alpaca DB have no job to process them — they're orphans that leak
+# into the 3:10 PM Discord summary. This one-shot expires them.
+#
+# Safe: only modifies stage="watching" rows for ep_earnings/ep_news. Never
+# touches ready/active/triggered rows (the trade path). Idempotent.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  expire_orphans:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Expire orphan watching rows on server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            .venv/bin/python <<'PY'
+            import sys
+            from datetime import datetime
+            from pathlib import Path
+
+            ROOT = Path("/opt/trading-bot/trading-bot")
+            sys.path.insert(0, str(ROOT))
+
+            from db.models import Watchlist, init_db, get_session
+
+            CLEANUP_TAG = "[orphan-cleanup-2026-05-11]"
+            ALPACA_DB = "sqlite:////opt/trading-bot/trading-bot/trading_bot.db"
+
+            engine = init_db(ALPACA_DB)
+
+            with get_session(engine) as session:
+                rows = (
+                    session.query(Watchlist)
+                    .filter(
+                        Watchlist.stage == "watching",
+                        Watchlist.setup_type.in_(["ep_earnings", "ep_news"]),
+                    )
+                    .all()
+                )
+
+                print(f"Found {len(rows)} orphan watching row(s) to expire.\n")
+                if not rows:
+                    print("Nothing to do. Exiting.")
+                    sys.exit(0)
+
+                # Group by scan_date for readability
+                by_date = {}
+                for r in rows:
+                    by_date.setdefault(str(r.scan_date), []).append(r)
+                for d in sorted(by_date.keys()):
+                    print(f"  scan_date={d}: {len(by_date[d])} row(s)")
+                    for r in by_date[d]:
+                        print(f"    {r.ticker:>6} {r.setup_type}")
+                print()
+
+                # Expire them
+                now = datetime.utcnow()
+                for r in rows:
+                    r.stage = "expired"
+                    r.stage_changed_at = now
+                    existing_notes = r.notes or ""
+                    if CLEANUP_TAG not in existing_notes:
+                        r.notes = (existing_notes + " " + CLEANUP_TAG).strip()[:200]
+                session.commit()
+
+                print(f"Expired {len(rows)} orphan watching row(s).")
+                print(f"Tagged with notes: {CLEANUP_TAG}")
+            PY

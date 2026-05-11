@@ -727,21 +727,19 @@ def job_discord_candidate_summary(
         return "Skipped — not a trading day"
 
     today = datetime.now(ET).date()
-    # Include the last 5 calendar days so yesterday's still-watching C
-    # candidates show up alongside today's new ready/watching rows. C
-    # candidates from yesterday's scan have scan_date=yesterday and don't
-    # flip until 3:35 PM today (after this 3:10 PM job). The 5-day floor
-    # guards against any accidentally-stale rows lingering past day-2
-    # confirm (see incident_2026_04_30_stale_watchlist_rows).
-    scan_date_floor = today - timedelta(days=5)
-
+    # Post-strategy-cleanup (commit 511a6e1, 2026-05-08): EP Earn A + all C
+    # variants are removed. Only Strategy B persists, and only as stage="ready"
+    # for today's 3:50 PM execute. The "watching" bucket (formerly C-pending)
+    # is dead code now; any rows still there are orphans from pre-cleanup
+    # scans with no day-2-confirm job to process them. Filter strictly:
+    # today's ready rows are the only candidates worth posting.
     from db.models import Watchlist
     with get_session(db_engine) as session:
         rows = (
             session.query(Watchlist)
             .filter(
-                Watchlist.scan_date >= scan_date_floor,
-                Watchlist.stage.in_(["ready", "watching"]),
+                Watchlist.scan_date == today,
+                Watchlist.stage == "ready",
                 Watchlist.setup_type.in_(["ep_earnings", "ep_news"]),
             )
             .all()
