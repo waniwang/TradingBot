@@ -329,6 +329,64 @@ class TestPhaseCFilters:
 
         assert len(result) == 1
 
+    def test_earnings_check_exception_skips_ticker_and_notifies(self):
+        """Single yfinance failure on earnings check → skip ticker, notify, continue.
+
+        Mirrors the ep_news fix for the 2026-05-13 KeyError(['Earnings Date']) incident.
+        """
+        client = MagicMock()
+        movers = [
+            {"symbol": "BAD", "percent_change": 15.0, "price": 110.0},
+            {"symbol": "GOOD", "percent_change": 15.0, "price": 110.0},
+        ]
+        client.get_market_movers_gainers.return_value = movers
+        _GAP_MOVERS[:] = movers
+        client.get_snapshots.return_value = {
+            "BAD": _make_snapshot(100.0, 105.0, 115.0, 118.0, 1_000_000),
+            "GOOD": _make_snapshot(100.0, 105.0, 115.0, 118.0, 1_000_000),
+        }
+        df = _make_daily_df(300, start_price=70.0, drift=0.1)
+        client.get_daily_bars_batch.return_value = {"BAD": df.copy(), "GOOD": df.copy()}
+        config = _make_config({"ep_earnings_require_earnings": True})
+        notify = MagicMock()
+
+        def fake_check(sym, _today):
+            if sym == "BAD":
+                raise KeyError(["Earnings Date"])
+            return True
+
+        with patch("strategies.ep_earnings.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
+             patch("strategies.ep_earnings.scanner._check_earnings_today", side_effect=fake_check):
+            result = scan_ep_earnings(config, client, notify=notify)
+
+        assert [r["ticker"] for r in result] == ["GOOD"]
+        assert notify.called
+        notify_msg = notify.call_args[0][0]
+        assert "BAD" in notify_msg
+        assert "earnings-check failed" in notify_msg
+
+    def test_earnings_check_all_fail_raises_runtime_error(self):
+        """If every Phase C candidate's earnings check raises, propagate RuntimeError."""
+        client = MagicMock()
+        movers = [
+            {"symbol": "BAD1", "percent_change": 15.0, "price": 110.0},
+            {"symbol": "BAD2", "percent_change": 15.0, "price": 110.0},
+        ]
+        client.get_market_movers_gainers.return_value = movers
+        _GAP_MOVERS[:] = movers
+        client.get_snapshots.return_value = {
+            "BAD1": _make_snapshot(100.0, 105.0, 115.0, 118.0, 1_000_000),
+            "BAD2": _make_snapshot(100.0, 105.0, 115.0, 118.0, 1_000_000),
+        }
+        df = _make_daily_df(300, start_price=70.0, drift=0.1)
+        client.get_daily_bars_batch.return_value = {"BAD1": df.copy(), "BAD2": df.copy()}
+        config = _make_config({"ep_earnings_require_earnings": True})
+
+        with patch("strategies.ep_earnings.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
+             patch("strategies.ep_earnings.scanner._check_earnings_today", side_effect=KeyError(["Earnings Date"])):
+            with pytest.raises(RuntimeError, match="batch-wide failure"):
+                scan_ep_earnings(config, client)
+
 
 # ---------------------------------------------------------------------------
 # Output tests

@@ -38,6 +38,7 @@ def scan_ep_earnings(
     config: dict,
     client,
     max_results: int = 30,
+    notify=None,
 ) -> list[dict[str, Any]]:
     """
     EOD scanner for EP earnings gap-up candidates.
@@ -49,6 +50,10 @@ def scan_ep_earnings(
         config: full app config dict
         client: AlpacaClient instance
         max_results: cap on returned candidates
+        notify: optional callable for per-ticker partial-failure alerts. When
+            a single ticker's yfinance earnings-check raises (e.g. Yahoo HTML
+            schema change), we skip that ticker safely and emit a Telegram
+            alert. Batch-wide failures still propagate as RuntimeError.
 
     Returns:
         List of dicts with keys: ticker, gap_pct, open_price, prev_close,
@@ -207,6 +212,8 @@ def scan_ep_earnings(
     # ---------------------------------------------------------------
     today = date.today()
     filtered_c = []
+    earnings_check_attempted = 0
+    earnings_check_errors: list[str] = []
 
     for c in candidates:
         sym = c["ticker"]
@@ -227,13 +234,43 @@ def scan_ep_earnings(
 
         c["market_cap"] = market_cap
 
-        # Earnings check
+        # Earnings check. 2026-05-13: EP news scan died on one yfinance HTML
+        # schema change (KeyError(['Earnings Date'])). EP earnings is vulnerable
+        # to the same bug — per CLAUDE.md partial-failure rule, catch per-ticker,
+        # notify, and skip the ticker safely. Skip is the safe default for an
+        # earnings-only universe: a ticker with unknown earnings status doesn't
+        # belong here. Batch-wide failure still raises so JOB FAILED fires.
         if require_earnings:
-            if not _check_earnings_today(sym, today):
+            earnings_check_attempted += 1
+            try:
+                has_earnings = _check_earnings_today(sym, today)
+            except Exception as e:
+                msg = (
+                    f"EP EARNINGS: {sym} earnings-check failed "
+                    f"({type(e).__name__}: {e}) — skipping ticker"
+                )
+                logger.warning(msg)
+                if notify:
+                    notify(msg)
+                earnings_check_errors.append(sym)
+                continue
+            if not has_earnings:
                 logger.debug("%s: no earnings today/yesterday, skipping", sym)
                 continue
 
         filtered_c.append(c)
+
+    # Batch-wide yfinance failure: every ticker that reached the earnings check raised.
+    if (
+        require_earnings
+        and earnings_check_attempted > 0
+        and len(earnings_check_errors) == earnings_check_attempted
+    ):
+        raise RuntimeError(
+            f"EP EARNINGS: all {earnings_check_attempted} Phase C candidates failed "
+            f"the earnings-check (yfinance get_earnings_dates) — batch-wide failure. "
+            f"Tickers: {', '.join(earnings_check_errors)}"
+        )
 
     candidates = filtered_c
 

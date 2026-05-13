@@ -93,7 +93,7 @@ class EPEarningsPlugin:
 
         try:
             # Phase 1: Scanner
-            candidates = scan_ep_earnings(config, client)
+            candidates = scan_ep_earnings(config, client, notify=notify)
             logger.info("EOD EP earnings scanner: %d candidates", len(candidates))
 
             if not candidates:

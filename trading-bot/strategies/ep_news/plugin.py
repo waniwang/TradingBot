@@ -94,7 +94,7 @@ class EPNewsPlugin:
 
         try:
             # Phase 1: Scanner (exclude earnings)
-            candidates = scan_ep_news(config, client)
+            candidates = scan_ep_news(config, client, notify=notify)
             logger.info("EOD EP news scanner: %d candidates", len(candidates))
 
             if not candidates:

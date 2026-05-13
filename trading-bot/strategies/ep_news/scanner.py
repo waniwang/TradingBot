@@ -40,6 +40,7 @@ def scan_ep_news(
     config: dict,
     client,
     max_results: int = 30,
+    notify=None,
 ) -> list[dict[str, Any]]:
     """
     EOD scanner for EP news gap-up candidates.
@@ -51,6 +52,10 @@ def scan_ep_news(
         config: full app config dict
         client: AlpacaClient instance
         max_results: cap on returned candidates
+        notify: optional callable for per-ticker partial-failure alerts. When
+            a single ticker's yfinance earnings-check raises (e.g. Yahoo HTML
+            schema change), we skip that ticker safely and emit a Telegram
+            alert. Batch-wide failures still propagate as RuntimeError.
 
     Returns:
         List of dicts with keys: ticker, gap_pct, open_price, prev_close,
@@ -204,6 +209,8 @@ def scan_ep_news(
     # ---------------------------------------------------------------
     today = date.today()
     filtered_c = []
+    earnings_check_attempted = 0
+    earnings_check_errors: list[str] = []
 
     for c in candidates:
         sym = c["ticker"]
@@ -224,12 +231,44 @@ def scan_ep_news(
 
         c["market_cap"] = market_cap
 
-        # Earnings exclusion: skip if this is an earnings gap (ep_earnings handles those)
-        if exclude_earnings and not _confirm_no_earnings(sym, today):
-            logger.debug("%s: has earnings today/yesterday, skipping", sym)
-            continue
+        # Earnings exclusion: skip if this is an earnings gap (ep_earnings handles those).
+        # 2026-05-13: one yfinance HTML schema change wiped the entire scan when a single
+        # `_confirm_no_earnings` call raised KeyError(['Earnings Date']). Per CLAUDE.md
+        # partial-failure rule, catch per-ticker, notify, and skip the ticker safely
+        # (skip is the safe default — including on "unknown earnings" would risk
+        # classifying a real earnings stock as news). Batch-wide failure still raises.
+        if exclude_earnings:
+            earnings_check_attempted += 1
+            try:
+                no_earnings = _confirm_no_earnings(sym, today)
+            except Exception as e:
+                msg = (
+                    f"EP NEWS: {sym} earnings-check failed "
+                    f"({type(e).__name__}: {e}) — skipping ticker"
+                )
+                logger.warning(msg)
+                if notify:
+                    notify(msg)
+                earnings_check_errors.append(sym)
+                continue
+            if not no_earnings:
+                logger.debug("%s: has earnings today/yesterday, skipping", sym)
+                continue
 
         filtered_c.append(c)
+
+    # Batch-wide yfinance failure: every ticker that reached the earnings check raised.
+    # Surface as RuntimeError so _track_job fires JOB FAILED via Telegram.
+    if (
+        exclude_earnings
+        and earnings_check_attempted > 0
+        and len(earnings_check_errors) == earnings_check_attempted
+    ):
+        raise RuntimeError(
+            f"EP NEWS: all {earnings_check_attempted} Phase C candidates failed the "
+            f"earnings-check (yfinance get_earnings_dates) — batch-wide failure. "
+            f"Tickers: {', '.join(earnings_check_errors)}"
+        )
 
     candidates = filtered_c
 

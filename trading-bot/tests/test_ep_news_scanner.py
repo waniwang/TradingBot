@@ -266,6 +266,71 @@ class TestPhaseCFilters:
             result = scan_ep_news(config, client)
         assert len(result) == 1
 
+    def test_earnings_check_exception_skips_ticker_and_notifies(self):
+        """Single yfinance failure on earnings check → skip that ticker, notify, continue.
+
+        Regression for 2026-05-13 incident: KeyError(['Earnings Date']) from one
+        yfinance call killed the entire scan. Per-ticker errors must not be batch-fatal.
+        """
+        # Two tickers in the Phase A universe; first raises, second succeeds.
+        client = MagicMock()
+        movers = [
+            {"symbol": "BAD", "percent_change": 15.0, "price": 110.0},
+            {"symbol": "GOOD", "percent_change": 15.0, "price": 110.0},
+        ]
+        client.get_market_movers_gainers.return_value = movers
+        _GAP_MOVERS[:] = movers
+        client.get_snapshots.return_value = {
+            "BAD": _make_snapshot(100.0, 105.0, 115.0, 118.0, 1_000_000),
+            "GOOD": _make_snapshot(100.0, 105.0, 115.0, 118.0, 1_000_000),
+        }
+        df = _make_daily_df(300, start_price=70.0, drift=0.1)
+        client.get_daily_bars_batch.return_value = {"BAD": df.copy(), "GOOD": df.copy()}
+        config = _make_config()
+        notify = MagicMock()
+
+        def fake_confirm(sym, _today):
+            if sym == "BAD":
+                raise KeyError(["Earnings Date"])
+            return True
+
+        with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
+             patch("strategies.ep_news.scanner._confirm_no_earnings", side_effect=fake_confirm):
+            result = scan_ep_news(config, client, notify=notify)
+
+        # GOOD passes; BAD is skipped.
+        assert [r["ticker"] for r in result] == ["GOOD"]
+        # Notify was called with the per-ticker failure message.
+        assert notify.called
+        notify_msg = notify.call_args[0][0]
+        assert "BAD" in notify_msg
+        assert "earnings-check failed" in notify_msg
+
+    def test_earnings_check_all_fail_raises_runtime_error(self):
+        """If every Phase C candidate's earnings check raises, propagate RuntimeError.
+
+        Lets _track_job fire JOB FAILED via Telegram (batch-wide yfinance break).
+        """
+        client = MagicMock()
+        movers = [
+            {"symbol": "BAD1", "percent_change": 15.0, "price": 110.0},
+            {"symbol": "BAD2", "percent_change": 15.0, "price": 110.0},
+        ]
+        client.get_market_movers_gainers.return_value = movers
+        _GAP_MOVERS[:] = movers
+        client.get_snapshots.return_value = {
+            "BAD1": _make_snapshot(100.0, 105.0, 115.0, 118.0, 1_000_000),
+            "BAD2": _make_snapshot(100.0, 105.0, 115.0, 118.0, 1_000_000),
+        }
+        df = _make_daily_df(300, start_price=70.0, drift=0.1)
+        client.get_daily_bars_batch.return_value = {"BAD1": df.copy(), "BAD2": df.copy()}
+        config = _make_config()
+
+        with patch("strategies.ep_news.scanner._get_ticker_info", return_value=(5_000_000_000, "EQUITY")), \
+             patch("strategies.ep_news.scanner._confirm_no_earnings", side_effect=KeyError(["Earnings Date"])):
+            with pytest.raises(RuntimeError, match="batch-wide failure"):
+                scan_ep_news(config, client)
+
 
 # ---------------------------------------------------------------------------
 # _confirm_no_earnings unit tests

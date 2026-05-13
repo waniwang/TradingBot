@@ -64,6 +64,8 @@ Feature computation (`compute_features`, `_compute_atr_pct`) **raises** when dai
 
 If *every* candidate in a scan fails with a data error, `job_scan` raises `RuntimeError` so `_track_job` fires `JOB FAILED` — a batch-wide yfinance outage is a bug, not silent "0 passed filters".
 
+**Phase C earnings check (yfinance scrape):** `_check_earnings_today()` raises on yfinance scrape failure. `scan_ep_earnings` wraps the per-ticker call: a single failure (e.g. Yahoo HTML schema change → `KeyError(['Earnings Date'])`) notifies Telegram and skips that ticker; if every Phase C ticker fails, the scan raises `RuntimeError`. Mirrors the ep_news fix shipped 2026-05-13.
+
 ## Backtesting
 
 Uses spreadsheet-based backtest with pre-computed gap-day features and forward return checkpoints.

@@ -33,7 +33,7 @@ Same three-phase filter as EP Earnings, with differences:
 | Market cap | >= $800M | >= $1B |
 | Earnings | Required | Excluded |
 
-**Earnings exclusion:** `_confirm_no_earnings()` returns `True` when the yfinance earnings calendar confirms no earnings today/yesterday. API failures are **not** swallowed — they propagate up, the scan fails, and a Telegram alert fires (per project error-handling policy). That way we never enter earnings-driven gaps as "news" due to a stale fallback.
+**Earnings exclusion:** `_confirm_no_earnings()` returns `True` when the yfinance earnings calendar confirms no earnings today/yesterday. The helper itself raises on yfinance scrape failure (per project error-handling policy — never silently fall back). `scan_ep_news` wraps the per-ticker call: a single failure (e.g. Yahoo HTML schema change → `KeyError(['Earnings Date'])`) notifies Telegram and **skips that ticker safely**, but if every Phase C ticker fails, the scan raises `RuntimeError` so `JOB FAILED` fires. Regression: 2026-05-13 — one yfinance error wiped the whole scan; fixed via partial-failure handling.
 
 ## Strategy A (NEWS-Tight) — stop -7% | 57.6% WR, PF 5.34, +11.93% avg (2020–2026 corrected)
 
