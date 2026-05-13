@@ -1,0 +1,20 @@
+name: One-shot — TXN 9:40 ET bot log dive (read-only)
+on:
+  workflow_dispatch:
+jobs:
+  log_dive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read Alpaca bot log around 9:40 ET (14:40 UTC)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          command_timeout: 2m
+          script: |
+            echo "=== ALL Alpaca bot log lines from 14:39:30 to 14:45:00 UTC ==="
+            journalctl -u trading-bot --since "2026-05-13 14:39:30" --until "2026-05-13 14:45:00" --no-pager 2>&1 | head -200
+            echo ""
+            echo "=== Only TXN / partial / stop / error / exception lines ==="
+            journalctl -u trading-bot --since "2026-05-13 14:39:30" --until "2026-05-13 14:45:00" --no-pager 2>&1 | grep -iE "TXN|partial|stop|error|exception|fail|alpaca" | head -100
