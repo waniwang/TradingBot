@@ -71,6 +71,20 @@ PIPELINE_SCHEDULE = [
         "display_day_offset": 0,
     },
     {
+        "job_id": "ep_time_partial_check",
+        "label": "EP Time Partial Check",
+        "time": "09:40",
+        "category": "trade",
+        "phase": "market_open",
+        "description": (
+            "For each open EP position at day 19+ that's currently in profit: cancel the GTC "
+            "stop, market-sell 40%, place a new GTC stop at entry × 1.05 (locks in 5% on the "
+            "remaining 60%). Single-shot per position. Scheduled at 9:40 AM ET so order-failure "
+            "retries have ~6h of market time, rather than the 5-min EOD squeeze."
+        ),
+        "display_day_offset": 0,
+    },
+    {
         "job_id": "ep_earnings_scan",
         "label": "EP Earnings Scan",
         "time": "15:00",
@@ -185,6 +199,7 @@ JOB_OWNERS: dict[str, frozenset[str] | None] = {
     "ep_news_execute": frozenset({"ep_news"}),
     "discord_candidate_summary": frozenset({"ep_earnings", "ep_news"}),
     "premarket_ep_preview": frozenset({"ep_earnings", "ep_news"}),
+    "ep_time_partial_check": frozenset({"ep_earnings", "ep_news"}),
     "eod_tasks": None,
     "reconcile_positions": None,
     "heartbeat": None,

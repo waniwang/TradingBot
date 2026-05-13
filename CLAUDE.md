@@ -60,7 +60,7 @@ Strategy Scanners (premarket)     Strategy Signals (market open)    Monitor (int
 
 **Data sources:** Alpaca snapshots for gap scanning (IEX daily-snapshot coverage is ~99.7% — the "~2%" figure applies only to realtime intraday trade streams), yfinance for fundamentals (market cap, quoteType, earnings calendar), Alpaca 1m candles for intraday signals. Full Alpaca capability + quirks cheat sheet: [docs/alpaca-api.md](docs/alpaca-api.md).
 
-**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 8:30 AM pre-market EP preview (read-only, Discord-only — see `core/premarket_preview.py`) → 9:25 AM finalize watchlist → 9:30 AM–4:00 PM intraday monitor (long-running window driven by the Alpaca 1-min bar stream registered at 9:25) → 3:00 PM EP earnings scan + strategy eval → 3:05 PM EP news scan + strategy eval → 3:10 PM Discord candidate summary (read-only, decoupled from scans — see `core/discord.py`) → 3:50–3:59 PM EP earnings/news execute (retries every minute, idempotent) → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
+**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 8:30 AM pre-market EP preview (read-only, Discord-only — see `core/premarket_preview.py`) → 9:25 AM finalize watchlist → 9:30 AM–4:00 PM intraday monitor (long-running window driven by the Alpaca 1-min bar stream registered at 9:25) → 9:40 AM EP time-partial check (D19+ in-profit positions: 40% off + stop→entry×1.05) → 3:00 PM EP earnings scan + strategy eval → 3:05 PM EP news scan + strategy eval → 3:10 PM Discord candidate summary (read-only, decoupled from scans — see `core/discord.py`) → 3:50–3:59 PM EP earnings/news execute (retries every minute, idempotent) → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
 
 Pipeline job metadata (descriptions, categories, `time`/`end_time` window, phase) lives exclusively in `api/constants.py::PIPELINE_SCHEDULE`. Edit entries there to change what the dashboard Pipeline page displays. `end_time` is set on jobs that run as a window (intraday monitor, execute retry loops); omit it for point-in-time jobs.
 
@@ -250,6 +250,16 @@ EP earnings and EP news swing strategies are integrated into the bot as strategy
 6. Stop: -7% | Hold: 50D
 
 A wins over B on overlap (tighter filters). A and B are kept because they catch different regimes — A wins in trending years, B-only wins in choppy/bear years.
+
+### Exit pipeline (all three keepers)
+1. **GTC -7% stop at broker** — automatic, fires on intraday low ≤ entry × 0.93
+2. **9:40 AM ET time-partial check** (added 2026-05-11): for any open EP position at day 19+ that's currently in profit, cancel the GTC stop, market-sell 40% of position, place a new GTC stop at entry × 1.05 (locks in 5% guaranteed on the remaining 60%). Single-shot per position. Scheduled at 9:40 AM (not EOD 3:55 PM) so order-failure retries have ~6h of market time. See `monitor/position_tracker.py::check_ep_time_partial` and `tests/test_ep_time_partial.py`.
+3. **3:55 PM EOD max-hold** — 50 calendar days forces close
+4. **Reconcile drift detector** (every 5 min, added 2026-05-11) — catches any naked positions if stop placement fails after partial
+
+Backtest impact of step 2 on corrected 2020-2026 data: PF 3.46→3.86, win rate 48.5%→61.3%, capital efficiency +20%. Total return -9% (giving up some upside on big winners) in exchange for locked-in gains + faster capital recycling. Year-by-year: improves 6 of 7 years (2020 roughly flat as the gangbuster year); 2021/2023/2024 jump from marginal to solid.
+
+`_check_ma_close_exits` (the existing MA-trail close logic) is gated against EP setups so it doesn't fire on top of step 2's fixed-percentage trail.
 
 ### Dropped variants (2026-05-08)
 - **EP Earnings A** dropped after corrected backtest showed A-only trades had PF 1.36 (worse than B alone).

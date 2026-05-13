@@ -6,7 +6,11 @@ EOD long swing on earnings gap-ups. Scans at 3 PM, enters near close at 3:50 PM.
 
 1. **3:00 PM** — `scanner.py` finds earnings gappers, `strategy.py` evaluates Strategy B filters. Passing entries are persisted as `Watchlist(stage="ready")` with the full execution payload in `metadata_json`.
 2. **3:50–3:59 PM** — `job_execute` queries `Watchlist.stage="ready"` for `setup_type="ep_earnings"` and places orders. Fires every minute (10 attempts) so a briefly-down bot or a transient Alpaca error still gets a trade in before close. **DB-driven + idempotent** — nothing held in memory between scan and execute, and replays are blocked by the open-Position guard and the <10-minute non-terminal Order guard, so process restarts and multi-fire retries are both safe. **Price refresh**: each attempt calls `core.execution.resolve_execution_price` to fetch a live mid and pick entry/stop — if the live mid is ≤ scan price, scan wins; otherwise mid is used up to `ep_execute_max_price_bump_pct` above scan, with a `ep_execute_max_spread_pct` ceiling on bid-ask spread (wider quote → skip, retry next minute). Stop is always recomputed from the actual entry so the -7% rule holds.
-3. **Ongoing** — -7% stop, 50-day max hold, shared exit logic.
+3. **Ongoing exits** (in order of likely trigger):
+   - **GTC -7% stop** at broker, fires on intraday low ≤ entry × 0.93
+   - **9:40 AM ET D19+ partial** (added 2026-05-11): if at day 19+ and in profit, sell 40% market, move stop on remainder to entry × 1.05 (5% above entry, locks in min gain). Single-shot per position. See `monitor/position_tracker.py::check_ep_time_partial`.
+   - **50-day max hold** at 3:55 PM EOD, forces close on remainder if reached
+   - Reconcile drift detector catches any naked positions every 5 min (safety net)
 
 ### Watchlist stage semantics
 

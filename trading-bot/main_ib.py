@@ -307,6 +307,26 @@ def job_eod_tasks_ib(config, client, tracker, db_engine, notify):
 _drift_alerted_ib: set[tuple[str, str]] = set()
 
 
+def job_ep_time_partial_check_ib(client, tracker, notify):
+    """9:40 AM ET — EP D19+ time-based partial profit (IB side).
+
+    Mirrors main.py's job_ep_time_partial_check. See
+    monitor/position_tracker.py::check_ep_time_partial for the rule.
+    Runs early in the day so order failures have ~6h to retry rather
+    than 5 min at EOD.
+    """
+    if not is_trading_day(client):
+        logger.info("IB EP time partial check skipped — not a trading day")
+        return
+    try:
+        summary = tracker.check_ep_time_partial()
+        logger.info("IB EP partial check result: %s", summary)
+    except Exception as e:
+        logger.error("IB EP partial check failed: %s", e)
+        notify(f"IB EP PARTIAL CHECK FAILED: {e}")
+        raise
+
+
 def job_reconcile_positions_ib(client, db_engine, notify):
     """
     Every 5 min during market hours — detects:
@@ -475,6 +495,17 @@ def main():
         CronTrigger(hour=15, minute=55, day_of_week="mon-fri", timezone=ET),
         args=[config, client, tracker, db_engine, notify],
         id="eod_tasks",
+        replace_existing=True,
+    )
+
+    # EP time-based partial profit check at 9:40 AM ET (Mon-Fri).
+    # See monitor/position_tracker.py::check_ep_time_partial.
+    scheduler.add_job(
+        job_ep_time_partial_check_ib,
+        CronTrigger(hour=9, minute=40, day_of_week="mon-fri", timezone=ET),
+        args=[client, tracker, notify],
+        id="ep_time_partial_check",
+        misfire_grace_time=300,
         replace_existing=True,
     )
 

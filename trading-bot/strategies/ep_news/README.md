@@ -6,7 +6,11 @@ EOD long swing on news-driven (non-earnings) gap-ups. Same timing as EP Earnings
 
 1. **3:05 PM** — `scanner.py` finds news gappers (excludes earnings), `strategy.py` evaluates A/B filters. Passing entries → `Watchlist(stage="ready")` with execution payload in `metadata_json`.
 2. **3:50–3:59 PM** — `job_execute` queries `Watchlist.stage="ready"` and places orders. Fires every minute (10 attempts) so a briefly-down bot or a transient Alpaca error still gets a trade in before close. **DB-driven + idempotent** — open-Position guard and <10-minute non-terminal Order guard block double-entry across retries. **Price refresh**: each attempt calls `core.execution.resolve_execution_price` to fetch live bid/ask and pick entry/stop — mid is used when it's at or modestly above the scan price (capped by `ep_execute_max_price_bump_pct`); wide quotes (`ep_execute_max_spread_pct`) skip and retry next minute. Stop is always recomputed from the actual entry.
-3. **Ongoing** — -7% stop (both A and B), 50-day max hold.
+3. **Ongoing exits** (in order of likely trigger):
+   - **GTC -7% stop** at broker (both A and B), fires on intraday low
+   - **9:40 AM ET D19+ partial** (added 2026-05-11): if at day 19+ and in profit, sell 40% market, move stop on remainder to entry × 1.05. Single-shot per position. See `monitor/position_tracker.py::check_ep_time_partial`.
+   - **50-day max hold** at 3:55 PM EOD
+   - Reconcile drift detector catches naked positions every 5 min (safety net)
 
 **Note:** EP News scans at 3:05 PM (offset from EP Earnings at 3:00 PM) to avoid yfinance rate limiting from simultaneous per-ticker API calls.
 

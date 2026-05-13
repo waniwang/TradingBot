@@ -113,6 +113,14 @@ exits:
   partial_exit_fraction: 0.40             # fraction of position to sell (40%)
   trailing_ma_period: 10                  # MA period for trailing stop (10 or 20)
 
+  # EP swing strategies — time-based partial profit (added 2026-05-11).
+  # Fires at 9:40 AM ET morning job (`ep_time_partial_check`), single-shot
+  # per position. Backtest on 2020-2026 corrected Spikeet data: +20% capital
+  # efficiency, PF 3.46→3.86, WR 48%→61%. See incident-and-strategy memory.
+  ep_time_partial_day: 19                 # fire on/after day 19 of trade
+  ep_time_partial_fraction: 0.40          # close 40% of position
+  ep_time_partial_new_stop_pct: 5.0       # new stop = entry × 1.05 (5% above entry)
+
 telegram:
   bot_token: YOUR_TELEGRAM_BOT_TOKEN
   chat_id: YOUR_TELEGRAM_CHAT_ID   # single ID or comma-separated list (e.g. "111,222") to fan out

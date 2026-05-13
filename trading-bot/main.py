@@ -1150,6 +1150,22 @@ def _write_status():
 _drift_alerted: set[tuple[str, str]] = set()
 
 
+def job_ep_time_partial_check(tracker: PositionTracker, client: AlpacaClient):
+    """9:40 AM ET — EP D19+ time-based partial profit.
+
+    Runs 10 min after open so the bot has fresh price data and ~6h of
+    market time to retry if any broker calls fail (avoids the 3:55 PM
+    EOD-window squeeze that risks naked overnight positions). Single-shot
+    per position per day; if a position is below day 19 or not in profit
+    at 9:40, tomorrow's run will pick it up. See
+    monitor/position_tracker.py::check_ep_time_partial for the rule.
+    """
+    if not is_trading_day(client):
+        logger.info("EP time partial check skipped — not a trading day")
+        return "Skipped — not a trading day"
+    return tracker.check_ep_time_partial()
+
+
 def job_reconcile_positions(client, db_engine, notify):
     """
     Periodic reconciliation (every 5 min during market hours).
@@ -1513,6 +1529,17 @@ def main():
             id="discord_candidate_summary",
             replace_existing=True,
         )
+
+    # EP time-based partial profit check at 9:40 AM ET (Mon-Fri).
+    # See monitor/position_tracker.py::check_ep_time_partial.
+    scheduler.add_job(
+        _tracked,
+        CronTrigger(hour=9, minute=40, day_of_week="mon-fri", timezone=ET),
+        args=["ep_time_partial_check", job_ep_time_partial_check, tracker, client],
+        id="ep_time_partial_check",
+        misfire_grace_time=300,
+        replace_existing=True,
+    )
 
     # Reconcile broker positions every 5 min during market hours only
     scheduler.add_job(
