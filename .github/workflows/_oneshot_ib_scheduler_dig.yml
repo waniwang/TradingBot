@@ -1,0 +1,23 @@
+name: One-shot — IB scheduler dig (boot + jobs)
+on:
+  workflow_dispatch:
+jobs:
+  dig:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dig into IB scheduler state
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          command_timeout: 2m
+          script: |
+            echo "=== IB bot recent process invocations today ==="
+            journalctl -u trading-bot-ib --since "2026-05-13 00:00:00" --no-pager 2>&1 | grep -E "Started.*IBKR|Stopped|Stopping|Starting|main_ib.py|Restarted|deactivated" | tail -40
+            echo ""
+            echo "=== All log entries from IB between 14:30 and 14:42 UTC ==="
+            journalctl -u trading-bot-ib --since "2026-05-13 14:30:00" --until "2026-05-13 14:42:30" --no-pager 2>&1 | tail -80
+            echo ""
+            echo "=== Search for ep_time_partial in IB log today (any line) ==="
+            journalctl -u trading-bot-ib --since "2026-05-13 00:00:00" --no-pager 2>&1 | grep -i "ep_time_partial" | head -20 || echo "  (no matches)"
