@@ -25,7 +25,7 @@ jobs:
             with S() as s:
                 p = s.query(Position).filter(Position.ticker=='TXN', Position.is_open==True).first()
                 if p:
-                    print(f'  ticker={p.ticker}  qty={p.quantity}')
+                    print(f'  ticker={p.ticker}  shares={p.shares}')
                     print(f'  entry=\${p.entry_price:.2f}  stop=\${p.stop_price:.2f}')
                     print(f'  stop_order_id={p.stop_order_id}')
                     print(f'  partial_exit_done={p.partial_exit_done}')
