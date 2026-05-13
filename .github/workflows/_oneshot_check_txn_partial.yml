@@ -13,7 +13,6 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           command_timeout: 2m
           script: |
-            set -e
             cd /opt/trading-bot/trading-bot
             echo "=== TXN position row (Alpaca DB) ==="
             .venv/bin/python -c "
@@ -32,10 +31,24 @@ jobs:
                     print(f'  partial_exit_shares={p.partial_exit_shares}')
                     print(f'  partial_exit_price={p.partial_exit_price}')
                     print(f'  partial_exit_order_id={p.partial_exit_order_id}')
-                    print(f'  partial_exit_at={p.partial_exit_at}')
+                    pass
                 else:
                     print('  TXN not found')
             "
             echo ""
             echo "=== Bot log lines for 9:40-9:45 ==="
-            journalctl -u trading-bot --since "2026-05-13 09:39:30" --until "2026-05-13 09:45:30" --no-pager 2>&1 | grep -iE "TXN|ep_time_partial|partial|stop" | head -60
+            journalctl -u trading-bot --since "2026-05-13 09:39:30" --until "2026-05-13 09:45:30" --no-pager 2>&1 | grep -iE "TXN|ep_time_partial|partial|stop|failure|exception|error" | head -80
+            echo ""
+            echo "=== Alpaca broker stop order for TXN ==="
+            .venv/bin/python -c "
+            import sys, os
+            sys.path.insert(0, '/opt/trading-bot/trading-bot')
+            from executor.alpaca_client import AlpacaClient
+            c = AlpacaClient()
+            c.connect()
+            orders = c.api.list_orders(status='open', symbols='TXN', nested=True)
+            for o in orders:
+                print(f'  id={o.id}  symbol={o.symbol}  side={o.side}  qty={o.qty}  type={o.order_type}  stop=\${o.stop_price}  status={o.status}')
+            if not orders:
+                print('  (no open broker orders for TXN)')
+            "
