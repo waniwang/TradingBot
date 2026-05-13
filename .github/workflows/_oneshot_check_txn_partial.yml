@@ -1,0 +1,41 @@
+name: One-shot — TXN partial deep dive
+on:
+  workflow_dispatch:
+jobs:
+  txn_check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect TXN partial details + bot log
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          command_timeout: 2m
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            echo "=== TXN position row (Alpaca DB) ==="
+            .venv/bin/python -c "
+            import sys; sys.path.insert(0, '/opt/trading-bot/trading-bot')
+            from db.models import Position, init_db
+            from sqlalchemy.orm import sessionmaker
+            eng = init_db('sqlite:////opt/trading-bot/trading-bot/trading_bot.db')
+            S = sessionmaker(bind=eng)
+            with S() as s:
+                p = s.query(Position).filter(Position.ticker=='TXN', Position.is_open==True).first()
+                if p:
+                    print(f'  ticker={p.ticker}  qty={p.quantity}')
+                    print(f'  entry=\${p.entry_price:.2f}  stop=\${p.stop_price:.2f}')
+                    print(f'  stop_order_id={p.stop_order_id}')
+                    print(f'  partial_exit_done={p.partial_exit_done}')
+                    print(f'  partial_exit_shares={p.partial_exit_shares}')
+                    print(f'  partial_exit_price={p.partial_exit_price}')
+                    print(f'  partial_exit_order_id={p.partial_exit_order_id}')
+                    print(f'  partial_exit_at={p.partial_exit_at}')
+                else:
+                    print('  TXN not found')
+            "
+            echo ""
+            echo "=== Bot log lines for 9:40-9:45 ==="
+            journalctl -u trading-bot --since "2026-05-13 09:39:30" --until "2026-05-13 09:45:30" --no-pager 2>&1 | grep -iE "TXN|ep_time_partial|partial|stop" | head -60
