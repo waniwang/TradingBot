@@ -64,7 +64,9 @@ Feature computation (`compute_features`, `_compute_atr_pct`) **raises** when dai
 
 If *every* candidate in a scan fails with a data error, `job_scan` raises `RuntimeError` so `_track_job` fires `JOB FAILED` — a batch-wide yfinance outage is a bug, not silent "0 passed filters".
 
-**Phase C earnings check (yfinance scrape):** `_check_earnings_today()` raises on yfinance scrape failure. `scan_ep_earnings` wraps the per-ticker call: a single failure (e.g. Yahoo HTML schema change → `KeyError(['Earnings Date'])`) notifies Telegram and skips that ticker; if every Phase C ticker fails, the scan raises `RuntimeError`. Mirrors the ep_news fix shipped 2026-05-13.
+**Phase C earnings check:** `_check_earnings_today()` reads from `core/earnings.py::fetch_recent_earnings_dates` which **tries yfinance first, then falls back to Finnhub** if `FINNHUB_API_KEY` is configured. Raises if every source fails. `scan_ep_earnings` wraps the per-ticker call: a single failure notifies Telegram and skips that ticker; if every Phase C ticker fails, the scan raises `RuntimeError`. Mirrors the ep_news fix shipped 2026-05-13.
+
+**Result summary breakdown:** when 0 candidates pass, the dashboard `result_summary` and Telegram alert include per-filter rejection counts (e.g. `rejects: atr=2 chg_open=1 cir=1`) so the operator can see *which* filter killed each batch without re-reading the raw rejection strings.
 
 ## Backtesting
 

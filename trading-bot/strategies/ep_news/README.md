@@ -33,7 +33,7 @@ Same three-phase filter as EP Earnings, with differences:
 | Market cap | >= $800M | >= $1B |
 | Earnings | Required | Excluded |
 
-**Earnings exclusion:** `_confirm_no_earnings()` returns `True` when the yfinance earnings calendar confirms no earnings today/yesterday. The helper itself raises on yfinance scrape failure (per project error-handling policy — never silently fall back). `scan_ep_news` wraps the per-ticker call: a single failure (e.g. Yahoo HTML schema change → `KeyError(['Earnings Date'])`) notifies Telegram and **skips that ticker safely**, but if every Phase C ticker fails, the scan raises `RuntimeError` so `JOB FAILED` fires. Regression: 2026-05-13 — one yfinance error wiped the whole scan; fixed via partial-failure handling.
+**Earnings exclusion:** `_confirm_no_earnings()` returns `True` when the calendar confirms no earnings today/yesterday. The lookup is centralised in `core/earnings.py::fetch_recent_earnings_dates` which **tries yfinance first, then falls back to Finnhub** if `FINNHUB_API_KEY` is configured (it is, in production). The helper raises if every source fails (per project error-handling policy — never silently fall back). `scan_ep_news` wraps the per-ticker call: a single failure notifies Telegram and **skips that ticker safely**, but if every Phase C ticker fails, the scan raises `RuntimeError` so `JOB FAILED` fires. Regression: 2026-05-13 — one yfinance `KeyError(['Earnings Date'])` wiped the whole scan; fixed via partial-failure handling + Finnhub fallback.
 
 ## Strategy A (NEWS-Tight) — stop -7% | 57.6% WR, PF 5.34, +11.93% avg (2020–2026 corrected)
 
@@ -83,6 +83,8 @@ Feature computation (`compute_features`, `_compute_atr_pct`) **raises** when dai
 If *every* candidate in a scan fails with a data error, `job_scan` raises `RuntimeError` so `_track_job` fires `JOB FAILED` — a batch-wide yfinance outage is a bug, not silent "0 passed filters".
 
 This was added after the 2026-04-20 incident, where 5+ Strategy C candidates were silently dropped because `prev_10d_change_pct` and `atr_pct` silently fell back to `0.0` on short daily-bar returns.
+
+**Result summary breakdown:** when 0 candidates pass, the dashboard `result_summary` and Telegram alert include per-filter rejection counts split by strategy (e.g. `A: atr=2 chg_open=1 | B: cir=1 vol=2`) so the operator can see *which* filter killed each batch.
 
 ## Backtesting
 

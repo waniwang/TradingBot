@@ -153,8 +153,21 @@ class EPEarningsPlugin:
                 entry_tickers = ", ".join(e["ticker"] for e in entries)
                 return f"{len(entries)} entries (B): {entry_tickers}"
             else:
+                # Aggregate per-filter rejection counts so the dashboard's result_summary
+                # tells you *why* candidates were rejected, not just the ticker list.
+                filter_counts: dict[str, int] = {}
+                for r in rejections:
+                    if r.get("is_data_error"):
+                        continue
+                    f = r.get("rejected_filter")
+                    if f:
+                        filter_counts[f] = filter_counts.get(f, 0) + 1
+                breakdown = (
+                    " | rejects: " + " ".join(f"{k}={v}" for k, v in sorted(filter_counts.items()))
+                    if filter_counts else ""
+                )
                 if notify:
-                    lines = [f"EP EARNINGS: {len(candidates)} candidates, 0 passed Strategy B"]
+                    lines = [f"EP EARNINGS: {len(candidates)} candidates, 0 passed Strategy B{breakdown}"]
                     for c in candidates:
                         ticker = c["ticker"]
                         rej = reject_by_ticker.get(ticker)
@@ -166,7 +179,7 @@ class EPEarningsPlugin:
                             lines.append(f"  {ticker}: gap {c['gap_pct']:.1f}% (no evaluation recorded)")
                     notify("\n".join(lines))
                 cand_tickers = ", ".join(c["ticker"] for c in candidates)
-                return f"{len(candidates)} scanned, 0 passed: {cand_tickers}"
+                return f"{len(candidates)} scanned, 0 passed: {cand_tickers}{breakdown}"
 
         except Exception as e:
             logger.error("EOD EP earnings scan failed: %s", e)

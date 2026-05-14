@@ -289,7 +289,7 @@ class TestPhaseCFilters:
         config = _make_config()
         notify = MagicMock()
 
-        def fake_confirm(sym, _today):
+        def fake_confirm(sym, _today, **_kwargs):
             if sym == "BAD":
                 raise KeyError(["Earnings Date"])
             return True
@@ -340,74 +340,37 @@ class TestConfirmNoEarnings:
     """Tests for the safety-inverted earnings check used by EP News."""
 
     def test_no_earnings_dates_returns_true(self):
-        """Successful API call with no earnings dates → confirmed no earnings."""
-        mock_dates = pd.DataFrame()  # empty DataFrame
-        with patch("strategies.ep_news.scanner.yf") as mock_yf:
-            mock_ticker = MagicMock()
-            mock_ticker.get_earnings_dates.return_value = mock_dates
-            mock_yf.Ticker.return_value = mock_ticker
-
+        """Successful lookup with no earnings dates → confirmed no earnings."""
+        with patch("strategies.ep_news.scanner.fetch_recent_earnings_dates", return_value=[]):
             result = _confirm_no_earnings("NVDA", date(2026, 4, 4))
         assert result is True
 
     def test_earnings_today_returns_false(self):
-        """Successful API call showing earnings today → has earnings."""
+        """Lookup shows earnings today → has earnings."""
         today = date(2026, 4, 4)
-        idx = pd.DatetimeIndex([pd.Timestamp(today)])
-        mock_dates = pd.DataFrame({"EPS": [1.5]}, index=idx)
-        with patch("strategies.ep_news.scanner.yf") as mock_yf:
-            mock_ticker = MagicMock()
-            mock_ticker.get_earnings_dates.return_value = mock_dates
-            mock_yf.Ticker.return_value = mock_ticker
-
+        with patch("strategies.ep_news.scanner.fetch_recent_earnings_dates", return_value=[today]):
             result = _confirm_no_earnings("NVDA", today)
         assert result is False
 
     def test_earnings_yesterday_returns_false(self):
         """Earnings yesterday (after-hours) → has earnings."""
         today = date(2026, 4, 4)
-        yesterday = today - timedelta(days=1)
-        idx = pd.DatetimeIndex([pd.Timestamp(yesterday)])
-        mock_dates = pd.DataFrame({"EPS": [1.5]}, index=idx)
-        with patch("strategies.ep_news.scanner.yf") as mock_yf:
-            mock_ticker = MagicMock()
-            mock_ticker.get_earnings_dates.return_value = mock_dates
-            mock_yf.Ticker.return_value = mock_ticker
-
+        with patch("strategies.ep_news.scanner.fetch_recent_earnings_dates", return_value=[today - timedelta(days=1)]):
             result = _confirm_no_earnings("NVDA", today)
         assert result is False
 
     def test_earnings_last_week_returns_true(self):
         """Earnings from last week → no recent earnings → confirmed safe."""
         today = date(2026, 4, 4)
-        old_date = today - timedelta(days=7)
-        idx = pd.DatetimeIndex([pd.Timestamp(old_date)])
-        mock_dates = pd.DataFrame({"EPS": [1.5]}, index=idx)
-        with patch("strategies.ep_news.scanner.yf") as mock_yf:
-            mock_ticker = MagicMock()
-            mock_ticker.get_earnings_dates.return_value = mock_dates
-            mock_yf.Ticker.return_value = mock_ticker
-
+        with patch("strategies.ep_news.scanner.fetch_recent_earnings_dates", return_value=[today - timedelta(days=7)]):
             result = _confirm_no_earnings("NVDA", today)
         assert result is True
 
     def test_api_exception_propagates(self):
-        """Per error-handling policy: yfinance errors must not be swallowed — they propagate so the job fails and a Telegram alert fires."""
-        with patch("strategies.ep_news.scanner.yf") as mock_yf:
-            mock_yf.Ticker.side_effect = Exception("yfinance down")
-
+        """Per error-handling policy: lookup errors must not be swallowed — they propagate so the caller can decide (raise or per-ticker skip)."""
+        with patch("strategies.ep_news.scanner.fetch_recent_earnings_dates", side_effect=Exception("yfinance down")):
             with pytest.raises(Exception, match="yfinance down"):
                 _confirm_no_earnings("NVDA", date(2026, 4, 4))
-
-    def test_none_response_returns_true(self):
-        """API returns None (no data) → confirmed no earnings."""
-        with patch("strategies.ep_news.scanner.yf") as mock_yf:
-            mock_ticker = MagicMock()
-            mock_ticker.get_earnings_dates.return_value = None
-            mock_yf.Ticker.return_value = mock_ticker
-
-            result = _confirm_no_earnings("NVDA", date(2026, 4, 4))
-        assert result is True
 
 
 # ---------------------------------------------------------------------------
@@ -637,31 +600,31 @@ class TestNewsStrategyA:
     def test_passes_all_filters(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
-        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is True
+        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is None
 
     def test_fails_chg_open_below_2(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["chg_open_pct"] = 1.5
-        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is False
+        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is not None
 
     def test_fails_chg_open_above_10(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["chg_open_pct"] = 12.0
-        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is False
+        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is not None
 
     def test_fails_close_in_range_low(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["close_in_range"] = 30.0
-        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is False
+        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is not None
 
     def test_fails_downside_too_high(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["downside_from_open"] = 5.0
-        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is False
+        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is not None
 
     def test_prev_10d_filter_removed(self):
         """P10D filter was removed 2026-04-21. Any P10D should still pass A."""
@@ -669,34 +632,34 @@ class TestNewsStrategyA:
         for p10d in [-50.0, -15.0, 0.0, 30.0]:
             features = self._make_passing_features()
             features["prev_10d_change_pct"] = p10d
-            assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is True, \
+            assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is None, \
                 f"P10D={p10d} should pass (filter removed)"
 
     def test_fails_atr_too_low(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["atr_pct"] = 2.0
-        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is False
+        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is not None
 
     def test_fails_atr_too_high(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["atr_pct"] = 8.0
-        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is False
+        assert evaluate_strategy_a(self._make_passing_candidate(), features, config) is not None
 
     def test_fails_volume_too_high(self):
         """Volume >= 3M fails Strategy A."""
         config = _make_strategy_config()
         features = self._make_passing_features()
         candidate = _make_candidate(today_volume=4_000_000)  # 4M >= 3M
-        assert evaluate_strategy_a(candidate, features, config) is False
+        assert evaluate_strategy_a(candidate, features, config) is not None
 
     def test_passes_volume_at_boundary(self):
         """Volume just under 3M passes."""
         config = _make_strategy_config()
         features = self._make_passing_features()
         candidate = _make_candidate(today_volume=2_900_000)  # 2.9M < 3M
-        assert evaluate_strategy_a(candidate, features, config) is True
+        assert evaluate_strategy_a(candidate, features, config) is None
 
 
 # ---------------------------------------------------------------------------
@@ -719,37 +682,37 @@ class TestNewsStrategyB:
     def test_passes_all_filters(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
-        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is True
+        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is None
 
     def test_fails_chg_open_below_2(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["chg_open_pct"] = 1.0
-        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is False
+        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is not None
 
     def test_fails_chg_open_above_10(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["chg_open_pct"] = 11.0
-        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is False
+        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is not None
 
     def test_fails_close_in_range_below_30(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["close_in_range"] = 20.0
-        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is False
+        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is not None
 
     def test_fails_close_in_range_above_80(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["close_in_range"] = 85.0
-        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is False
+        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is not None
 
     def test_fails_downside_too_high(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["downside_from_open"] = 7.0
-        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is False
+        assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is not None
 
     def test_prev_10d_filter_removed(self):
         """P10D filter was removed 2026-04-21. Any P10D should still pass B."""
@@ -757,7 +720,7 @@ class TestNewsStrategyB:
         for p10d in [-50.0, -5.0, 0.0, 30.0]:
             features = self._make_passing_features()
             features["prev_10d_change_pct"] = p10d
-            assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is True, \
+            assert evaluate_strategy_b(self._make_passing_candidate(), features, config) is None, \
                 f"P10D={p10d} should pass (filter removed)"
 
     def test_fails_volume_too_high(self):
@@ -765,7 +728,7 @@ class TestNewsStrategyB:
         config = _make_strategy_config()
         features = self._make_passing_features()
         candidate = _make_candidate(today_volume=6_000_000)
-        assert evaluate_strategy_b(candidate, features, config) is False
+        assert evaluate_strategy_b(candidate, features, config) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -847,6 +810,23 @@ class TestEvaluateEpNewsStrategies:
         assert len(rejections) == 1
         assert rejections[0]["is_data_error"] is True
         assert rejections[0]["ticker"] == candidate["ticker"]
+
+    def test_rejection_records_filter_codes_for_a_and_b(self):
+        """When A and B both fail, the rejection records each strategy's
+        first-failed filter so the plugin can roll counts up into result_summary."""
+        config = _make_strategy_config()
+        # CHG-OPEN of 1% fails both A and B's chg_open filter (require >2%).
+        candidate = _make_candidate(
+            open_price=100.0, current_price=101.0,
+            today_high=102.0, today_low=99.0,
+        )
+        df = _make_strategy_daily_df(recent_selloff=True)
+        entries, rejections = evaluate_ep_news_strategies([candidate], {"NVDA": df}, config)
+        assert entries == []
+        assert len(rejections) == 1
+        assert rejections[0]["is_data_error"] is False
+        assert rejections[0]["rejected_filter_a"] == "chg_open"
+        assert rejections[0]["rejected_filter_b"] == "chg_open"
 
     def test_volume_filter_differentiates_a_and_b(self):
         """Stock with 4M volume fails A (< 3M) but passes B (< 5M)."""

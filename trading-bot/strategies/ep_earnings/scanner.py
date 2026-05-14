@@ -25,11 +25,14 @@ Filters (in order):
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, timedelta
 from typing import Any
 
 import numpy as np
 import yfinance as yf
+
+from core.earnings import fetch_recent_earnings_dates
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +218,16 @@ def scan_ep_earnings(
     earnings_check_attempted = 0
     earnings_check_errors: list[str] = []
 
+    # Finnhub key (optional fallback when yfinance scrape breaks). Set via
+    # FINNHUB_API_KEY env or config["news"]["finnhub_api_key"]. main.py copies
+    # the env into the config; we read the env directly here so the scanner
+    # works in standalone test/script contexts too.
+    finnhub_key = (
+        (config.get("news") or {}).get("finnhub_api_key")
+        or os.environ.get("FINNHUB_API_KEY")
+        or None
+    )
+
     for c in candidates:
         sym = c["ticker"]
 
@@ -243,7 +256,7 @@ def scan_ep_earnings(
         if require_earnings:
             earnings_check_attempted += 1
             try:
-                has_earnings = _check_earnings_today(sym, today)
+                has_earnings = _check_earnings_today(sym, today, finnhub_key=finnhub_key)
             except Exception as e:
                 msg = (
                     f"EP EARNINGS: {sym} earnings-check failed "
@@ -294,24 +307,15 @@ def _get_ticker_info(ticker: str) -> tuple[float, str]:
     )
 
 
-def _check_earnings_today(ticker: str, today: date) -> bool:
+def _check_earnings_today(ticker: str, today: date, finnhub_key: str | None = None) -> bool:
     """Return True if ticker reported earnings today or yesterday.
 
-    Per CLAUDE.md error-handling policy: yfinance failures must propagate so the
-    scan job fails loudly via _track_job → Telegram. Silent `except Exception:
-    return False` would let the bot quietly skip every ticker on a Yahoo HTML
-    structure change or auth/network outage — exactly the failure mode that hid
-    the day-2 confirm price-data bug for two days. If a single bad ticker should
-    be tolerated, the caller (scan_ep_earnings) is responsible for a per-ticker
-    notify-then-continue wrapper, NOT this helper.
+    Uses `core.earnings.fetch_recent_earnings_dates` which tries yfinance first
+    and falls back to Finnhub when a key is configured. Raises on every-source
+    failure — per CLAUDE.md, silent fallbacks are forbidden in scanners. If a
+    single bad ticker should be tolerated, the caller (scan_ep_earnings) wraps
+    this in a per-ticker notify-then-skip handler.
     """
-    dates = yf.Ticker(ticker).get_earnings_dates(limit=4)
-    if dates is None or (hasattr(dates, "empty") and dates.empty):
-        return False
-
+    dates = fetch_recent_earnings_dates(ticker, finnhub_key=finnhub_key, limit=4)
     yesterday = today - timedelta(days=1)
-    for dt in dates.index:
-        d = dt.date() if hasattr(dt, "date") else dt
-        if d in (today, yesterday):
-            return True
-    return False
+    return any(d in (today, yesterday) for d in dates)

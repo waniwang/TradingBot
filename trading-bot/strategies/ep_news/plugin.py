@@ -158,8 +158,26 @@ class EPNewsPlugin:
                 entry_tickers = ", ".join(e["ticker"] for e in entries)
                 return f"{len(entries)} entries ({a_count}A+{b_count}B): {entry_tickers}"
             else:
+                # Aggregate per-filter rejection counts for A and B separately.
+                a_counts: dict[str, int] = {}
+                b_counts: dict[str, int] = {}
+                for r in rejections:
+                    if r.get("is_data_error"):
+                        continue
+                    fa = r.get("rejected_filter_a")
+                    fb = r.get("rejected_filter_b")
+                    if fa:
+                        a_counts[fa] = a_counts.get(fa, 0) + 1
+                    if fb:
+                        b_counts[fb] = b_counts.get(fb, 0) + 1
+                parts = []
+                if a_counts:
+                    parts.append("A: " + " ".join(f"{k}={v}" for k, v in sorted(a_counts.items())))
+                if b_counts:
+                    parts.append("B: " + " ".join(f"{k}={v}" for k, v in sorted(b_counts.items())))
+                breakdown = " | " + " | ".join(parts) if parts else ""
                 if notify:
-                    lines = [f"EP NEWS: {len(candidates)} candidates, 0 passed strategy filters"]
+                    lines = [f"EP NEWS: {len(candidates)} candidates, 0 passed strategy filters{breakdown}"]
                     for c in candidates:
                         ticker = c["ticker"]
                         rej = reject_by_ticker.get(ticker)
@@ -171,7 +189,7 @@ class EPNewsPlugin:
                             lines.append(f"  {ticker}: gap {c['gap_pct']:.1f}% (no evaluation recorded)")
                     notify("\n".join(lines))
                 cand_tickers = ", ".join(c["ticker"] for c in candidates)
-                return f"{len(candidates)} scanned, 0 passed: {cand_tickers}"
+                return f"{len(candidates)} scanned, 0 passed: {cand_tickers}{breakdown}"
 
         except Exception as e:
             logger.error("EOD EP news scan failed: %s", e)

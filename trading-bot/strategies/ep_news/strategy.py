@@ -108,11 +108,12 @@ def compute_features(
     }
 
 
-def evaluate_strategy_a(candidate: dict, features: dict, config: dict) -> bool:
+def evaluate_strategy_a(candidate: dict, features: dict, config: dict) -> str | None:
     """
     Strategy A (NEWS-Tight).
 
-    Returns True if candidate passes all Strategy A rules.
+    Returns `None` if candidate passes; else a short filter-code identifying
+    the first-failed filter ("chg_open", "cir", "downside", "atr", "volume").
     """
     cfg = config.get("signals", {})
 
@@ -124,19 +125,19 @@ def evaluate_strategy_a(candidate: dict, features: dict, config: dict) -> bool:
             "%s: Strategy A fail - CHG-OPEN%% %.2f not in (%.1f, %.1f]",
             candidate["ticker"], features["chg_open_pct"], chg_min, chg_max,
         )
-        return False
+        return "chg_open"
 
     # 2. close_in_range >= 50%
     min_close_in_range = float(cfg.get("ep_news_a_min_close_in_range", 50.0))
     if features["close_in_range"] < min_close_in_range:
         logger.debug("%s: Strategy A fail - close_in_range %.1f < %.1f", candidate["ticker"], features["close_in_range"], min_close_in_range)
-        return False
+        return "cir"
 
     # 3. downside_from_open < 3%
     max_downside = float(cfg.get("ep_news_a_max_downside_from_open", 3.0))
     if features["downside_from_open"] >= max_downside:
         logger.debug("%s: Strategy A fail - downside_from_open %.2f >= %.1f", candidate["ticker"], features["downside_from_open"], max_downside)
-        return False
+        return "downside"
 
     # Prev 10D filter removed 2026-04-21 after Spikeet data column proved
     # unreliable (sign-inverted vs yfinance on every 2026-04-20 candidate).
@@ -151,7 +152,7 @@ def evaluate_strategy_a(candidate: dict, features: dict, config: dict) -> bool:
             "%s: Strategy A fail - ATR%% %.2f not in [%.1f, %.1f]",
             candidate["ticker"], features["atr_pct"], atr_min, atr_max,
         )
-        return False
+        return "atr"
 
     # Volume < 3M
     max_volume_m = float(cfg.get("ep_news_a_max_volume_m", 3.0))
@@ -161,16 +162,17 @@ def evaluate_strategy_a(candidate: dict, features: dict, config: dict) -> bool:
             "%s: Strategy A fail - volume %.1fM >= %.1fM",
             candidate["ticker"], today_volume_m, max_volume_m,
         )
-        return False
+        return "volume"
 
-    return True
+    return None
 
 
-def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> bool:
+def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> str | None:
     """
     Strategy B (NEWS-Relaxed).
 
-    Returns True if candidate passes all Strategy B rules.
+    Returns `None` if candidate passes; else a short filter-code identifying
+    the first-failed filter ("chg_open", "cir", "downside", "atr", "volume").
     """
     cfg = config.get("signals", {})
 
@@ -182,7 +184,7 @@ def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> bool:
             "%s: Strategy B fail - CHG-OPEN%% %.2f not in (%.1f, %.1f]",
             candidate["ticker"], features["chg_open_pct"], chg_min, chg_max,
         )
-        return False
+        return "chg_open"
 
     # 2. close_in_range between 30% and 80%
     cir_min = float(cfg.get("ep_news_b_min_close_in_range", 30.0))
@@ -192,13 +194,13 @@ def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> bool:
             "%s: Strategy B fail - close_in_range %.1f not in [%.1f, %.1f]",
             candidate["ticker"], features["close_in_range"], cir_min, cir_max,
         )
-        return False
+        return "cir"
 
     # 3. downside_from_open < 6%
     max_downside = float(cfg.get("ep_news_b_max_downside_from_open", 6.0))
     if features["downside_from_open"] >= max_downside:
         logger.debug("%s: Strategy B fail - downside_from_open %.2f >= %.1f", candidate["ticker"], features["downside_from_open"], max_downside)
-        return False
+        return "downside"
 
     # Prev 10D filter removed 2026-04-21 (see evaluate_strategy_a).
 
@@ -210,7 +212,7 @@ def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> bool:
             "%s: Strategy B fail - ATR%% %.2f not in [%.1f, %.1f]",
             candidate["ticker"], features["atr_pct"], atr_min, atr_max,
         )
-        return False
+        return "atr"
 
     # Volume < 5M
     max_volume_m = float(cfg.get("ep_news_b_max_volume_m", 5.0))
@@ -220,9 +222,9 @@ def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> bool:
             "%s: Strategy B fail - volume %.1fM >= %.1fM",
             candidate["ticker"], today_volume_m, max_volume_m,
         )
-        return False
+        return "volume"
 
-    return True
+    return None
 
 
 def evaluate_ep_news_strategies(
@@ -309,7 +311,9 @@ def evaluate_ep_news_strategies(
         }
 
         # A wins if both pass (tighter filters).
-        passed_a = evaluate_strategy_a(c, features, config)
+        a_failed_filter = evaluate_strategy_a(c, features, config)
+        b_failed_filter: str | None = None
+        passed_a = a_failed_filter is None
         passed_b = False
         if passed_a:
             stop_price_a = round(entry_price * (1 - stop_a / 100), 2)
@@ -323,7 +327,8 @@ def evaluate_ep_news_strategies(
                 features["atr_pct"], c.get("today_volume", 0) / 1e6,
             )
         else:
-            passed_b = evaluate_strategy_b(c, features, config)
+            b_failed_filter = evaluate_strategy_b(c, features, config)
+            passed_b = b_failed_filter is None
             if passed_b:
                 stop_price_b = round(entry_price * (1 - stop_b / 100), 2)
                 entry_b = {**base, "ep_strategy": "B", "stop_price": stop_price_b, "stop_loss_pct": stop_b}
@@ -340,7 +345,7 @@ def evaluate_ep_news_strategies(
             rejections.append({
                 "ticker": ticker,
                 "reason": (
-                    f"no strategy passed "
+                    f"A failed on {a_failed_filter}, B failed on {b_failed_filter} "
                     f"(CHG {features['chg_open_pct']:+.1f}% "
                     f"CIR {features['close_in_range']:.0f} "
                     f"DS {features['downside_from_open']:.1f}% "
@@ -349,6 +354,8 @@ def evaluate_ep_news_strategies(
                     f"Vol {c.get('today_volume', 0) / 1e6:.1f}M)"
                 ),
                 "is_data_error": False,
+                "rejected_filter_a": a_failed_filter,
+                "rejected_filter_b": b_failed_filter,
             })
 
     a_count = sum(1 for e in entries if e["ep_strategy"] == "A")

@@ -350,7 +350,7 @@ class TestPhaseCFilters:
         config = _make_config({"ep_earnings_require_earnings": True})
         notify = MagicMock()
 
-        def fake_check(sym, _today):
+        def fake_check(sym, _today, **_kwargs):
             if sym == "BAD":
                 raise KeyError(["Earnings Date"])
             return True
@@ -443,51 +443,29 @@ class TestOutputFormat:
 # ---------------------------------------------------------------------------
 
 class TestCheckEarningsToday:
-    @patch("strategies.ep_earnings.scanner.yf")
-    def test_earnings_today(self, mock_yf):
+    def test_earnings_today(self):
         """Returns True when earnings date matches today."""
         today = date(2026, 3, 27)
-        mock_ticker = MagicMock()
-        mock_yf.Ticker.return_value = mock_ticker
-        mock_ticker.get_earnings_dates.return_value = pd.DataFrame(
-            {"Surprise(%)": [0.5]},
-            index=pd.DatetimeIndex([pd.Timestamp("2026-03-27 12:00:00")])
-        )
+        with patch("strategies.ep_earnings.scanner.fetch_recent_earnings_dates", return_value=[today]):
+            assert _check_earnings_today("NVDA", today) is True
 
-        assert _check_earnings_today("NVDA", today) is True
-
-    @patch("strategies.ep_earnings.scanner.yf")
-    def test_earnings_yesterday(self, mock_yf):
+    def test_earnings_yesterday(self):
         """Returns True when earnings date matches yesterday (after-hours)."""
         today = date(2026, 3, 27)
-        mock_ticker = MagicMock()
-        mock_yf.Ticker.return_value = mock_ticker
-        mock_ticker.get_earnings_dates.return_value = pd.DataFrame(
-            {"Surprise(%)": [0.5]},
-            index=pd.DatetimeIndex([pd.Timestamp("2026-03-26 16:00:00")])
-        )
+        with patch("strategies.ep_earnings.scanner.fetch_recent_earnings_dates", return_value=[today - timedelta(days=1)]):
+            assert _check_earnings_today("NVDA", today) is True
 
-        assert _check_earnings_today("NVDA", today) is True
-
-    @patch("strategies.ep_earnings.scanner.yf")
-    def test_no_earnings(self, mock_yf):
+    def test_no_earnings(self):
         """Returns False when no earnings dates match."""
         today = date(2026, 3, 27)
-        mock_ticker = MagicMock()
-        mock_yf.Ticker.return_value = mock_ticker
-        mock_ticker.get_earnings_dates.return_value = pd.DataFrame(
-            {"Surprise(%)": [0.5]},
-            index=pd.DatetimeIndex([pd.Timestamp("2026-04-15 12:00:00")])
-        )
+        with patch("strategies.ep_earnings.scanner.fetch_recent_earnings_dates", return_value=[date(2026, 4, 15)]):
+            assert _check_earnings_today("NVDA", today) is False
 
-        assert _check_earnings_today("NVDA", today) is False
-
-    @patch("strategies.ep_earnings.scanner.yf")
-    def test_exception_propagates(self, mock_yf):
-        """Per error-handling policy: yfinance errors must not be swallowed — they propagate so the job fails and a Telegram alert fires."""
-        mock_yf.Ticker.side_effect = Exception("network error")
-        with pytest.raises(Exception, match="network error"):
-            _check_earnings_today("NVDA", date(2026, 3, 27))
+    def test_exception_propagates(self):
+        """Per error-handling policy: lookup errors must not be swallowed — they propagate so the caller can decide (raise or per-ticker skip)."""
+        with patch("strategies.ep_earnings.scanner.fetch_recent_earnings_dates", side_effect=Exception("network error")):
+            with pytest.raises(Exception, match="network error"):
+                _check_earnings_today("NVDA", date(2026, 3, 27))
 
 
 class TestGetTickerInfo:
@@ -688,31 +666,31 @@ class TestStrategyB:
     def test_passes_all_filters(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
-        assert evaluate_strategy_b(_make_candidate(), features, config) is True
+        assert evaluate_strategy_b(_make_candidate(), features, config) is None
 
     def test_fails_chg_open_negative(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["chg_open_pct"] = -1.0
-        assert evaluate_strategy_b(_make_candidate(), features, config) is False
+        assert evaluate_strategy_b(_make_candidate(), features, config) is not None
 
     def test_fails_close_in_range_low(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["close_in_range"] = 30.0
-        assert evaluate_strategy_b(_make_candidate(), features, config) is False
+        assert evaluate_strategy_b(_make_candidate(), features, config) is not None
 
     def test_fails_atr_too_low(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["atr_pct"] = 1.0
-        assert evaluate_strategy_b(_make_candidate(), features, config) is False
+        assert evaluate_strategy_b(_make_candidate(), features, config) is not None
 
     def test_fails_atr_too_high(self):
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["atr_pct"] = 6.0
-        assert evaluate_strategy_b(_make_candidate(), features, config) is False
+        assert evaluate_strategy_b(_make_candidate(), features, config) is not None
 
     def test_prev_10d_filter_removed(self):
         """P10D filter was removed 2026-04-21. Any P10D value should pass B."""
@@ -720,7 +698,7 @@ class TestStrategyB:
         for p10d in [-50.0, -10.0, 5.0, 50.0]:
             features = self._make_passing_features()
             features["prev_10d_change_pct"] = p10d
-            assert evaluate_strategy_b(_make_candidate(), features, config) is True, \
+            assert evaluate_strategy_b(_make_candidate(), features, config) is None, \
                 f"P10D={p10d} should pass (filter removed)"
 
     def test_no_downside_filter(self):
@@ -728,7 +706,7 @@ class TestStrategyB:
         config = _make_strategy_config()
         features = self._make_passing_features()
         features["downside_from_open"] = 10.0  # would fail A, but B has no such filter
-        assert evaluate_strategy_b(_make_candidate(), features, config) is True
+        assert evaluate_strategy_b(_make_candidate(), features, config) is None
 
 
 class TestEvaluateEpEarningsStrategies:
@@ -803,6 +781,19 @@ class TestEvaluateEpEarningsStrategies:
         assert len(rejections) == 1
         assert rejections[0]["is_data_error"] is True
         assert rejections[0]["ticker"] == candidate["ticker"]
+
+    def test_rejection_records_filter_code(self):
+        """Strategy B rejection records WHICH filter killed the candidate so the
+        plugin can roll counts up into result_summary."""
+        config = _make_strategy_config()
+        # CHG-OPEN% negative → fails first filter (chg_open).
+        candidate = _make_candidate(open_price=100.0, current_price=95.0)
+        df = _make_strategy_daily_df()
+        entries, rejections = evaluate_ep_earnings_strategies([candidate], {"NVDA": df}, config)
+        assert entries == []
+        assert len(rejections) == 1
+        assert rejections[0]["is_data_error"] is False
+        assert rejections[0]["rejected_filter"] == "chg_open"
 
     def test_passes_a_only(self):
         """Stock with ATR outside 2-5% range passes A but not B."""

@@ -25,12 +25,14 @@ Filters (in order):
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, timedelta
 from typing import Any
 
 import numpy as np
 import yfinance as yf
 
+from core.earnings import fetch_recent_earnings_dates
 from strategies.ep_earnings.scanner import _get_ticker_info
 
 logger = logging.getLogger(__name__)
@@ -212,6 +214,13 @@ def scan_ep_news(
     earnings_check_attempted = 0
     earnings_check_errors: list[str] = []
 
+    # Finnhub key (optional fallback when yfinance scrape breaks).
+    finnhub_key = (
+        (config.get("news") or {}).get("finnhub_api_key")
+        or os.environ.get("FINNHUB_API_KEY")
+        or None
+    )
+
     for c in candidates:
         sym = c["ticker"]
 
@@ -240,7 +249,7 @@ def scan_ep_news(
         if exclude_earnings:
             earnings_check_attempted += 1
             try:
-                no_earnings = _confirm_no_earnings(sym, today)
+                no_earnings = _confirm_no_earnings(sym, today, finnhub_key=finnhub_key)
             except Exception as e:
                 msg = (
                     f"EP NEWS: {sym} earnings-check failed "
@@ -283,25 +292,16 @@ def scan_ep_news(
     return result
 
 
-def _confirm_no_earnings(ticker: str, today: date) -> bool:
+def _confirm_no_earnings(ticker: str, today: date, finnhub_key: str | None = None) -> bool:
     """Return True if earnings calendar confirms no earnings today/yesterday.
 
-    Per CLAUDE.md error-handling policy: yfinance failures must propagate. The
-    silent `except Exception: return True` form is especially dangerous here
-    because it ALSO opts the ticker IN to the EP-news universe (the function
-    return is read as "confirmed no earnings" — a green light for entry). Any
-    yfinance outage would silently widen the universe to include real earnings
-    gaps, which belong to ep_earnings and have different stop/hold rules. If a
-    single bad ticker should be tolerated, the caller is responsible for a
-    per-ticker notify-then-continue wrapper, NOT this helper.
+    Uses `core.earnings.fetch_recent_earnings_dates` which tries yfinance first
+    and falls back to Finnhub when a key is configured. Raises on every-source
+    failure — silent fallbacks are forbidden here because returning True is read
+    as "green light for entry" and would widen the news universe to real earnings
+    gaps (different stop/hold rules). The caller (scan_ep_news) wraps this in a
+    per-ticker notify-then-skip handler for single-ticker faults.
     """
-    dates = yf.Ticker(ticker).get_earnings_dates(limit=4)
-    if dates is None or (hasattr(dates, "empty") and dates.empty):
-        return True
-
+    dates = fetch_recent_earnings_dates(ticker, finnhub_key=finnhub_key, limit=4)
     yesterday = today - timedelta(days=1)
-    for dt in dates.index:
-        d = dt.date() if hasattr(dt, "date") else dt
-        if d in (today, yesterday):
-            return False
-    return True
+    return not any(d in (today, yesterday) for d in dates)

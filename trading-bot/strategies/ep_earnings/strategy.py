@@ -107,24 +107,27 @@ def compute_features(
     }
 
 
-def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> bool:
+def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> str | None:
     """
     Strategy B (the only remaining EP earnings variant).
 
-    Returns True if candidate passes all Strategy B rules.
+    Returns `None` if candidate passes all Strategy B rules, else a short
+    code identifying the first-failed filter (one of: "chg_open", "cir",
+    "atr"). Used by the plugin job_scan to aggregate per-filter rejection
+    counts into the dashboard's result_summary field.
     """
     cfg = config.get("signals", {})
 
     # 1. CHG-OPEN% > 0
     if features["chg_open_pct"] <= 0:
         logger.debug("%s: Strategy B fail - CHG-OPEN%% %.2f <= 0", candidate["ticker"], features["chg_open_pct"])
-        return False
+        return "chg_open"
 
     # 2. close_in_range >= 50
     min_close_in_range = float(cfg.get("ep_earnings_b_min_close_in_range", 50.0))
     if features["close_in_range"] < min_close_in_range:
         logger.debug("%s: Strategy B fail - close_in_range %.1f < %.1f", candidate["ticker"], features["close_in_range"], min_close_in_range)
-        return False
+        return "cir"
 
     # 3. ATR% between 2% and 5%
     atr_min = float(cfg.get("ep_earnings_b_atr_pct_min", 2.0))
@@ -134,9 +137,9 @@ def evaluate_strategy_b(candidate: dict, features: dict, config: dict) -> bool:
             "%s: Strategy B fail - ATR%% %.2f not in [%.1f, %.1f]",
             candidate["ticker"], features["atr_pct"], atr_min, atr_max,
         )
-        return False
+        return "atr"
 
-    return True
+    return None
 
 
 def evaluate_ep_earnings_strategies(
@@ -195,16 +198,18 @@ def evaluate_ep_earnings_strategies(
             })
             continue
 
-        if not evaluate_strategy_b(c, features, config):
+        failed_filter = evaluate_strategy_b(c, features, config)
+        if failed_filter is not None:
             rejections.append({
                 "ticker": ticker,
                 "reason": (
-                    f"Strategy B failed "
+                    f"Strategy B failed on {failed_filter} "
                     f"(CHG {features['chg_open_pct']:+.1f}% "
                     f"CIR {features['close_in_range']:.0f} "
                     f"ATR {features['atr_pct']:.1f}%)"
                 ),
                 "is_data_error": False,
+                "rejected_filter": failed_filter,
             })
             continue
 
