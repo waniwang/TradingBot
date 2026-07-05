@@ -1,0 +1,127 @@
+name: One-shot — dump 2026 EP trades (closed + open) as CSV
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump 2026 EP positions with variant from watchlist meta
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          capture_stdout: true
+          script: |
+            set -e
+            cd /opt/trading-bot/trading-bot
+            .venv/bin/python <<'PY'
+            import csv, io, json, sys
+            from pathlib import Path
+            ROOT = Path('/opt/trading-bot/trading-bot')
+            sys.path.insert(0, str(ROOT))
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from db.models import Position, Order, Signal, Watchlist
+
+            for label, url in [
+                ('ALPACA', 'sqlite:////opt/trading-bot/trading-bot/trading_bot.db'),
+                ('IB', 'sqlite:////opt/trading-bot/trading-bot/trading_bot_ib.db'),
+            ]:
+                eng = create_engine(url)
+                S = sessionmaker(bind=eng)
+                with S() as s:
+                    positions = (
+                        s.query(Position)
+                        .filter(Position.setup_type.like('ep_%'))
+                        .filter(Position.opened_at >= '2026-01-01')
+                        .order_by(Position.opened_at.asc())
+                        .all()
+                    )
+                    # Variant lives in Watchlist.metadata_json -> ep_strategy.
+                    # Match on (ticker, setup_type); take the row whose scan_date
+                    # is closest at-or-before the position open date.
+                    wl_rows = (
+                        s.query(Watchlist)
+                        .filter(Watchlist.setup_type.like('ep_%'))
+                        .all()
+                    )
+                    wl_map = {}
+                    for w in wl_rows:
+                        try:
+                            meta = json.loads(w.metadata_json) if w.metadata_json else {}
+                        except (ValueError, TypeError):
+                            meta = {}
+                        wl_map.setdefault((w.ticker, w.setup_type), []).append(
+                            (w.scan_date, meta.get('ep_strategy'))
+                        )
+
+                    buf = io.StringIO()
+                    wcsv = csv.writer(buf)
+                    wcsv.writerow([
+                        'bot', 'ticker', 'setup_type', 'variant', 'shares',
+                        'entry_price', 'exit_price', 'stop_price',
+                        'initial_stop_price', 'realized_pnl', 'exit_reason',
+                        'partial_exit_done', 'is_open', 'opened_at', 'closed_at',
+                    ])
+                    for p in positions:
+                        variant = None
+                        cands = wl_map.get((p.ticker, p.setup_type), [])
+                        if cands and p.opened_at:
+                            od = p.opened_at.date()
+                            before = [c for c in cands if c[0] and c[0] <= od]
+                            pick = max(before, key=lambda c: c[0]) if before \
+                                else min(cands, key=lambda c: c[0])
+                            variant = pick[1]
+                        wcsv.writerow([
+                            label, p.ticker, p.setup_type, variant, p.shares,
+                            p.entry_price, p.exit_price, p.stop_price,
+                            getattr(p, 'initial_stop_price', None),
+                            p.realized_pnl, p.exit_reason,
+                            getattr(p, 'partial_exit_done', None),
+                            int(bool(p.is_open)),
+                            p.opened_at, p.closed_at,
+                        ])
+
+                    print(f'===CSV BEGIN {label}===')
+                    print(buf.getvalue().rstrip())
+                    print(f'===CSV END {label}===')
+
+                    # Also dump orders (joined to Signal for setup_type) so the
+                    # diagnosis can reconstruct blended returns on
+                    # partially-scaled trades. Orders without a signal (e.g.
+                    # stop/partial legs) are matched by ticker against the EP
+                    # position set instead.
+                    ep_tickers = {p.ticker for p in positions}
+                    orders = (
+                        s.query(Order)
+                        .outerjoin(Signal, Order.signal_id == Signal.id)
+                        .filter(Order.created_at >= '2026-01-01')
+                        .filter(
+                            (Signal.setup_type.like('ep_%'))
+                            | (Order.ticker.in_(ep_tickers))
+                        )
+                        .order_by(Order.created_at.asc())
+                        .all()
+                    )
+                    obuf = io.StringIO()
+                    ocsv = csv.writer(obuf)
+                    ocsv.writerow([
+                        'bot', 'ticker', 'setup_type', 'side', 'order_type',
+                        'qty', 'price', 'filled_avg_price', 'filled_qty',
+                        'status', 'created_at', 'updated_at',
+                    ])
+                    for o in orders:
+                        ocsv.writerow([
+                            label, o.ticker,
+                            o.signal.setup_type if o.signal else None,
+                            o.side, o.order_type, o.qty, o.price,
+                            o.filled_avg_price, o.filled_qty,
+                            o.status, o.created_at, o.updated_at,
+                        ])
+                    print(f'===ORDERS CSV BEGIN {label}===')
+                    print(obuf.getvalue().rstrip())
+                    print(f'===ORDERS CSV END {label}===')
+            PY

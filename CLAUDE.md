@@ -1,13 +1,13 @@
 # Qullamaggie Trading Bot
 
-Automated momentum trading bot inspired by Kristjan Kullamagi's setups: **Breakout** (long), **Episodic Pivot** (long), **EP Earnings** (swing), **EP News** (swing), and **Parabolic Short**. Trades US equities via Alpaca. Runs on a Linode VPS with a Next.js dashboard.
+Automated momentum trading bot inspired by Kristjan Kullamagi's setups: **Breakout** (long), **Episodic Pivot** (long), **EP Earnings** (swing), **EP News** (swing), **EP Breakout** (EP 2.0 swing, added 2026-07-05), and **Parabolic Short**. Trades US equities via Alpaca. Runs on a Linode VPS with a Next.js dashboard.
 
 ## Quick Reference
 
 | What | Where |
 |------|-------|
 | Bot code | `trading-bot/` |
-| Strategy plugins | `trading-bot/strategies/` — breakout, ep_earnings, ep_news, episodic_pivot, parabolic_short |
+| Strategy plugins | `trading-bot/strategies/` — breakout, ep_breakout, ep_earnings, ep_news, episodic_pivot, parabolic_short |
 | Core framework | `trading-bot/core/` — plugin loader, scheduler, data cache |
 | Documentation | `docs/` (7 docs — read these for deep context) |
 | Entry point (Alpaca) | `trading-bot/main.py` — APScheduler orchestrator |
@@ -60,7 +60,7 @@ Strategy Scanners (premarket)     Strategy Signals (market open)    Monitor (int
 
 **Data sources:** Alpaca snapshots for gap scanning (IEX daily-snapshot coverage is ~99.7% — the "~2%" figure applies only to realtime intraday trade streams), yfinance for fundamentals (market cap, quoteType, earnings calendar), Alpaca 1m candles for intraday signals. Full Alpaca capability + quirks cheat sheet: [docs/alpaca-api.md](docs/alpaca-api.md).
 
-**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 8:30 AM pre-market EP preview (read-only, Discord-only — see `core/premarket_preview.py`) → 9:25 AM finalize watchlist → 9:30 AM–4:00 PM intraday monitor (long-running window driven by the Alpaca 1-min bar stream registered at 9:25) → 9:40 AM EP time-partial check (D19+ in-profit positions: 40% off + stop→entry×1.05) → 3:00 PM EP earnings scan + strategy eval → 3:05 PM EP news scan + strategy eval → 3:10 PM Discord candidate summary (read-only, decoupled from scans — see `core/discord.py`) → 3:50–3:59 PM EP earnings/news execute (retries every minute, idempotent) → 3:55 PM EOD tasks → every 5 min reconcile → every 30s heartbeat.
+**Scheduler (ET timezone):** 5:00 PM nightly scan → 6:00 AM premarket scan → 8:30 AM pre-market EP preview (read-only, Discord-only — see `core/premarket_preview.py`) → 9:25 AM finalize watchlist → 9:30 AM–4:00 PM intraday monitor (long-running window driven by the Alpaca 1-min bar stream registered at 9:25) → 9:40 AM EP time-partial check (D19+ in-profit positions: 40% off + stop→entry×1.05) + EP breakout +30% target partial (33% off, stop→max(stop, entry)) → 3:00 PM EP earnings scan + strategy eval → 3:05 PM EP news scan + strategy eval → 3:10 PM Discord candidate summary (read-only, decoupled from scans — see `core/discord.py`) → 3:15 PM EP breakout scan (gap events → stage="watching") → 3:50–3:59 PM EP earnings/news execute + EP breakout confirm state machine (retries every minute, idempotent) → 3:55 PM EOD tasks (incl. EP breakout breakeven move + MA10-close trail) → every 5 min reconcile → every 30s heartbeat.
 
 Pipeline job metadata (descriptions, categories, `time`/`end_time` window, phase) lives exclusively in `api/constants.py::PIPELINE_SCHEDULE`. Edit entries there to change what the dashboard Pipeline page displays. `end_time` is set on jobs that run as a window (intraday monitor, execute retry loops); omit it for point-in-time jobs.
 

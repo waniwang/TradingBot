@@ -6,3 +6,11 @@
 .vscode/
 
 backtest_cache/
+# local secrets
+.env
+# Massive.com research data caches (fetched by scripts/, not source)
+market data download/massive_daily/
+market data download/massive_grouped/
+market data download/breakout_paths/
+# sweep run outputs
+sweeps/runs/

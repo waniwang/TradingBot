@@ -1,0 +1,25 @@
+# EP 2.0 Track A — stage A3: runner exits, entry+context frozen at A2 winner.
+mode: path
+
+entry_params:
+  date_min: "2021-07-07"
+  date_max: "2025-12-31"
+  entry_mode: rested_breakout
+  bo_min_days: 5
+  bo_window: 10
+  bo_max_premium: 1.08
+  bo_stop_mode: fixed
+  mktcap_b_min: 5.0
+  ddv_min: 100.0
+  atr_pct_min: 3.0
+
+exit_params:
+  stop_pct: [8.0, 10.0, 12.0]
+  profit_target_pct: [null, 20.0, 30.0, 40.0]
+  profit_target_fraction: [0.25, 0.33]
+  time_partial_day: [null]
+  breakeven_trigger_pct: [null, 10.0, 15.0]
+  breakeven_lock_pct: [0.0]
+  trail_mode: [n_day_low, ma_close]
+  trail_param: [10, 15, 20]
+  max_hold_days: [50, 70]

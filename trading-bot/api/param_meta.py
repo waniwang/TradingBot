@@ -174,11 +174,57 @@ _PARABOLIC_SHORT: list[ParamMeta] = [
 ]
 
 
+# ── EP Breakout (EP 2.0 Track A) ─────────────────────────────────────
+
+_EP_BREAKOUT: list[ParamMeta] = [
+    ParamMeta("min_gap_pct", "base", "scan",
+              "Minimum gap % vs prior close for the gap event to qualify."),
+    ParamMeta("min_price", "base", "scan",
+              "Minimum prior close (filters penny stocks)."),
+    ParamMeta("min_market_cap", "base", "scan",
+              "BIG filter: minimum market cap ($5B). Large-cap theme leaders only."),
+    ParamMeta("min_dollar_vol", "base", "scan",
+              "LOUD filter: minimum gap-day dollar volume ($100M). Deliberately "
+              "replaces the old share-volume CAP that rejected 2026's winners."),
+    ParamMeta("min_atr_pct", "base", "scan",
+              "VOLATILE filter: minimum 10-day ATR as % of close."),
+    ParamMeta("require_open_above_prev_high", "base", "scan",
+              "Require gap-day open above yesterday's high."),
+    ParamMeta("require_above_200d_sma", "base", "scan",
+              "Require gap-day open above the 200-day SMA."),
+    ParamMeta("bo_min_days", "base", "execute",
+              "Sessions of rest (never closing below the gap-day low) required "
+              "before a breakout entry is allowed."),
+    ParamMeta("bo_window", "base", "execute",
+              "Sessions to wait for breakout confirmation; the watch row "
+              "expires after this many sessions without a trigger."),
+    ParamMeta("bo_max_premium_pct", "base", "execute",
+              "Chase guard: skip if the confirming close is more than this % "
+              "above the gap-day high."),
+    ParamMeta("stop_loss_pct", "base", "execute",
+              "GTC stop distance below entry."),
+    ParamMeta("profit_target_pct", "base", "execute",
+              "Price-target partial: sell the target fraction once price "
+              "reaches entry x (1 + this%). Checked at 9:40 AM ET."),
+    ParamMeta("profit_target_fraction", "base", "execute",
+              "Fraction of the position sold at the profit target."),
+    ParamMeta("breakeven_trigger_pct", "base", "execute",
+              "After a daily close this % above entry, the stop moves to "
+              "entry (breakeven lock, EOD check)."),
+    ParamMeta("trail_ma_days", "base", "execute",
+              "Runner exit: close below this-many-day SMA of closes exits the "
+              "remainder at EOD. Active from day 1 for this setup."),
+    ParamMeta("max_hold_days", "base", "execute",
+              "Hard exit after this many calendar days."),
+]
+
+
 # ── Registry ─────────────────────────────────────────────────────────
 
 PARAM_META: dict[str, list[ParamMeta]] = {
     "ep_earnings": _EP_EARNINGS,
     "ep_news": _EP_NEWS,
+    "ep_breakout": _EP_BREAKOUT,
     "breakout": _BREAKOUT,
     "episodic_pivot": _EPISODIC_PIVOT,
     "parabolic_short": _PARABOLIC_SHORT,

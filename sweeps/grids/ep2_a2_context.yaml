@@ -1,0 +1,25 @@
+# EP 2.0 Track A — stage A2: context filters, entry frozen at A1 winner.
+mode: path
+
+entry_params:
+  date_min: "2021-07-07"
+  date_max: "2025-12-31"
+  entry_mode: rested_breakout
+  bo_min_days: 5
+  bo_window: 10
+  bo_max_premium: 1.08
+  bo_stop_mode: fixed
+  mktcap_b_min: [1.0, 5.0]
+  prior_gaps_90d_min: [0, 1]
+  ddv_min: [0.0, 50.0, 100.0]
+  atr_pct_min: [0.0, 3.0, 4.0]
+  catalyst: [~, earnings, news]
+
+exit_params:
+  stop_pct: 10.0
+  profit_target_pct: 20.0
+  profit_target_fraction: 0.33
+  time_partial_day: null
+  trail_mode: n_day_low
+  trail_param: 10
+  max_hold_days: 50

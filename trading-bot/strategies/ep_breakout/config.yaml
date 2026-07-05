@@ -1,0 +1,27 @@
+# EP Breakout — gap-anchored rested breakout (EP 2.0 Track A).
+# Validated 2026-07-05 (docs/research/ep2_validation.md: PASS 6/6, robust
+# plateau). Do NOT tune without re-running scripts/validate_ep2.py.
+
+# -- gap event qualification (3:15 PM ET scan day) --
+min_gap_pct: 8.0
+min_price: 3.0
+min_market_cap: 5_000_000_000     # BIG: large caps only
+min_dollar_vol: 100_000_000       # LOUD: gap-day close x volume >= $100M
+min_atr_pct: 3.0                  # VOLATILE: 10d ATR / close >= 3%
+require_open_above_prev_high: true
+require_above_200d_sma: true
+# Deliberately NO share-volume cap, NO chg_open cap, NO close_in_range
+# floor — those filters rejected 2026's winners (see ep2_strategy_report.md).
+
+# -- breakout confirmation (3:50 PM ET daily check) --
+bo_min_days: 4                    # sessions of rest before entry is allowed
+bo_window: 15                     # sessions to wait for confirmation, else expire
+bo_max_premium_pct: 5.0           # skip if confirm close > gap_high * 1.05
+
+# -- exits --
+stop_loss_pct: 8.0
+profit_target_pct: 30.0           # sell 33% at +30% (9:40 AM check)
+profit_target_fraction: 0.33
+breakeven_trigger_pct: 15.0       # after a close >= +15%, stop -> entry
+trail_ma_days: 10                 # close < 10d SMA of closes -> exit at close
+max_hold_days: 50

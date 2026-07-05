@@ -1,0 +1,26 @@
+# Stage 4 — entry re-sweep, EP News A, exits FROZEN at stage-3 winner.
+# Era: 2021-H2..2025 ONLY (2026 is out-of-sample readout, never fit).
+mode: path
+
+entry_params:
+  date_min: "2021-07-07"
+  date_max: "2025-12-31"
+  chg_open_min: [1.0, 2.0, 3.0]
+  chg_open_max: [10.0, 15.0]
+  close_in_range_min: [50.0, 60.0, 70.0]
+  downside_from_open_max: [2.0, 3.0, 4.0]
+  atr_pct_min: [2.5, 3.0, 4.0]
+  atr_pct_max: [6.0, 7.0, 8.0]
+  volume_max: [1500000, 3000000, 5000000]
+  mktcap_b_min: [1.0, 2.0]
+
+exit_params:
+  stop_pct: 8.0
+  profit_target_pct: 10.0
+  profit_target_fraction: 0.5
+  time_partial_day: null
+  breakeven_trigger_pct: 12.0
+  breakeven_lock_pct: 0.0
+  trail_mode: n_day_low
+  trail_param: 10
+  max_hold_days: 30

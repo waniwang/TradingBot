@@ -1,0 +1,16 @@
+# Fitness gates for PATH-mode sweeps (2021-H2..2025 era).
+#
+# Floors are calibrated to the PATH-SIMULATED baselines (which are far lower
+# than the retired checkpoint numbers): Earnings B 1.55, News A 2.97,
+# News B 0.96. A combo must clear the baseline meaningfully to be
+# interesting; final candidate selection applies the stricter G1-G10 gates
+# in scripts/validate_candidate.py.
+#
+# min_trades: exit-only sweeps don't change n (~250 Earnings / ~41 News A /
+# ~45 News B after path exclusions) — the floor just rejects degenerate
+# combos that exit almost nothing.
+min_trades: 30
+min_profit_factor: 1.2
+min_annual_sharpe: 0.8
+max_drawdown_pct: 100.0
+min_win_rate: 0.0

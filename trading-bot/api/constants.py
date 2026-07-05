@@ -109,6 +109,50 @@ PIPELINE_SCHEDULE = [
         "display_day_offset": 0,
     },
     {
+        "job_id": "ep_breakout_scan",
+        "label": "EP Breakout Scan",
+        "time": "15:15",
+        "category": "scan",
+        "phase": "afternoon",
+        "description": (
+            "Qualifies today's BIG/LOUD/VOLATILE gap events (>=8% gap, mcap >=$5B, dollar "
+            "volume >=$100M, ATR >=3%, catalyst-agnostic) into stage='watching' rows. No "
+            "same-day entry — the daily 3:50 PM confirm job tracks each row for up to 15 "
+            "sessions and enters only on a rested breakout above the gap-day high."
+        ),
+        "display_day_offset": 0,
+    },
+    {
+        "job_id": "ep_breakout_confirm",
+        "label": "EP Breakout Confirm",
+        "time": "15:50",
+        "end_time": "15:59",
+        "category": "trade",
+        "phase": "afternoon",
+        "description": (
+            "Daily state machine over EP breakout watching rows: expires on a close below "
+            "the gap-day low or after 15 sessions without confirmation; enters (market "
+            "order + OTO -8% GTC stop) on the first close above the gap-day high after "
+            ">=4 sessions of rest, unless it has run >5% past the high (chase guard). "
+            "Retries every minute to 3:59; idempotent per (ticker, setup_type)."
+        ),
+        "display_day_offset": 0,
+    },
+    {
+        "job_id": "ep_breakout_partial_check",
+        "label": "EP Breakout +30% Partial",
+        "time": "09:40",
+        "category": "trade",
+        "phase": "morning",
+        "description": (
+            "For each open EP breakout position at or above entry x 1.30: cancel the GTC "
+            "stop, market-sell 33%, re-place the stop for the remainder at max(current "
+            "stop, entry). Single-shot per position; 9:40 AM scheduling leaves ~6h of "
+            "market time for order-failure retries."
+        ),
+        "display_day_offset": 0,
+    },
+    {
         "job_id": "discord_candidate_summary",
         "label": "Discord Candidate Summary",
         "time": "15:10",
@@ -200,6 +244,9 @@ JOB_OWNERS: dict[str, frozenset[str] | None] = {
     "discord_candidate_summary": frozenset({"ep_earnings", "ep_news"}),
     "premarket_ep_preview": frozenset({"ep_earnings", "ep_news"}),
     "ep_time_partial_check": frozenset({"ep_earnings", "ep_news"}),
+    "ep_breakout_scan": frozenset({"ep_breakout"}),
+    "ep_breakout_confirm": frozenset({"ep_breakout"}),
+    "ep_breakout_partial_check": frozenset({"ep_breakout"}),
     "eod_tasks": None,
     "reconcile_positions": None,
     "heartbeat": None,
@@ -214,6 +261,10 @@ STRATEGY_META = {
     "ep_news": {
         "display_name": "EP News Swing",
         "description": "Long swing setup on news-driven gap-ups (non-earnings). Strategy A (tight) and B (relaxed) — C variant dropped 2026-05-08.",
+    },
+    "ep_breakout": {
+        "display_name": "EP Breakout",
+        "description": "EP 2.0 Track A: rested breakout above the gap-day high of big/loud/volatile gap events (mcap >=$5B, $100M+ dollar-vol, ATR >=3%, catalyst-agnostic). Watches up to 15 sessions, enters on the first close over the gap high after >=4 sessions of rest. Validated 2026-07-05.",
     },
     "breakout": {
         "display_name": "Breakout",

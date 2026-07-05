@@ -1,0 +1,13 @@
+# Default fitness gates. A combo must pass ALL of these to make the leaderboard.
+# Tune these — they're starting points based on what the production EP A/B baselines hit.
+# Strategy A current: 69% WR, +9.18% avg, PF 5.68 (gold standard)
+# Strategy B current: 61% WR, +11.75% avg, PF 5.62
+#
+# annual_sharpe is approximated from per-trade Sharpe scaled by sqrt(trades_per_year)
+# computed from actual trade-date span. It's an estimate, not a true equity-curve
+# Sharpe — use it to rank, not to certify a strategy as "ship-ready."
+min_trades: 30
+min_profit_factor: 1.5
+min_annual_sharpe: 1.0
+max_drawdown_pct: 30.0
+min_win_rate: 0.0

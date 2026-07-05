@@ -62,6 +62,17 @@ class PositionTracker:
         self.ep_time_partial_fraction: float = float(exits.get("ep_time_partial_fraction", 0.40))
         self.ep_time_partial_new_stop_pct: float = float(exits.get("ep_time_partial_new_stop_pct", 5.0))
 
+        # EP Breakout exits (EP 2.0 Track A, added 2026-07-05). Price-target
+        # partial at +30% (9:40 AM check_ep_breakout_target_partial), stop ->
+        # breakeven after a +15% close (EOD), 10d MA-close exit active from
+        # day 1 (no partial precondition), NO D19 time partial, NO MA stop
+        # tightening. See strategies/ep_breakout/README.md.
+        sig = config.get("signals", {})
+        self.ep_bo_target_pct: float = float(sig.get("ep_breakout_profit_target_pct", 30.0))
+        self.ep_bo_target_fraction: float = float(sig.get("ep_breakout_profit_target_fraction", 0.33))
+        self.ep_bo_breakeven_trigger_pct: float = float(sig.get("ep_breakout_breakeven_trigger_pct", 15.0))
+        self.ep_bo_trail_ma_days: int = int(sig.get("ep_breakout_trail_ma_days", 10))
+
         # halted state
         self._daily_halt: bool = False
         self._weekly_halt: bool = False
@@ -328,13 +339,24 @@ class PositionTracker:
             # Refresh — some may have been closed
             positions = session.query(Position).filter_by(is_open=True).all()
 
-            # Second: check if today's close is below the trailing MA
-            # (only for positions that have already done a partial exit)
+            # Second: EP breakout breakeven move (stop -> entry after a
+            # close >= entry x (1 + trigger/100)); one-shot per position.
+            self._check_ep_breakout_breakeven(session, positions, daily_closes_map)
+
+            # Third: check if today's close is below the trailing MA
+            # (only for positions that have already done a partial exit;
+            # ep_breakout positions trail from day 1 — see the method)
             self._check_ma_close_exits(session, positions, daily_closes_map)
 
             # Refresh the list — some positions may have been closed above
             positions = session.query(Position).filter_by(is_open=True).all()
             for pos in positions:
+                if pos.setup_type == "ep_breakout":
+                    # Fixed 8% stop + breakeven move only. MA-tightening the
+                    # broker stop would front-run the validated close-below-
+                    # MA10 exit with an intraday variant that was never
+                    # backtested.
+                    continue
                 closes = daily_closes_map.get(pos.ticker)
                 if not closes:
                     continue
@@ -357,6 +379,7 @@ class PositionTracker:
             "ep_news_a": _ep_n_hold,
             "ep_news_b": _ep_n_hold,
             "ep_news_c": _ep_n_c_hold,
+            "ep_breakout": int(cfg.get("ep_breakout_max_hold_days", 50)),
         }
         default_max_hold = 50
 
@@ -380,33 +403,86 @@ class PositionTracker:
         _fire_ep_time_partial, NOT an MA-based trail. Without this gate, an
         EP position whose partial fires would also become MA-trail-eligible
         and exit prematurely, defeating the "hold remainder to D49" rule.
+
+        ep_breakout is the EXCEPTION: the close-below-MA10 exit IS its
+        validated runner exit and is active from day 1 (no partial-exit
+        precondition) with its own MA period. See
+        strategies/ep_breakout/README.md.
         """
         from signals.base import compute_sma
 
         for pos in positions:
-            if not pos.partial_exit_done:
-                continue  # only trail after partial exit
-            if pos.setup_type.startswith(("ep_earnings", "ep_news")):
-                continue  # EP setups use fixed-percentage trail, not MA
+            if pos.setup_type == "ep_breakout":
+                ma_period = self.ep_bo_trail_ma_days
+            else:
+                if not pos.partial_exit_done:
+                    continue  # only trail after partial exit
+                if pos.setup_type.startswith(("ep_earnings", "ep_news")):
+                    continue  # EP setups use fixed-percentage trail, not MA
+                ma_period = self.trailing_ma_period
             closes = daily_closes_map.get(pos.ticker)
-            if not closes or len(closes) < self.trailing_ma_period:
+            if not closes or len(closes) < ma_period:
                 continue
-            ma = compute_sma(closes, self.trailing_ma_period)
+            ma = compute_sma(closes, ma_period)
             if ma is None:
                 continue
             todays_close = closes[-1]
             if pos.side == "long" and todays_close < ma:
                 logger.info(
                     "MA close exit %s: close %.2f < MA%d %.2f",
-                    pos.ticker, todays_close, self.trailing_ma_period, ma,
+                    pos.ticker, todays_close, ma_period, ma,
                 )
                 self._close_position(session, pos, todays_close, reason="trailing_ma_close")
             elif pos.side == "short" and todays_close > ma:
                 logger.info(
                     "MA close exit %s: close %.2f > MA%d %.2f",
-                    pos.ticker, todays_close, self.trailing_ma_period, ma,
+                    pos.ticker, todays_close, ma_period, ma,
                 )
                 self._close_position(session, pos, todays_close, reason="trailing_ma_close")
+
+    def _check_ep_breakout_breakeven(self, session, positions, daily_closes_map):
+        """EP breakout: after today's close >= entry × (1 + trigger/100),
+        raise the GTC stop to entry (breakeven lock). One-shot by
+        construction: once stop >= entry the condition can't re-fire.
+
+        Broker-first like _update_trailing_stop — DB only commits if the
+        broker accepted the modification (trade-path rule)."""
+        for pos in positions:
+            if pos.setup_type != "ep_breakout" or pos.side != "long":
+                continue
+            if pos.stop_price >= pos.entry_price:
+                continue  # already at/above breakeven
+            closes = daily_closes_map.get(pos.ticker)
+            if not closes:
+                continue
+            trigger = pos.entry_price * (1 + self.ep_bo_breakeven_trigger_pct / 100)
+            if closes[-1] < trigger:
+                continue
+
+            new_stop = round(pos.entry_price, 2)
+            old_stop = pos.stop_price
+            if pos.stop_order_id:
+                try:
+                    self.client.modify_stop_order(pos.stop_order_id, new_stop)
+                except Exception as e:
+                    logger.error(
+                        "CRITICAL: EP breakout breakeven move FAILED for %s: %s. "
+                        "DB stop NOT updated; stop remains %.2f.",
+                        pos.ticker, e, old_stop,
+                    )
+                    self.notify(
+                        f"🚨 CRITICAL: breakeven stop move FAILED for {pos.ticker}\n"
+                        f"Stop remains ${old_stop:.2f} (wanted ${new_stop:.2f}). "
+                        f"Check broker manually."
+                    )
+                    continue
+            pos.stop_price = new_stop
+            session.commit()
+            self.notify(
+                f"EP BREAKOUT BREAKEVEN: {pos.ticker}\n"
+                f"Close ${closes[-1]:.2f} >= +{self.ep_bo_breakeven_trigger_pct:.0f}% "
+                f"trigger — stop ${old_stop:.2f} → ${new_stop:.2f} (entry)"
+            )
 
     def _update_trailing_stop(
         self, session, pos: Position, daily_closes: list[float]
@@ -570,7 +646,24 @@ class PositionTracker:
         )
 
     def _fire_ep_time_partial(self, session, pos: Position, current_price: float):
-        """Execute the 4-step partial-profit sequence for one EP position.
+        """EP D19 time partial: sell `ep_time_partial_fraction`, move the stop
+        on the remainder to entry × (1 + ep_time_partial_new_stop_pct/100).
+        Delegates to the shared 4-step sequence."""
+        new_stop_price = round(
+            pos.entry_price * (1 + self.ep_time_partial_new_stop_pct / 100), 2
+        )
+        self._fire_partial_and_replace_stop(
+            session, pos, current_price,
+            fraction=self.ep_time_partial_fraction,
+            new_stop_price=new_stop_price,
+            label="EP PARTIAL",
+        )
+
+    def _fire_partial_and_replace_stop(
+        self, session, pos: Position, current_price: float,
+        fraction: float, new_stop_price: float, label: str,
+    ):
+        """Execute the 4-step partial-profit sequence for one position.
 
         Steps:
           1. Cancel existing GTC stop order (frees broker-held shares so
@@ -583,7 +676,7 @@ class PositionTracker:
           3. Wait briefly for the order to fill. If filled, mark DB. If
              pending, record state and return — next 9:40 AM run will
              see partial_exit_order_id and either confirm fill or retry.
-          4. Place new GTC stop for the remainder at entry × (1 + new_stop_pct/100).
+          4. Place new GTC stop for the remainder at `new_stop_price`.
              Up to 3 retries with 3s backoff because this is the critical step
              — if it fails, the position becomes naked. After 3 fails, raise
              RuntimeError so _track_job fires JOB FAILED; the drift detector
@@ -591,7 +684,7 @@ class PositionTracker:
         """
         import time as _time
 
-        partial_qty = max(1, int(pos.shares * self.ep_time_partial_fraction))
+        partial_qty = max(1, int(pos.shares * fraction))
         remaining = pos.shares - partial_qty
         if remaining <= 0:
             logger.warning(
@@ -639,7 +732,7 @@ class PositionTracker:
             pos.partial_exit_price = current_price
             session.commit()
             self.notify(
-                f"EP PARTIAL PLACED (pending fill): {pos.ticker} {partial_qty}sh "
+                f"{label} PLACED (pending fill): {pos.ticker} {partial_qty}sh "
                 f"@ ~${current_price:.2f} — order {partial_order_id}. "
                 f"Will reconcile next cycle."
             )
@@ -652,10 +745,7 @@ class PositionTracker:
         pos.partial_exit_order_id = None
         session.commit()
 
-        # 4. Place new GTC stop at entry × (1 + new_stop_pct/100), with retries
-        new_stop_price = round(
-            pos.entry_price * (1 + self.ep_time_partial_new_stop_pct / 100), 2
-        )
+        # 4. Place new GTC stop for the remainder, with retries
         new_stop_id = None
         last_err: Exception | None = None
         for attempt in range(1, 4):
@@ -674,7 +764,7 @@ class PositionTracker:
 
         if new_stop_id is None:
             msg = (
-                f"🚨 CRITICAL: {pos.ticker} EP partial filled ({partial_qty}sh sold) "
+                f"🚨 CRITICAL: {pos.ticker} {label} filled ({partial_qty}sh sold) "
                 f"but new stop placement FAILED after 3 attempts. "
                 f"{remaining} shares UNPROTECTED at broker. Last error: {last_err}"
             )
@@ -690,12 +780,89 @@ class PositionTracker:
         session.commit()
 
         self.notify(
-            f"EP PARTIAL: {pos.ticker} ({pos.setup_type})\n"
+            f"{label}: {pos.ticker} ({pos.setup_type})\n"
             f"Sold {partial_qty}/{pos.shares} shares @ ~${current_price:.2f} "
             f"on day {pos.days_held}\n"
-            f"New stop @ ${new_stop_price:.2f} (entry × {1 + self.ep_time_partial_new_stop_pct/100:.2f}) "
+            f"New stop @ ${new_stop_price:.2f} "
             f"for remaining {remaining} shares"
         )
+
+    # ------------------------------------------------------------------
+    # EP Breakout — +30% price-target partial (EP 2.0 Track A, 2026-07-05)
+    #
+    # Scheduled at 9:40 AM ET via the ep_breakout_partial_check job
+    # (strategies/ep_breakout/plugin.py). Sells profit_target_fraction of
+    # the position once price >= entry × (1 + profit_target_pct/100) and
+    # moves the remainder's stop to max(current stop, entry) — by the time
+    # +30% prints, the +15% breakeven trigger has effectively been earned;
+    # locking entry here is marginally more conservative than the
+    # backtest's next-bar breakeven and never looser.
+    # ------------------------------------------------------------------
+
+    def check_ep_breakout_target_partial(self) -> str:
+        """Fire the +30% target partial for qualifying ep_breakout positions.
+        Same skeleton as check_ep_time_partial: single-shot per position,
+        per-ticker failures don't block the batch, all-fail raises."""
+        if not self.client.is_market_open():
+            logger.info("EP breakout partial check skipped — market not open")
+            return "Skipped — market not open"
+
+        with get_session(self.engine) as session:
+            candidates = (
+                session.query(Position)
+                .filter(Position.is_open == True)   # noqa: E712
+                .filter(Position.partial_exit_done == False)   # noqa: E712
+                .filter(Position.partial_exit_order_id == None)  # noqa: E711
+                .filter(Position.setup_type == "ep_breakout")
+                .all()
+            )
+            if not candidates:
+                logger.info("EP breakout partial check: 0 candidates")
+                return "0 candidates"
+
+            fired, below_target = [], []
+            failures: list[tuple[str, str]] = []
+            for pos in candidates:
+                try:
+                    current_price = self._fetch_current_price_for_partial(pos.ticker)
+                except Exception as e:
+                    logger.warning(
+                        "EP breakout partial: price fetch failed for %s: %s — skipping",
+                        pos.ticker, e,
+                    )
+                    failures.append((pos.ticker, f"price fetch failed: {e}"))
+                    continue
+
+                target = pos.entry_price * (1 + self.ep_bo_target_pct / 100)
+                if current_price < target:
+                    below_target.append(pos.ticker)
+                    continue
+
+                try:
+                    new_stop = round(max(pos.stop_price, pos.entry_price), 2)
+                    self._fire_partial_and_replace_stop(
+                        session, pos, current_price,
+                        fraction=self.ep_bo_target_fraction,
+                        new_stop_price=new_stop,
+                        label="EP BREAKOUT TARGET",
+                    )
+                    fired.append(pos.ticker)
+                except Exception as e:
+                    failures.append((pos.ticker, str(e)))
+
+            parts = []
+            if fired:
+                parts.append(f"fired={','.join(fired)}")
+            if below_target:
+                parts.append(f"below_target={len(below_target)}")
+            if failures:
+                parts.append(f"failures={len(failures)}")
+                if len(failures) == len(candidates):
+                    raise RuntimeError(
+                        f"EP breakout partial: ALL {len(candidates)} attempts failed: "
+                        + "; ".join(f"{t}: {e}" for t, e in failures)
+                    )
+            return " | ".join(parts) if parts else "0 fired"
 
     def _wait_for_partial_fill(self, order_id: str, timeout_s: int = 15) -> bool:
         """Poll get_order_status every 1s up to timeout_s. Returns True if

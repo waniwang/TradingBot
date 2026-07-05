@@ -1,0 +1,27 @@
+# Stage 4 — entry re-sweep, EP Earnings B, exits FROZEN at stage-3 winner.
+# Era: 2021-H2..2025 ONLY (2026 is out-of-sample readout, never fit).
+# List-valued entry params are swept; scalars fixed.
+mode: path
+
+entry_params:
+  date_min: "2021-07-07"
+  date_max: "2025-12-31"
+  chg_open_min: [0.0, 2.0, 4.0]
+  close_in_range_min: [50.0, 60.0, 70.0, 80.0]
+  atr_pct_min: [2.0, 2.5, 3.0]
+  atr_pct_max: [5.0, 6.0, 7.0]
+  mktcap_b_min: [0.8, 2.0, 5.0]
+  prev_10d_max: [9999.0, 15.0, 8.0]
+
+exit_params:
+  stop_pct: 6.0
+  profit_target_pct: 6.0
+  profit_target_fraction: 0.5
+  time_partial_day: 15
+  time_partial_fraction: 0.40
+  time_partial_stop_mult: 1.05
+  breakeven_trigger_pct: 12.0
+  breakeven_lock_pct: 0.0
+  trail_mode: n_day_low
+  trail_param: 5
+  max_hold_days: 50

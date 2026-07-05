@@ -1,0 +1,23 @@
+# EP 2.0 Track A — stage A1: entry structure sweep (rested breakout).
+# Universe: combined events, mcap>=1B, no volume cap. Fit era only.
+# Exits held at modest defaults; context filters off.
+mode: path
+
+entry_params:
+  date_min: "2021-07-07"
+  date_max: "2025-12-31"
+  entry_mode: rested_breakout
+  mktcap_b_min: 1.0
+  bo_min_days: [2, 3, 4, 5]
+  bo_window: [10, 15, 20]
+  bo_max_premium: [1.03, 1.05, 1.08]
+  bo_stop_mode: [fixed, base_low]
+
+exit_params:
+  stop_pct: 10.0
+  profit_target_pct: 20.0
+  profit_target_fraction: 0.33
+  time_partial_day: null
+  trail_mode: n_day_low
+  trail_param: 10
+  max_hold_days: 50

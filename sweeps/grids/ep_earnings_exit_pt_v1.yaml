@@ -1,0 +1,23 @@
+# Stage 1 exit sweep — EP Earnings B, entries frozen at production.
+# Era: 2021-H2..2025 (Massive Starter 5y window). ~2.3k combos.
+mode: path
+
+entry_params:
+  date_min: "2021-07-07"
+  date_max: "2025-12-31"
+  chg_open_min: 0.0
+  close_in_range_min: 50.0
+  atr_pct_min: 2.0
+  atr_pct_max: 5.0
+  mktcap_b_min: 0.8
+
+exit_params:
+  stop_pct: [6.0, 7.0, 8.0]
+  profit_target_pct: [null, 6.0, 8.0, 10.0, 15.0, 20.0]
+  profit_target_fraction: [0.33, 0.5]
+  time_partial_day: [null, 10, 15, 19]
+  time_partial_fraction: [0.40]
+  time_partial_stop_mult: [1.05]
+  breakeven_trigger_pct: [null, 5.0, 8.0, 12.0]
+  breakeven_lock_pct: [0.0]
+  max_hold_days: [30, 50]

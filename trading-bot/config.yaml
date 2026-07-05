@@ -20,6 +20,7 @@ strategies:
     # - episodic_pivot                       # disabled — focus on EP swing strategies
     - ep_earnings
     - ep_news
+    - ep_breakout                            # EP 2.0 Track A — paper validation (added 2026-07-05)
     # - breakout                             # disabled — focus on EP swing strategies
     # - parabolic_short                      # disabled — negative expectancy in backtests
 
@@ -47,6 +48,27 @@ signals:
   ep_earnings_b_min_close_in_range: 50.0          # close in top half of day's range
   ep_earnings_b_atr_pct_min: 2.0                  # ATR% floor
   ep_earnings_b_atr_pct_max: 5.0                  # ATR% ceiling
+
+  # --- EP Breakout (EP 2.0 Track A — gap-anchored rested breakout) ---
+  # Validated 2026-07-05: docs/research/ep2_validation.md (PASS 6/6). Do NOT
+  # tune without re-running scripts/validate_ep2.py — the params sit on a
+  # verified plateau; +-1-step neighbors were checked, cliffs rejected.
+  ep_breakout_min_gap_pct: 8.0                    # gap% vs prev close
+  ep_breakout_min_price: 3.0                      # prev close > $3
+  ep_breakout_min_market_cap: 5_000_000_000       # BIG: $5B minimum
+  ep_breakout_min_dollar_vol: 100_000_000         # LOUD: gap-day $ volume >= $100M
+  ep_breakout_min_atr_pct: 3.0                    # VOLATILE: 10d ATR/close >= 3%
+  ep_breakout_require_open_above_prev_high: true
+  ep_breakout_require_above_200d_sma: true
+  ep_breakout_bo_min_days: 4                      # sessions of rest before entry allowed
+  ep_breakout_bo_window: 15                       # sessions to confirm, else expire
+  ep_breakout_bo_max_premium_pct: 5.0             # chase guard above gap-day high
+  ep_breakout_stop_loss_pct: 8.0
+  ep_breakout_profit_target_pct: 30.0             # sell fraction at +30% (9:40 AM check)
+  ep_breakout_profit_target_fraction: 0.33
+  ep_breakout_breakeven_trigger_pct: 15.0         # close >= +15% -> stop to entry (EOD)
+  ep_breakout_trail_ma_days: 10                   # close < 10d SMA -> exit (EOD)
+  ep_breakout_max_hold_days: 50
 
   # --- EP execute-time price refresh (shared by ep_earnings + ep_news) ---
   # Scanner captures price at 3:00-3:05 PM; job_execute fires 3:50-3:59. On

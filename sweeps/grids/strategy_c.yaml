@@ -1,0 +1,11 @@
+# Strategy C (Middle) parameter grid.
+# Translated from ep_optimize_5yr.py grid_C (~648 combos before MIN_TRADES filter).
+mode: simple
+params:
+  chg_open_min: [0.0]
+  close_in_range_min: [0.0, 30.0, 50.0]
+  prev_10d_min: [-40.0, -30.0, -25.0]
+  prev_10d_max: [-5.0, -10.0, -15.0]
+  atr_pct_max: [6.0, 8.0, 100.0]
+  stop_pct: [5.0, 6.0, 7.0, 8.0]
+  hold_period: ["20D", "50D"]
