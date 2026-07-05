@@ -50,12 +50,18 @@ jobs:
             cat "$CSV_PATH"
 
       - name: Write captured CSV to docs/missed_trades.csv
+        env:
+          # Pass via env, NOT inline ${{ }} interpolation in the script body:
+          # CSV reason fields contain double quotes and parens which break
+          # bash syntax when pasted into the script text (and are an
+          # injection risk).
+          COLLECT_STDOUT: ${{ steps.collect.outputs.stdout }}
         run: |
           mkdir -p docs
           # ssh-action wraps captured stdout with banner lines (`=== blah
           # ===`) before AND after the script output. Keep everything from
           # the CSV header through the next banner line — strips both ends.
-          printf '%s' "${{ steps.collect.outputs.stdout }}" \
+          printf '%s' "$COLLECT_STDOUT" \
             | awk '/^date,failure_time,/{found=1} /^={3,}/{if(found)exit; next} found' \
             > docs/missed_trades.csv
           echo "=== Preview ==="
